@@ -1,5 +1,7 @@
 import { MongoClient, type Db } from 'mongodb'
 
+import * as battleRoomsMigration from '../../adapters/outbound/persistence/migrations/001-battle-rooms'
+
 export interface DatabaseOptions {
   readonly uri: string
   readonly databaseName?: string
@@ -42,11 +44,13 @@ export interface MongoMigration {
  * Leer el directorio en tiempo de ejecucion fallaria en la imagen de
  * produccion, donde ese directorio contiene JavaScript compilado con otra ruta.
  *
- * Vacia a proposito: el andamiaje no inventa colecciones. Cada Historia de
- * Usuario anade aqui su migracion, con prefijo numerico que fija el orden, y
- * declara su validador `$jsonSchema` como en Catalog y Player/Inventory.
+ * Cada Historia de Usuario anade aqui su migracion, con prefijo numerico que
+ * fija el orden, y declara su validador `$jsonSchema` como en Catalog y
+ * Player/Inventory.
  */
-export const MIGRATIONS: readonly MongoMigration[] = []
+export const MIGRATIONS: readonly MongoMigration[] = [
+  { name: '001-battle-rooms', up: battleRoomsMigration.up },
+]
 
 const REGISTRY = '_migrations'
 
