@@ -2,16 +2,33 @@ import { Module, type CanActivate } from '@nestjs/common'
 import { APP_GUARD, Reflector } from '@nestjs/core'
 import type { Db } from 'mongodb'
 
+import { BattleRoomController } from '../../adapters/inbound/http/battle-room.controller'
 import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
+import {
+  CANCEL_BATTLE_ROOM,
+  CREATE_BATTLE_ROOM,
+  LIST_AVAILABLE_BATTLE_ROOMS,
+} from '../../adapters/inbound/http/tokens'
 import { AnonymousIdentityGuard } from '../../adapters/inbound/http/auth/anonymous.guard'
 import { InternalServiceGuard } from '../../adapters/inbound/http/auth/internal-service.guard'
 import { JwtAuthGuard } from '../../adapters/inbound/http/auth/jwt-auth.guard'
 import { RolesGuard } from '../../adapters/inbound/http/auth/roles.guard'
 import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTokenVerifier'
+import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistence/InMemoryBattleRoomRepository'
+import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
+import { UuidGenerator } from '../../adapters/outbound/system/UuidGenerator'
+import {
+  BATTLE_ROOM_REPOSITORY,
+  type BattleRoomRepositoryPort,
+} from '../../application/ports/BattleRoomRepositoryPort'
 import { CLOCK, type ClockPort } from '../../application/ports/ClockPort'
+import { ID_GENERATOR, type IdGeneratorPort } from '../../application/ports/IdGeneratorPort'
 import { TOKEN_VERIFIER, type TokenVerifierPort } from '../../application/ports/TokenVerifierPort'
+import { CancelBattleRoom } from '../../application/use-cases/CancelBattleRoom'
+import { CreateBattleRoom } from '../../application/use-cases/CreateBattleRoom'
+import { ListAvailableBattleRooms } from '../../application/use-cases/ListAvailableBattleRooms'
 import { AuthMode, loadConfig, PersistenceDriver, type AppConfig } from '../config/env'
 import type { ReadinessCheck, VersionReport } from '../health/health'
 import { createLogger, type Logger } from '../observability/logger'
@@ -40,7 +57,7 @@ export const INTERNAL_CALLERS: readonly string[] = ['missions']
  * independiente del framework.
  */
 @Module({
-  controllers: [HealthController],
+  controllers: [HealthController, BattleRoomController],
   providers: [
     {
       provide: APP_CONFIG,
@@ -156,6 +173,40 @@ export const INTERNAL_CALLERS: readonly string[] = ['missions']
           logger,
         }),
       inject: [APP_CONFIG, Reflector, CLOCK, LOGGER],
+    },
+    {
+      provide: ID_GENERATOR,
+      useFactory: (): IdGeneratorPort => new UuidGenerator(),
+    },
+    // HU-14: salas de batalla. `PERSISTENCE_DRIVER=memory` respalda pruebas
+    // de integracion sin motor real, igual que el resto de repositorios del
+    // proyecto cuando adoptan ese patron.
+    {
+      provide: BATTLE_ROOM_REPOSITORY,
+      useFactory: (db: Db | null): BattleRoomRepositoryPort =>
+        db === null ? new InMemoryBattleRoomRepository() : new MongoBattleRoomRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: CREATE_BATTLE_ROOM,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        ids: IdGeneratorPort,
+        clock: ClockPort,
+      ): CreateBattleRoom => new CreateBattleRoom(rooms, ids, clock),
+      inject: [BATTLE_ROOM_REPOSITORY, ID_GENERATOR, CLOCK],
+    },
+    {
+      provide: LIST_AVAILABLE_BATTLE_ROOMS,
+      useFactory: (rooms: BattleRoomRepositoryPort): ListAvailableBattleRooms =>
+        new ListAvailableBattleRooms(rooms),
+      inject: [BATTLE_ROOM_REPOSITORY],
+    },
+    {
+      provide: CANCEL_BATTLE_ROOM,
+      useFactory: (rooms: BattleRoomRepositoryPort): CancelBattleRoom =>
+        new CancelBattleRoom(rooms),
+      inject: [BATTLE_ROOM_REPOSITORY],
     },
     {
       provide: READINESS_CHECKS,

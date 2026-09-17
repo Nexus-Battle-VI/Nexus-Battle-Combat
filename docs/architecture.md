@@ -38,8 +38,9 @@ Todas las llamadas salientes que mueven créditos o productos siguen el patrón 
 
 ## Contrato previsto
 
-- `POST /api/v1/combat/rooms` y `GET /api/v1/combat/rooms` — crear y listar salas.
-- `POST /api/v1/combat/rooms/{roomId}/participants` — unirse.
+- `POST /api/v1/combat/rooms` y `GET /api/v1/combat/rooms` — crear y listar salas (HU-14, implementado).
+- `POST /api/v1/combat/rooms/{roomId}/cancel` — el creador cancela una sala propia en `WAITING_FOR_PLAYERS` (HU-14, implementado; ver `HU-14.1-Contrato-Creacion-Sala.md`, sección 3, para la justificación del verbo/ruta).
+- `POST /api/v1/combat/rooms/{roomId}/participants` — unirse (HU-15, no implementado).
 - `POST /api/v1/combat/realtime/tickets` — ticket para el WebSocket.
 - `POST /api/internal/v1/combat/simulations` — simulación para Missions.
 
