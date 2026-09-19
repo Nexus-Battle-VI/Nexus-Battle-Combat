@@ -8,6 +8,7 @@ import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/to
 import {
   CANCEL_BATTLE_ROOM,
   CREATE_BATTLE_ROOM,
+  JOIN_BATTLE_ROOM,
   LIST_AVAILABLE_BATTLE_ROOMS,
 } from '../../adapters/inbound/http/tokens'
 import { AnonymousIdentityGuard } from '../../adapters/inbound/http/auth/anonymous.guard'
@@ -28,6 +29,7 @@ import { ID_GENERATOR, type IdGeneratorPort } from '../../application/ports/IdGe
 import { TOKEN_VERIFIER, type TokenVerifierPort } from '../../application/ports/TokenVerifierPort'
 import { CancelBattleRoom } from '../../application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../application/use-cases/CreateBattleRoom'
+import { JoinBattleRoom } from '../../application/use-cases/JoinBattleRoom'
 import { ListAvailableBattleRooms } from '../../application/use-cases/ListAvailableBattleRooms'
 import { AuthMode, loadConfig, PersistenceDriver, type AppConfig } from '../config/env'
 import type { ReadinessCheck, VersionReport } from '../health/health'
@@ -207,6 +209,12 @@ export const INTERNAL_CALLERS: readonly string[] = ['missions']
       useFactory: (rooms: BattleRoomRepositoryPort): CancelBattleRoom =>
         new CancelBattleRoom(rooms),
       inject: [BATTLE_ROOM_REPOSITORY],
+    },
+    {
+      provide: JOIN_BATTLE_ROOM,
+      useFactory: (rooms: BattleRoomRepositoryPort, clock: ClockPort): JoinBattleRoom =>
+        new JoinBattleRoom(rooms, clock),
+      inject: [BATTLE_ROOM_REPOSITORY, CLOCK],
     },
     {
       provide: READINESS_CHECKS,

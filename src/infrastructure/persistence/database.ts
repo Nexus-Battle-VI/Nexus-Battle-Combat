@@ -1,6 +1,7 @@
 import { MongoClient, type Db } from 'mongodb'
 
 import * as battleRoomsMigration from '../../adapters/outbound/persistence/migrations/001-battle-rooms'
+import * as battleRoomsPreparingStatusMigration from '../../adapters/outbound/persistence/migrations/002-battle-rooms-preparing-status'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -50,6 +51,7 @@ export interface MongoMigration {
  */
 export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '001-battle-rooms', up: battleRoomsMigration.up },
+  { name: '002-battle-rooms-preparing-status', up: battleRoomsPreparingStatusMigration.up },
 ]
 
 const REGISTRY = '_migrations'

@@ -22,18 +22,31 @@ import {
   InvalidRewardError,
   InvalidRoomCapacityError,
   InvalidTeamCapacityError,
+  PlayerAlreadyJoinedError,
   RoomCancellationForbiddenError,
+  RoomFullError,
   RoomNotCancellableError,
+  RoomNotJoinableError,
 } from '../../../domain/errors/BattleRoomErrors'
 import { RoomConflictError, RoomNotFoundError } from '../../../application/errors/ApplicationError'
 import type { BattleRoomDto } from '../../../application/dto/BattleRoomDto'
 import type { CancelBattleRoom } from '../../../application/use-cases/CancelBattleRoom'
 import type { CreateBattleRoom } from '../../../application/use-cases/CreateBattleRoom'
+import type { JoinBattleRoom } from '../../../application/use-cases/JoinBattleRoom'
 import type { ListAvailableBattleRooms } from '../../../application/use-cases/ListAvailableBattleRooms'
 import type { VerifiedIdentity } from '../../../application/ports/TokenVerifierPort'
 import { CurrentIdentity } from './auth/decorators'
-import { BattleRoomResponse, CreateBattleRoomRequest } from './battle-room.dto'
-import { CANCEL_BATTLE_ROOM, CREATE_BATTLE_ROOM, LIST_AVAILABLE_BATTLE_ROOMS } from './tokens'
+import {
+  BattleRoomResponse,
+  CreateBattleRoomRequest,
+  JoinBattleRoomRequest,
+} from './battle-room.dto'
+import {
+  CANCEL_BATTLE_ROOM,
+  CREATE_BATTLE_ROOM,
+  JOIN_BATTLE_ROOM,
+  LIST_AVAILABLE_BATTLE_ROOMS,
+} from './tokens'
 
 /**
  * Creacion, listado y cancelacion de salas de batalla (HU-14, RF-14).
@@ -55,6 +68,7 @@ export class BattleRoomController {
     @Inject(LIST_AVAILABLE_BATTLE_ROOMS)
     private readonly listAvailableBattleRooms: ListAvailableBattleRooms,
     @Inject(CANCEL_BATTLE_ROOM) private readonly cancelBattleRoom: CancelBattleRoom,
+    @Inject(JOIN_BATTLE_ROOM) private readonly joinBattleRoom: JoinBattleRoom,
   ) {}
 
   @Post()
@@ -115,6 +129,50 @@ export class BattleRoomController {
     }
   }
 
+  @Post(':roomId/join')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Une al jugador autenticado a una sala en WAITING_FOR_PLAYERS (HU-15.2, RF-15)',
+    description:
+      'Implementa el subconjunto de RF-15 confirmado como implementable hoy solo con Combat ' +
+      '(HU-15.2-Auditoria-Entrada.md, dictamen APTO CON BLOQUEOS): ingreso de jugador ' +
+      'autenticado, seleccion/asignacion de equipo, cupo, jugador duplicado, transicion ' +
+      'WAITING_FOR_PLAYERS -> PREPARING, persistencia con bloqueo optimista. ' +
+      'LIMITACIONES CONOCIDAS de esta version, documentadas explicitamente (no errores ocultos): ' +
+      'NO valida apodo/nickname unico (DP-2, requiere endpoint @InternalOnly() nuevo en ' +
+      'Nexus-Battle-Account, hoy inexistente); NO valida heroe equipado ni nivel de heroe ' +
+      '(DP-3/DP-4, requieren endpoint @InternalOnly() nuevo en Nexus-Battle-Player-Inventory y ' +
+      'un dato de nivel que hoy no existe en ningun servicio); NO notifica en tiempo real ' +
+      '(DP-5, ADR-020 de Nexus-Battle-Infrastructure esta Accepted pero sin implementar) -- la ' +
+      'visibilidad para otros jugadores es por refresco de consulta, GET /v1/combat/rooms, ' +
+      'mismo patron ya usado por HU-14.',
+  })
+  @ApiResponse({ status: 200, type: BattleRoomResponse })
+  @ApiResponse({
+    status: 400,
+    description: 'roomId no es un UUID v4 valido, o el cuerpo trae un campo invalido/no declarado',
+  })
+  @ApiResponse({ status: 401, description: 'Falta el testimonio o no es valido' })
+  @ApiResponse({ status: 404, description: 'La sala no existe' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'La sala no esta en WAITING_FOR_PLAYERS (CANCELLED o PREPARING), el equipo objetivo no ' +
+      'tiene cupo, el jugador ya es participante de la sala, o conflicto de version (bloqueo ' +
+      'optimista)',
+  })
+  async join(
+    @Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string,
+    @Body() body: JoinBattleRoomRequest,
+    @CurrentIdentity() identity: VerifiedIdentity,
+  ): Promise<BattleRoomDto> {
+    try {
+      return await this.joinBattleRoom.execute(roomId, identity.subject, body.team ?? null)
+    } catch (error: unknown) {
+      throw BattleRoomController.translate(error)
+    }
+  }
+
   private static translate(error: unknown): Error {
     if (error instanceof RoomNotFoundError) {
       return new NotFoundException(error.message)
@@ -124,7 +182,13 @@ export class BattleRoomController {
       return new ForbiddenException(error.message)
     }
 
-    if (error instanceof RoomNotCancellableError || error instanceof RoomConflictError) {
+    if (
+      error instanceof RoomNotCancellableError ||
+      error instanceof RoomConflictError ||
+      error instanceof RoomNotJoinableError ||
+      error instanceof RoomFullError ||
+      error instanceof PlayerAlreadyJoinedError
+    ) {
       return new ConflictException(error.message)
     }
 

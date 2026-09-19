@@ -134,6 +134,84 @@ describe('MongoBattleRoomRepository', () => {
     )
   })
 
+  /**
+   * HU-15.2 (RF-15): control de concurrencia real sobre `join()` contra
+   * Mongo. Dos jugadores DISTINTOS compiten por el UNICO cupo restante de la
+   * sala -- exactamente uno debe prosperar (200/version+1, status
+   * PREPARING), el otro debe recibir `RoomConflictError`. El documento final
+   * en Mongo nunca debe tener `totalParticipants > totalCapacity`.
+   */
+  it('join(): dos jugadores compitiendo por el ultimo cupo -- uno gana, el otro choca (RoomConflictError)', async () => {
+    const id = nextId()
+    const room = BattleRoom.create(
+      id,
+      CREATOR,
+      validInput({
+        teamConfigs: [
+          { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+          { capacity: 1 },
+        ],
+      }),
+      AT,
+    )
+    const guardada = await repository.save(room, 0)
+
+    const resultados = await Promise.allSettled([
+      repository.save(guardada.join('jugador-a', null, AT), guardada.version),
+      repository.save(guardada.join('jugador-b', null, AT), guardada.version),
+    ])
+
+    const cumplidas = resultados.filter((entry) => entry.status === 'fulfilled')
+    const rechazadas = resultados.filter((entry) => entry.status === 'rejected')
+
+    expect(cumplidas).toHaveLength(1)
+    expect(rechazadas).toHaveLength(1)
+    expect(rechazadas[0]?.status === 'rejected' && rechazadas[0].reason).toBeInstanceOf(
+      RoomConflictError,
+    )
+
+    const documento = await rooms().findOne({ _id: id })
+    const teams = documento?.teams as { capacity: number; participants: unknown[] }[]
+    const totalCapacity = teams.reduce((sum, team) => sum + team.capacity, 0)
+    const totalParticipants = teams.reduce((sum, team) => sum + team.participants.length, 0)
+
+    expect(totalParticipants).toBeLessThanOrEqual(totalCapacity)
+    expect(totalParticipants).toBe(totalCapacity)
+    expect(documento?.status).toBe('PREPARING')
+  })
+
+  /**
+   * Control de un conflicto de bloqueo optimista NO relacionado con el
+   * ultimo cupo: dos joins concurrentes a equipos DISTINTOS, con cupo de
+   * sobra en ambos. Confirma que el patron de version+replaceOne detecta
+   * cualquier escritura concurrente sobre el mismo documento, no solo la del
+   * ultimo cupo.
+   */
+  it('join(): dos joins concurrentes a equipos distintos con cupo de sobra tambien producen un conflicto de version', async () => {
+    const id = nextId()
+    const room = BattleRoom.create(
+      id,
+      CREATOR,
+      validInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+      AT,
+    )
+    const guardada = await repository.save(room, 0)
+
+    const resultados = await Promise.allSettled([
+      repository.save(guardada.join('jugador-a', 'A', AT), guardada.version),
+      repository.save(guardada.join('jugador-b', 'B', AT), guardada.version),
+    ])
+
+    const cumplidas = resultados.filter((entry) => entry.status === 'fulfilled')
+    const rechazadas = resultados.filter((entry) => entry.status === 'rejected')
+
+    expect(cumplidas).toHaveLength(1)
+    expect(rechazadas).toHaveLength(1)
+    expect(rechazadas[0]?.status === 'rejected' && rechazadas[0].reason).toBeInstanceOf(
+      RoomConflictError,
+    )
+  })
+
   it('la migracion es idempotente: reaplicarla no repite la ejecucion', async () => {
     const outcome = await migrateToLatest(db)
 
@@ -163,6 +241,24 @@ describe('MongoBattleRoomRepository', () => {
         campoInventado: true,
       }),
     ).rejects.toThrow()
+  })
+
+  it('el motor acepta status PREPARING tras la migracion 002 (HU-15.2)', async () => {
+    await expect(
+      rooms().insertOne({
+        _id: nextId(),
+        mode: 'PVP',
+        status: 'PREPARING',
+        teams: [
+          { label: 'A', capacity: 1, participants: [] },
+          { label: 'B', capacity: 1, participants: [] },
+        ],
+        reward: { amount: 0 },
+        createdBy: CREATOR,
+        createdAt: AT,
+        version: 0,
+      }),
+    ).resolves.toBeDefined()
   })
 
   it('el motor rechaza un mode fuera del enum', async () => {

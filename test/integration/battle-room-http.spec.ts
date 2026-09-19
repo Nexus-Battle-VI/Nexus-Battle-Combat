@@ -56,6 +56,26 @@ const validRoom = () => ({
   reward: { amount: 0 },
 })
 
+/** Sala con cupo de sobra (2 por equipo): un join no la completa. */
+const roomWithSpareCapacity = () => ({
+  mode: 'PVP',
+  teamConfigs: [{ capacity: 2 }, { capacity: 2 }],
+  reward: { amount: 0 },
+})
+
+/**
+ * Sala con el creador ya ocupando el equipo A (capacidad 1, completo) y un
+ * unico cupo restante en el equipo B: el PROXIMO join agota el cupo TOTAL de
+ * la sala. `initialParticipants: [{kind: 'HUMAN'}]` se resuelve al creador
+ * (mismo mecanismo que HU-14: `CreateBattleRoom` resuelve `playerId =
+ * createdBy` para todo HUMAN declarado sin playerId explicito).
+ */
+const roomWithOneSlotLeft = () => ({
+  mode: 'PVP',
+  teamConfigs: [{ capacity: 1, initialParticipants: [{ kind: 'HUMAN' }] }, { capacity: 1 }],
+  reward: { amount: 0 },
+})
+
 /** UUID v4 bien formado que no corresponde a ninguna sala creada. */
 const NONEXISTENT_ROOM_ID = '11111111-1111-4111-8111-111111111111'
 
@@ -288,6 +308,198 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       const [first, second] = await Promise.all([
         authed('token-creador')(request(app.getHttpServer()).post(path)),
         authed('token-creador')(request(app.getHttpServer()).post(path)),
+      ])
+
+      const statuses = [first.status, second.status].sort((a, b) => a - b)
+      expect(statuses).toEqual([200, 409])
+    })
+  })
+
+  describe('POST /rooms/:roomId/join (HU-15.2, RF-15)', () => {
+    it('400 si roomId no es un UUID v4 valido', async () => {
+      const response = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms/no-es-un-uuid/join'),
+      )
+
+      expect(response.status).toBe(400)
+    })
+
+    it('401 sin testimonio', async () => {
+      const response = await request(app.getHttpServer()).post(
+        `/api/v1/combat/rooms/${NONEXISTENT_ROOM_ID}/join`,
+      )
+
+      expect(response.status).toBe(401)
+    })
+
+    it('404 si la sala no existe', async () => {
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${NONEXISTENT_ROOM_ID}/join`),
+      )
+
+      expect(response.status).toBe(404)
+    })
+
+    it('409 si la sala esta CANCELLED', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(validRoom()),
+      )
+      await authed('token-creador')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/cancel`),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+      )
+
+      expect(response.status).toBe(409)
+    })
+
+    it('409 si la sala esta PREPARING (ya completo su cupo)', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithOneSlotLeft()),
+      )
+      const filled = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+      )
+      expect(filled.status).toBe(200)
+      expect(filled.body.status).toBe('PREPARING')
+
+      const response = await authed('token-creador')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+      )
+
+      expect(response.status).toBe(409)
+    })
+
+    it('409 si el equipo solicitado esta lleno', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithOneSlotLeft()),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer())
+          .post(`/api/v1/combat/rooms/${String(created.body.id)}/join`)
+          .send({ team: 'A' }),
+      )
+
+      expect(response.status).toBe(409)
+    })
+
+    it('409 si el jugador ya es participante de la sala (segundo intento del mismo subject)', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+      await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+      )
+
+      expect(response.status).toBe(409)
+    })
+
+    it('200: ingreso normal deja la sala en WAITING_FOR_PLAYERS cuando sobra cupo', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+      )
+
+      expect(response.status).toBe(200)
+      expect(response.body).toMatchObject({ status: 'WAITING_FOR_PLAYERS' })
+      const allParticipants = (
+        response.body.teams as { participants: { playerId: string | null }[] }[]
+      ).flatMap((team) => team.participants)
+      expect(allParticipants.some((participant) => participant.playerId === 'sujeto-otro')).toBe(
+        true,
+      )
+    })
+
+    it('200: ingreso con team explicito valido asigna al equipo solicitado', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer())
+          .post(`/api/v1/combat/rooms/${String(created.body.id)}/join`)
+          .send({ team: 'B' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(
+        (response.body.teams as { label: string; participants: { playerId: string | null }[] }[])
+          .find((team) => team.label === 'B')
+          ?.participants.some((participant) => participant.playerId === 'sujeto-otro'),
+      ).toBe(true)
+    })
+
+    it('200: el join que ocupa el ultimo cupo total responde con status PREPARING', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithOneSlotLeft()),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+      )
+
+      expect(response.status).toBe(200)
+      expect(response.body.status).toBe('PREPARING')
+    })
+
+    it('400 si el cuerpo trae un campo no declarado (whitelist), ej. playerId', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer())
+          .post(`/api/v1/combat/rooms/${String(created.body.id)}/join`)
+          .send({ playerId: 'alguien-mas' }),
+      )
+
+      expect(response.status).toBe(400)
+    })
+
+    it('400 si team no es una etiqueta valida (ni A ni B)', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer())
+          .post(`/api/v1/combat/rooms/${String(created.body.id)}/join`)
+          .send({ team: 'Z' }),
+      )
+
+      expect(response.status).toBe(400)
+    })
+
+    /**
+     * Concurrencia sobre el ultimo cupo a traves de la capa HTTP completa:
+     * dos jugadores distintos intentan unirse a la vez a una sala con un solo
+     * cupo restante. Exactamente uno debe prosperar (200, PREPARING); el otro
+     * debe recibir 409 (RoomFullError o RoomConflictError segun el orden real
+     * de ejecucion), nunca overbooking ni dos 200.
+     */
+    it('409 en uno de dos joins concurrentes disputando el mismo ultimo cupo', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithOneSlotLeft()),
+      )
+      const path = `/api/v1/combat/rooms/${String(created.body.id)}/join`
+
+      // Dos jugadores DISTINTOS del creador, ninguno participante previo:
+      // ambos compiten por el UNICO cupo restante (RoomFullError si su
+      // escritura pierde antes, o RoomConflictError si pierde despues, segun
+      // el orden real de ejecucion). Nunca overbooking, nunca dos 200.
+      const [first, second] = await Promise.all([
+        authed('token-otro')(request(app.getHttpServer()).post(path)),
+        authed('token-otro')(request(app.getHttpServer()).post(path)),
       ])
 
       const statuses = [first.status, second.status].sort((a, b) => a - b)

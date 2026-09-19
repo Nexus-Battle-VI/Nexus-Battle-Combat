@@ -67,6 +67,31 @@ export class TeamConfigRequest {
   initialParticipants?: ParticipantRequest[]
 }
 
+/**
+ * Cuerpo de `POST /v1/combat/rooms/:roomId/join` (HU-15.2, RF-15).
+ *
+ * `team` es OPCIONAL y solo acepta las etiquetas reales que
+ * `BattleRoom.create()` produce (`'A'`/`'B'`): es un enum estructural fijo
+ * del sistema, igual que `kind` en `ParticipantRequest`, no una regla de
+ * negocio de capacidad. Si se omite, el servidor asigna automaticamente el
+ * primer equipo con cupo (DP-1, `HU-15.2-Plan-Implementacion.md`, seccion
+ * 1.3). NUNCA acepta `playerId`/`subject` (siempre `identity.subject` del
+ * testimonio verificado), `nickname` (bloqueado, DP-2), `heroId` (bloqueado,
+ * DP-4), `joinedAt` (siempre `ClockPort`) ni `roomStatus`/`version`
+ * (siempre releidos del repositorio).
+ */
+export class JoinBattleRoomRequest {
+  @ApiProperty({
+    required: false,
+    enum: ['A', 'B'],
+    description:
+      'Opcional. Si se omite, el servidor asigna automaticamente el primer equipo con cupo.',
+  })
+  @IsOptional()
+  @IsIn(['A', 'B'])
+  team?: string
+}
+
 export class RewardConfigRequest {
   /** SIN `@Min(0)`: `amount < 0` es `InvalidRewardError` (422), no 400. */
   @ApiProperty({ minimum: 0, description: 'Regla de negocio -> 422 si es negativo.' })
@@ -135,7 +160,7 @@ export class BattleRoomResponse {
   @ApiProperty({ enum: ['PVP', 'PVE'] })
   readonly mode!: string
 
-  @ApiProperty({ enum: ['WAITING_FOR_PLAYERS', 'CANCELLED'] })
+  @ApiProperty({ enum: ['WAITING_FOR_PLAYERS', 'PREPARING', 'CANCELLED'] })
   readonly status!: string
 
   @ApiProperty({ type: TeamResponse, isArray: true })
