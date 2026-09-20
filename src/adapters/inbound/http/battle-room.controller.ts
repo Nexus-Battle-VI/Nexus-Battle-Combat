@@ -32,6 +32,7 @@ import {
 } from '../../../domain/errors/BattleRoomErrors'
 import { RoomConflictError, RoomNotFoundError } from '../../../application/errors/ApplicationError'
 import {
+  AccountProfileMissingError,
   PlayerWithoutEquippedHeroError,
   UpstreamServiceError,
 } from '../../../application/errors/UpstreamErrors'
@@ -175,11 +176,15 @@ export class BattleRoomController {
   })
   @ApiResponse({
     status: 422,
-    description: 'El jugador no tiene un heroe equipado en Player-Inventory (DP-4)',
+    description:
+      'El jugador no tiene un heroe equipado en Player-Inventory (DP-4), o el sujeto ' +
+      'verificado no tiene cuenta en Account todavia (code: ACCOUNT_PROFILE_NOT_FOUND, HU-15.4)',
   })
   @ApiResponse({
     status: 503,
-    description: 'Account o Player-Inventory no respondieron (no alcanzable, tiempo agotado, etc.)',
+    description:
+      'Account o Player-Inventory no respondieron de verdad (no alcanzable, tiempo agotado, ' +
+      '401, 5xx, respuesta con forma invalida)',
   })
   async join(
     @Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string,
@@ -250,10 +255,30 @@ export class BattleRoomController {
       return new UnprocessableEntityException(error.message)
     }
 
+    // HU-15.4 (hallazgo de validacion integral): Account SI respondio (404
+    // real, no un fallo de transporte) diciendo que el sujeto verificado no
+    // tiene cuenta todavia. Es informacion de negocio diagnosticable, no una
+    // caida de Account -- 422 con un `code` estructurado para que Web pueda
+    // distinguirlo de "falta heroe equipado" (mismo status 422) sin
+    // depender de texto libre, y para que NUNCA se confunda con el 503 de
+    // `UpstreamServiceError` de mas abajo. Ver `AccountProfileMissingError`
+    // en `application/errors/UpstreamErrors.ts`.
+    if (error instanceof AccountProfileMissingError) {
+      return new UnprocessableEntityException({
+        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+        message:
+          'No encontramos una cuenta asociada a tu sesion. Cierra sesion y vuelve a iniciar sesion; ' +
+          'si el problema persiste, contacta a soporte.',
+        code: 'ACCOUNT_PROFILE_NOT_FOUND',
+      })
+    }
+
     // HU-15.2 (RF-15): las llamadas internas a Account/Player-Inventory
-    // fallaron (no alcanzable, tiempo agotado, 401, 5xx, forma invalida).
-    // 503, no 500: Combat identifica la causa como una dependencia externa,
-    // no un fallo propio no clasificado.
+    // fallaron de verdad (no alcanzable, tiempo agotado, 401, 5xx, forma
+    // invalida de la respuesta). 503, no 500: Combat identifica la causa
+    // como una dependencia externa que no respondio, no un fallo propio no
+    // clasificado. Distinto de `AccountProfileMissingError` arriba: ahi
+    // Account SI respondio, con un 404 valido segun su propio contrato.
     if (error instanceof UpstreamServiceError) {
       return new ServiceUnavailableException(
         'El servicio no pudo completar el ingreso porque una dependencia interna no respondio.',

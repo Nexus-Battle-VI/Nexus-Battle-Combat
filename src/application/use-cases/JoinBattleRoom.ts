@@ -15,9 +15,11 @@ import type { PlayerInventoryEquippedHeroPort } from '../ports/PlayerInventoryEq
  *  1. `playerId` ya llega resuelto del controlador (`identity.subject` del
  *     JWT verificado, NUNCA del cuerpo).
  *  2. `AccountBattleProfilePort.getBattleProfile(playerId)` -> `displayName`
- *     (DP-2). Un `subject` verificado sin perfil en Account es una anomalia
- *     de integridad, no un 404 de negocio: el puerto LANZA
- *     `UpstreamServiceError`, no devuelve `null`.
+ *     (DP-2). Un `subject` verificado sin perfil en Account (HU-15.4) es
+ *     informacion de negocio diagnosticable, no una caida de servicio: el
+ *     puerto LANZA `AccountProfileMissingError` (422), nunca devuelve
+ *     `null`. Un fallo de transporte real hacia Account (no alcanzable,
+ *     timeout, 401, 5xx) lanza `UpstreamServiceError` (503) en su lugar.
  *  3. `PlayerInventoryEquippedHeroPort.getEquippedHero(playerId)` ->
  *     `heroId` (DP-4). `null` SI es un camino de negocio valido (el jugador
  *     no tiene heroe equipado todavia): se traduce a

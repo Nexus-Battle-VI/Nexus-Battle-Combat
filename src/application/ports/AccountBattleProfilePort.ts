@@ -28,9 +28,11 @@ export interface AccountBattleProfilePort {
    * del testimonio verificado, nunca un dato del cuerpo de la peticion).
    *
    * Lanza (nunca devuelve `null`): un `subject` sin perfil en Account, para
-   * un testimonio ya verificado por Combat, es una anomalia de integridad
-   * entre servicios, no un camino de negocio valido -- ver
-   * `UpstreamServiceError` en `application/errors/UpstreamErrors.ts`.
+   * un testimonio ya verificado por Combat, es informacion de negocio
+   * diagnosticable (HU-15.4) -- ver `AccountProfileMissingError` en
+   * `application/errors/UpstreamErrors.ts` -- distinta de un fallo de
+   * transporte real hacia Account (`UpstreamServiceError`, no alcanzable,
+   * tiempo agotado, 401, 5xx, cuerpo invalido).
    */
   getBattleProfile(subject: string): Promise<BattleProfile>
 }

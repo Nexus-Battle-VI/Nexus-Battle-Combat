@@ -1,4 +1,7 @@
-import { UpstreamServiceError } from '../../../application/errors/UpstreamErrors'
+import {
+  AccountProfileMissingError,
+  UpstreamServiceError,
+} from '../../../application/errors/UpstreamErrors'
 import type {
   AccountBattleProfilePort,
   BattleProfile,
@@ -28,12 +31,17 @@ export class AccountHttpClient implements AccountBattleProfilePort {
     )
 
     if (!result.found) {
-      // Un `subject` ya verificado por el JWT de Combat sin perfil en
-      // Account es una anomalia de integridad entre servicios, no un
-      // camino de negocio (ver `AccountBattleProfilePort.getBattleProfile`).
+      // HU-15.4: un `subject` verificado por el JWT de Combat sin perfil en
+      // Account (404 real del contrato interno, no un fallo de transporte)
+      // es informacion de negocio diagnosticable -- "esta cuenta no existe
+      // todavia en Account" -- no una caida de servicio. Se traduce a
+      // `AccountProfileMissingError` (422 en el controlador), nunca a
+      // `UpstreamServiceError` (503): ver el comentario de
+      // `AccountProfileMissingError` en `application/errors/UpstreamErrors.ts`
+      // para el porque de la distincion.
       this.options.logger.warn('account_perfil_no_encontrado', { subject })
 
-      throw new UpstreamServiceError(SERVICE, 'perfil_no_encontrado')
+      throw new AccountProfileMissingError(subject)
     }
 
     return parseBattleProfile(result.body, subject)
