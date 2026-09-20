@@ -27,6 +27,7 @@
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
+    "tools/hu-26/*.ts",
     "eslint.config.mjs",
     "jest.config.ts",
     "jest.db.config.ts"

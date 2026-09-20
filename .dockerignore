@@ -5,6 +5,7 @@ dist
 coverage
 tests
 docs
+tools
 *.md
 !README.md
 .env

@@ -11,7 +11,16 @@ import prettier from 'eslint-config-prettier'
  * de forma directa. Vease ADR-002 en Nexus-Battle-Infrastructure.
  */
 export default defineConfig([
-  globalIgnores(['dist/**', 'coverage/**', 'node_modules/**']),
+  globalIgnores([
+    'dist/**',
+    'coverage/**',
+    'node_modules/**',
+    'tools/hu-26/.venv/**',
+    'tools/hu-26/.build/**',
+    'tools/hu-26/.samples/**',
+    // Orquestador CLI en JavaScript plano (no forma parte del proyecto TypeScript).
+    'tools/hu-26/*.mjs',
+  ]),
 
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,

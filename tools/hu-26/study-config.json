@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "study": "HU-26 — Selección y validación estadística de la semilla",
+  "traceability": {
+    "story": "Nexus-Battle-VI/Nexus-Battle-Management#73",
+    "requirement": "RF-26",
+    "closedTasks": [362, 363, 364],
+    "dependency": "Nexus-Battle-VI/Nexus-Battle-Management#71 (HU-24)"
+  },
+  "status": "PRE-REGISTERED: este diseño se commitea ANTES de ejecutar el estudio con el generador productivo.",
+  "classification": {
+    "sampleSize": "DECISION_EXPERIMENTAL (heredada del estudio previo; no es un requisito de RF-26)",
+    "alpha": "DECISION_EXPERIMENTAL (heredada del estudio previo; no es un requisito de RF-26)",
+    "ljungBoxLags": "DECISION_EXPERIMENTAL (heredada del estudio previo; no es un requisito de RF-26)",
+    "candidateSeeds": "DECISION_EXPERIMENTAL",
+    "selectionRule": "DECISION_EXPERIMENTAL (criterio del estudio previo; no hay decision formal posterior)"
+  },
+  "sampleSize": 100000,
+  "alpha": 0.05,
+  "ljungBoxLags": [10, 20, 30, 40, 50],
+  "candidateSeeds": [0, 1, 42, 53, 234, 365, 777, 1000, 1500, 3000000, 4294967295],
+  "historicalCandidateSeeds": [0, 1, 42, 53, 234, 365, 777, 1000, 1500, 3000000, 7294967295],
+  "historicalInvalidSeeds": [
+    {
+      "seed": 7294967295,
+      "status": "CANDIDATA_HISTORICA_INVALIDA_PARA_LA_IMPLEMENTACION_PRODUCTIVA",
+      "reason": "7294967295 > 4294967295 (2^32 - 1, RandomSeed.MAX). RandomSeed solo admite uint32 (init_genrand); no se trunca, no se aplica modulo ni se hace un cast uint32 silencioso."
+    }
+  ],
+  "addedBoundaryCandidate": {
+    "seed": 4294967295,
+    "reason": "Es RandomSeed.MAX. DECISION EXPERIMENTAL del nuevo estudio para conservar 11 candidatas y probar el limite superior real de la implementacion. NO es una correccion formal del valor historico ni se afirma que fuera el valor que se quiso escribir."
+  },
+  "implementationUnderTest": {
+    "generator": "MT19937 (init_genrand, genrand_res53) + Box-Muller",
+    "port": "RandomSequenceFactoryPort.createNormalSequence(RandomSeed.create(seed)).nextNormal()",
+    "notUsedForNormality": "RandomSequenceFactoryPort.create(seed).nextIndex() (indice 1..8000, uniforme por decision tecnica)"
+  },
+  "referenceDistribution": "N(0,1)",
+  "expectedTheoretical": { "mean": 0, "std": 1, "skewness": 0, "excessKurtosis": 0 },
+  "conventions": {
+    "std": "desviacion tipica muestral, ddof = 1",
+    "skewness": "coeficiente de asimetria de momentos g1 (scipy.stats.skew, bias=True)",
+    "kurtosis": "EXCESO de curtosis de Fisher g2 (scipy.stats.kurtosis, fisher=True, bias=True); N(0,1) -> 0",
+    "ks": "scipy.stats.kstest(z, 'norm'): H0 = la muestra proviene de N(0,1); p > alpha significa NO RECHAZAR H0, no que se demostro la normalidad",
+    "ljungBox": "statsmodels.stats.diagnostic.acorr_ljungbox(z, lags=[10,20,30,40,50], model_df=0) con ACF por FFT; se contrasta con una implementacion independiente O(n log n)",
+    "qq": "cuantiles observados ordenados vs cuantiles teoricos N(0,1) en las posiciones de trazado (i - 0.5) / n, con la recta y = x"
+  },
+  "selectionRule": {
+    "step1_filters": [
+      "KS p-value > alpha",
+      "minimo de los p-values de Ljung-Box (lags 10,20,30,40,50) > alpha"
+    ],
+    "step2_ranking": "entre las candidatas aceptadas por AMBOS filtros, ordenar por menor estadistico KS D",
+    "tieBreak": "menor valor de semilla (desempate tecnico determinista; con estadisticos continuos no se espera)",
+    "ifNoCandidateAccepted": "NO se elige la 'menos mala': se informa que no hay candidata aceptada, se documentan los resultados y se eleva la decision",
+    "notUsedForSelection": [
+      "el indice 1..8000",
+      "las proporciones de la tabla de efectos de HU-25",
+      "valores objetivo de una semilla concreta (no se favorece 3000000 ni ninguna otra)"
+    ]
+  },
+  "secondaryChecks": {
+    "indexUniformity": {
+      "purpose": "VALIDACION FUNCIONAL DEL INDICE (secundaria; NO participa en la seleccion de la semilla)",
+      "source": "RandomSequenceFactoryPort.create(seed).nextIndex()",
+      "sampleSize": 100000,
+      "bins": 80,
+      "binWidth": 100
+    }
+  }
+}

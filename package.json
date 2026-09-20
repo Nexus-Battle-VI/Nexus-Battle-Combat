@@ -25,7 +25,10 @@
     "test:integration": "jest --selectProjects integration",
     "test:coverage": "jest --coverage",
     "migrate": "node dist/infrastructure/persistence/migrate.js",
-    "test:db": "jest --config jest.db.config.ts --coverage"
+    "test:db": "jest --config jest.db.config.ts --coverage",
+    "study:hu-26:build": "tsc --project tools/hu-26/tsconfig.json",
+    "study:hu-26:samples": "node tools/hu-26/.build/tools/hu-26/generate-samples.js",
+    "study:hu-26": "node tools/hu-26/run-study.mjs"
   },
   "dependencies": {
     "@nestjs/common": "11.2.1",

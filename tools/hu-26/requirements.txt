@@ -1,0 +1,13 @@
+# Analisis estadistico OFFLINE de HU-26. NO forma parte del runtime ni de la
+# imagen de Combat (el Dockerfile no lo copia y .dockerignore excluye `tools`).
+#
+#   python -m venv tools/hu-26/.venv
+#   tools/hu-26/.venv/Scripts/pip install -r tools/hu-26/requirements.txt   (Windows)
+#   tools/hu-26/.venv/bin/pip install -r tools/hu-26/requirements.txt       (Linux/macOS)
+#
+# Versiones con las que se ejecuto el estudio. Las dependencias transitivas
+# exactas estan en `requirements.lock.txt`.
+numpy==2.4.2
+scipy==1.17.0
+statsmodels==0.14.6
+matplotlib==3.11.2

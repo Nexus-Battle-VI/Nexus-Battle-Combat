@@ -22,6 +22,12 @@ junit.xml
 credentials
 .aws/
 
+# HU-26: tooling estadistico OFFLINE (no forma parte del runtime)
+tools/hu-26/.venv/
+tools/hu-26/.build/
+tools/hu-26/.samples/
+__pycache__/
+
 # Herramientas
 .eslintcache
 .cache/
