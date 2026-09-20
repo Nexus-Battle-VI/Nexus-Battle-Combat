@@ -58,11 +58,11 @@ Ningún otro servicio accede a este almacén, ni directamente ni con claves for�
 
 **HU-11 ([Gestión del recurso Poder](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/20)) ya está cerrada, pero se entregó en Player/Inventory**, no aquí. La regla vive allí como política de dominio (`HeroPowerPolicy`) y su especificación está en [`docs/hu-11-power.md`](https://github.com/Nexus-Battle-VI/Nexus-Battle-Player-Inventory/blob/develop/docs/hu-11-power.md).
 
-A Combat le queda **aplicarla al Poder de cada participante** de la batalla: consultar antes de elegir la acción, descontar solo si se ejecutó, sumar 2 por turno y restaurar al terminar el combate. Cómo obtiene la regla, sin poder importar código de otro repositorio (ADR-001), está por decidir. Mostrar el Poder actualizado al jugador tampoco está hecho: depende del tiempo real (ADR-020).
+Combat la **reimplementa a propósito** en `HeroPowerPolicy` (no puede importar código de otro repositorio, ADR-001) y la mantiene alineada con los mismos vectores de prueba de Player/Inventory. Ya lee el Poder máximo del héroe (`EquippedHero.maxPower`). **Falta el agregado de batalla** —inicio de batalla y turnos, HU-17 en adelante— que guarde el Poder de cada participante y la invoque, y que emita el valor a la interfaz (ADR-020). Ver [docs/hu-11-hero-power.md](docs/hu-11-hero-power.md).
 
 ## Integraciones previstas
 
-- **Player/Inventory** (síncrono, `operationId`): perfil de combate del héroe y compromiso `BATTLE`. El Poder máximo del héroe es `effectiveStats.power` del contrato `equipped-hero`; hoy Combat solo modela `playerId` y `heroId`.
+- **Player/Inventory** (síncrono, `operationId`): perfil de combate del héroe y compromiso `BATTLE`. El Poder máximo del héroe es `effectiveStats.power` del contrato `equipped-hero`, que Combat modela como `maxPower`.
 - **Wallet** (síncrono, `operationId`): reservar apuestas, transferir al ganador, liberar al cancelar.
 - **Entrada interna** (`/api/internal/v1/combat/simulations`, HMAC): Missions ejecuta simulaciones.
 - **Tiempo real** (ADR-020): WebSocket en `/api/v1/combat/realtime` a través de Caddy, con ticket de un solo uso.

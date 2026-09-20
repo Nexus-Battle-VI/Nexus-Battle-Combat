@@ -25,11 +25,12 @@ const SERVICE = 'player-inventory'
  * heroe equipado" (ver mas abajo) -- todo JOIN fallaba con
  * `PlayerWithoutEquippedHeroError`, tuviera o no el jugador un heroe real.
  *
- * SOLO EXTRAE `playerId`/`heroId` del cuerpo -- ver
- * `PlayerInventoryEquippedHeroPort.ts` para por que el resto del contrato
- * (`reference`, `subtype`, `name`, `baseStats`, `effectiveStats`, `ready`,
- * `selectedAt`) no se modela en esta version, y por que NO existe `level`
- * (DP-3, confirmado que no existe en el dominio de Player-Inventory).
+ * SOLO EXTRAE `playerId`, `heroId` y `effectiveStats.power` del cuerpo (el
+ * ultimo es el Poder maximo, HU-11) -- ver `PlayerInventoryEquippedHeroPort.ts`
+ * para por que el resto del contrato (`reference`, `subtype`, `name`,
+ * `baseStats`, `ready`, `selectedAt`) no se modela en esta version, y por que
+ * NO existe `level` (DP-3, confirmado que no existe en el dominio de
+ * Player-Inventory).
  */
 export class PlayerInventoryHttpClient implements PlayerInventoryEquippedHeroPort {
   constructor(private readonly options: InternalHttpClientOptions) {}
@@ -57,7 +58,7 @@ const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHer
     throw new UpstreamServiceError(SERVICE, 'respuesta_invalida')
   }
 
-  const { playerId, heroId } = body as Record<string, unknown>
+  const { playerId, heroId, effectiveStats } = body as Record<string, unknown>
 
   if (typeof playerId !== 'string' || playerId !== expectedPlayerId) {
     throw new UpstreamServiceError(SERVICE, 'respuesta_invalida')
@@ -67,5 +68,25 @@ const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHer
     throw new UpstreamServiceError(SERVICE, 'respuesta_invalida')
   }
 
-  return { playerId, heroId }
+  return { playerId, heroId, maxPower: parseMaxPower(effectiveStats) }
+}
+
+/**
+ * Poder maximo del heroe (`effectiveStats.power`, HU-11). Player-Inventory lo
+ * entrega redondeado y sin negativos; aun asi Combat no lo da por bueno a
+ * ciegas: sin un entero no negativo no hay Poder que administrar, y inventar un
+ * valor por defecto le daria a un heroe un recurso que no tiene.
+ */
+const parseMaxPower = (effectiveStats: unknown): number => {
+  if (typeof effectiveStats !== 'object' || effectiveStats === null) {
+    throw new UpstreamServiceError(SERVICE, 'respuesta_invalida')
+  }
+
+  const { power } = effectiveStats as Record<string, unknown>
+
+  if (typeof power !== 'number' || !Number.isInteger(power) || power < 0) {
+    throw new UpstreamServiceError(SERVICE, 'respuesta_invalida')
+  }
+
+  return power
 }

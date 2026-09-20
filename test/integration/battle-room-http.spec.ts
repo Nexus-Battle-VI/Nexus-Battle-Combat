@@ -92,7 +92,8 @@ const stubAccountProfiles: AccountBattleProfilePort = {
 }
 
 const stubEquippedHeroes: PlayerInventoryEquippedHeroPort = {
-  getEquippedHero: (playerId) => Promise.resolve({ playerId, heroId: `heroe-de-${playerId}` }),
+  getEquippedHero: (playerId) =>
+    Promise.resolve({ playerId, heroId: `heroe-de-${playerId}`, maxPower: 10 }),
 }
 
 const withEnv = (values: Record<string, string>): (() => void) => {
