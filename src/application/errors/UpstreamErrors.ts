@@ -52,3 +52,37 @@ export class PlayerWithoutEquippedHeroError extends Error {
     this.name = 'PlayerWithoutEquippedHeroError'
   }
 }
+
+/**
+ * HU-15.4 (hallazgo de validacion integral). Account respondio 404 a
+ * `GET /internal/accounts/:subject/battle-profile` para un `subject` que SI
+ * paso la verificacion del testimonio de Combat -- es decir, Account no
+ * tiene una cuenta asociada a ese sujeto todavia.
+ *
+ * Se distingue DELIBERADAMENTE de `UpstreamServiceError`: aqui Account SI
+ * respondio, con una forma de respuesta valida (404, no timeout/401/5xx/
+ * cuerpo invalido) -- el 404 es informacion de negocio ("no existe perfil
+ * para este sujeto"), no un fallo de transporte ni de disponibilidad. Antes
+ * de esta clase, `AccountHttpClient` colapsaba este caso en
+ * `UpstreamServiceError` -> 503 ("El servicio de combate no esta disponible
+ * en este momento"), indistinguible de una caida real de Account: quien
+ * pedia unirse no podia saber si debia reintentar en segundos (503 real) o
+ * si su sesion apuntaba a un sujeto sin cuenta provisionada (este caso,
+ * irrecuperable con un reintento).
+ *
+ * 422, no 503 ni 404: la peticion de union es sintacticamente correcta, y el
+ * `roomId` de la URL es del recurso "sala", no del recurso "perfil de
+ * cuenta" -- devolver 404 aqui se confundiria en Web con "la sala no
+ * existe" (`RoomNotFoundError`, tambien 404 en este mismo endpoint). Mismo
+ * criterio de "precondicion de negocio incumplida" que
+ * `PlayerWithoutEquippedHeroError`.
+ */
+export class AccountProfileMissingError extends Error {
+  readonly subject: string
+
+  constructor(subject: string) {
+    super(`El sujeto "${subject}" no tiene una cuenta asociada en Account.`)
+    this.name = 'AccountProfileMissingError'
+    this.subject = subject
+  }
+}

@@ -8,7 +8,10 @@ import {
   INTERNAL_TIMESTAMP_HEADER,
   signInternalRequest,
 } from '../../src/adapters/outbound/identity/internal-signature'
-import { UpstreamServiceError } from '../../src/application/errors/UpstreamErrors'
+import {
+  AccountProfileMissingError,
+  UpstreamServiceError,
+} from '../../src/application/errors/UpstreamErrors'
 import type { ClockPort } from '../../src/application/ports/ClockPort'
 import type { Logger } from '../../src/infrastructure/observability/logger'
 
@@ -107,11 +110,16 @@ describe('AccountHttpClient (HU-15.2, DP-2)', () => {
     expect(profile.avatarUrl).toBeNull()
   })
 
-  it('404 (subject verificado sin perfil) -> UpstreamServiceError, NO null: es una anomalia, no un camino de negocio', async () => {
+  it('404 (subject verificado sin perfil) -> AccountProfileMissingError, NO UpstreamServiceError: HU-15.4, es informacion de negocio diagnosticable, no una caida de Account', async () => {
     const fetchImpl = (): Promise<Response> => Promise.resolve(jsonResponse(404, {}))
     const client = new AccountHttpClient({ ...baseOptions, fetchImpl })
 
-    await expect(client.getBattleProfile('fantasma')).rejects.toBeInstanceOf(UpstreamServiceError)
+    await expect(client.getBattleProfile('fantasma')).rejects.toBeInstanceOf(
+      AccountProfileMissingError,
+    )
+    await expect(client.getBattleProfile('fantasma')).rejects.not.toBeInstanceOf(
+      UpstreamServiceError,
+    )
   })
 
   it('401 -> UpstreamServiceError sin filtrar el secreto ni la firma en el registro', async () => {

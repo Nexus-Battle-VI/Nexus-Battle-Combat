@@ -9,6 +9,10 @@ import {
   type AccountBattleProfilePort,
 } from '../../src/application/ports/AccountBattleProfilePort'
 import {
+  AccountProfileMissingError,
+  UpstreamServiceError,
+} from '../../src/application/errors/UpstreamErrors'
+import {
   PLAYER_INVENTORY_EQUIPPED_HERO,
   type PlayerInventoryEquippedHeroPort,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
@@ -31,6 +35,15 @@ import { AppModule } from '../../src/infrastructure/bootstrap/app.module'
 const IDENTITIES: Readonly<Record<string, VerifiedIdentity>> = {
   'token-creador': { subject: 'sujeto-creador', email: null, roles: new Set([Role.Player]) },
   'token-otro': { subject: 'sujeto-otro', email: null, roles: new Set([Role.Player]) },
+  // HU-15.4: testimonio valido (firma/JWT correctos) para un sujeto SIN
+  // cuenta en Account -- el escenario real que motivo esta suite de
+  // regresion (ver `AccountProfileMissingError`).
+  'token-sin-cuenta': { subject: 'sujeto-sin-cuenta', email: null, roles: new Set([Role.Player]) },
+  'token-account-caido': {
+    subject: 'sujeto-account-caido',
+    email: null,
+    roles: new Set([Role.Player]),
+  },
 }
 
 const stubVerifier: TokenVerifierPort = {
@@ -54,9 +67,28 @@ const stubVerifier: TokenVerifierPort = {
  * cada identidad de `IDENTITIES` tenga un `displayName` distinto y no choque
  * con la nueva unicidad de nombre del dominio.
  */
+/**
+ * HU-15.4: dos sujetos reservados hacen que el doble reproduzca, sin tocar
+ * Account real, las dos condiciones que HU-15.2 colapsaba erroneamente en
+ * el mismo 503 (`UpstreamServiceError`) antes de esta correccion --
+ * `sujeto-sin-cuenta` (Account respondio 404: informacion de negocio,
+ * `AccountProfileMissingError`, 422) y `sujeto-account-caido` (Account no
+ * respondio de verdad, `UpstreamServiceError`, 503 -- sigue siendo el
+ * comportamiento correcto para una caida real). Cualquier otro sujeto sigue
+ * resolviendo con exito, igual que antes.
+ */
 const stubAccountProfiles: AccountBattleProfilePort = {
-  getBattleProfile: (subject) =>
-    Promise.resolve({ subject, displayName: `nombre-de-${subject}`, avatarUrl: null }),
+  getBattleProfile: (subject) => {
+    if (subject === 'sujeto-sin-cuenta') {
+      return Promise.reject(new AccountProfileMissingError(subject))
+    }
+
+    if (subject === 'sujeto-account-caido') {
+      return Promise.reject(new UpstreamServiceError('account', 'no_alcanzable'))
+    }
+
+    return Promise.resolve({ subject, displayName: `nombre-de-${subject}`, avatarUrl: null })
+  },
 }
 
 const stubEquippedHeroes: PlayerInventoryEquippedHeroPort = {
@@ -370,6 +402,32 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       )
 
       expect(response.status).toBe(404)
+    })
+
+    it('422 (no 503) cuando Account responde 404 porque el sujeto verificado no tiene cuenta todavia (HU-15.4)', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+
+      const response = await authed('token-sin-cuenta')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+      )
+
+      expect(response.status).toBe(422)
+      expect(response.body.code).toBe('ACCOUNT_PROFILE_NOT_FOUND')
+      expect(String(response.body.message)).not.toMatch(/no est.{1,2} disponible/i)
+    })
+
+    it('503 (no 422) cuando Account realmente no responde (no alcanzable), distinto del 422 de sujeto sin cuenta (HU-15.4)', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+
+      const response = await authed('token-account-caido')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+      )
+
+      expect(response.status).toBe(503)
     })
 
     it('409 si la sala esta CANCELLED', async () => {

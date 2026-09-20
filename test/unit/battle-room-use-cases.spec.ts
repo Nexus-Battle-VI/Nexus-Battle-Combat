@@ -1,6 +1,7 @@
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { RoomConflictError, RoomNotFoundError } from '../../src/application/errors/ApplicationError'
 import {
+  AccountProfileMissingError,
   PlayerWithoutEquippedHeroError,
   UpstreamServiceError,
 } from '../../src/application/errors/UpstreamErrors'
@@ -409,6 +410,35 @@ describe('JoinBattleRoom', () => {
 
     await expect(join.execute(created.id, JOINER, null)).rejects.toBeInstanceOf(
       UpstreamServiceError,
+    )
+    expect(saveSpy).not.toHaveBeenCalled()
+    expect(equippedHeroesSpy).not.toHaveBeenCalled()
+  })
+
+  it('Account responde 404 (sujeto sin cuenta) -> propaga AccountProfileMissingError, nunca UpstreamServiceError, nunca invoca repository.save() ni consulta Player-Inventory (HU-15.4)', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const created = await create.execute(
+      CREATOR,
+      basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+    )
+
+    const equippedHeroesSpy = jest.fn<
+      Promise<{ playerId: string; heroId: string } | null>,
+      [string]
+    >()
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      {
+        getBattleProfile: (subject) => Promise.reject(new AccountProfileMissingError(subject)),
+      },
+      { getEquippedHero: equippedHeroesSpy },
+    )
+    const saveSpy = jest.spyOn(repo, 'save')
+
+    await expect(join.execute(created.id, JOINER, null)).rejects.toBeInstanceOf(
+      AccountProfileMissingError,
     )
     expect(saveSpy).not.toHaveBeenCalled()
     expect(equippedHeroesSpy).not.toHaveBeenCalled()
