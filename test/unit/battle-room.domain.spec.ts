@@ -1,12 +1,17 @@
 import { BattleRoom, type CreateBattleRoomInput } from '../../src/domain/entities/BattleRoom'
 import { DomainError } from '../../src/domain/errors/DomainError'
+import { parseBattleRoomStatus } from '../../src/domain/value-objects/BattleRoomStatus'
 import {
+  DuplicateDisplayNameError,
   InvalidModeCompositionError,
   InvalidRewardError,
   InvalidRoomCapacityError,
   InvalidTeamCapacityError,
+  PlayerAlreadyJoinedError,
   RoomCancellationForbiddenError,
+  RoomFullError,
   RoomNotCancellableError,
+  RoomNotJoinableError,
 } from '../../src/domain/errors/BattleRoomErrors'
 
 /**
@@ -299,6 +304,329 @@ describe('BattleRoom', () => {
       const restored = BattleRoom.restore(created.toSnapshot())
 
       expect(restored.toSnapshot()).toEqual(created.toSnapshot())
+    })
+  })
+
+  describe('BattleRoomStatus acepta PREPARING (HU-15.2)', () => {
+    it('parseBattleRoomStatus("PREPARING") ya no lanza', () => {
+      expect(parseBattleRoomStatus('PREPARING')).toBe('PREPARING')
+    })
+  })
+
+  describe('join() (HU-15.2, RF-15)', () => {
+    const JOINER = 'jugador-que-se-une'
+
+    it('ingreso valido que deja cupo permanece WAITING_FOR_PLAYERS', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT)
+
+      expect(joined.status).toBe('WAITING_FOR_PLAYERS')
+      expect(joined.totalParticipants()).toBe(1)
+      const allParticipants = [...joined.teams[0].participants, ...joined.teams[1].participants]
+      expect(allParticipants).toContainEqual(
+        expect.objectContaining({ kind: 'HUMAN', playerId: JOINER }),
+      )
+    })
+
+    it('ingreso que ocupa el ultimo cupo del equipo objetivo, pero no el total de la sala -> WAITING_FOR_PLAYERS', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 2 }] }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, 'A', AT)
+
+      expect(joined.status).toBe('WAITING_FOR_PLAYERS')
+      expect(joined.teams[0].totalParticipants).toBe(1)
+      expect(joined.teams[0].capacity).toBe(1)
+    })
+
+    it('ingreso que ocupa el ultimo cupo TOTAL de la sala -> transicion a PREPARING en la misma mutacion', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 1 },
+          ],
+        }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT)
+
+      expect(joined.status).toBe('PREPARING')
+      expect(joined.totalParticipants()).toBe(joined.totalCapacity())
+    })
+
+    it('sala CANCELLED rechaza join -> RoomNotJoinableError', () => {
+      const room = BattleRoom.create(ROOM_ID, CREATOR, baseInput(), AT)
+      const cancelled = room.cancel(CREATOR)
+
+      expect(() => cancelled.join(JOINER, null, AT)).toThrow(RoomNotJoinableError)
+    })
+
+    it('sala PREPARING rechaza join -> RoomNotJoinableError', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 1 },
+          ],
+        }),
+        AT,
+      )
+      const preparing = room.join(JOINER, null, AT)
+      expect(preparing.status).toBe('PREPARING')
+
+      expect(() => preparing.join('otro-mas', null, AT)).toThrow(RoomNotJoinableError)
+    })
+
+    it('team explicito lleno (pero sala con cupo en el otro equipo) -> RoomFullError', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 2 },
+          ],
+        }),
+        AT,
+      )
+
+      expect(() => room.join(JOINER, 'A', AT)).toThrow(RoomFullError)
+    })
+
+    it('team explicito inexistente en la sala -> DomainError', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+
+      expect(() => room.join(JOINER, 'Z', AT)).toThrow(DomainError)
+    })
+
+    it('jugador ya participante (mismo playerId) -> PlayerAlreadyJoinedError', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+        AT,
+      )
+      const joined = room.join(JOINER, null, AT)
+
+      expect(() => joined.join(JOINER, 'B', AT)).toThrow(PlayerAlreadyJoinedError)
+    })
+
+    it('el creador ya presente en la sala no puede unirse de nuevo -> PlayerAlreadyJoinedError', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          teamConfigs: [
+            { capacity: 2, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 2 },
+          ],
+        }),
+        AT,
+      )
+
+      expect(() => room.join(CREATOR, null, AT)).toThrow(PlayerAlreadyJoinedError)
+    })
+
+    it('asignacion automatica sin team: ocupa el primer equipo con cupo, orden [A, B]', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 2 },
+          ],
+        }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT)
+
+      expect(joined.teams[0].totalParticipants).toBe(1)
+      expect(joined.teams[1].totalParticipants).toBe(1)
+      expect(joined.teams[1].participants[0]).toMatchObject({ kind: 'HUMAN', playerId: JOINER })
+    })
+
+    it('nunca totalParticipants supera totalCapacity tras un join', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT)
+
+      expect(joined.totalParticipants()).toBeLessThanOrEqual(joined.totalCapacity())
+    })
+
+    it('joinedAt del participante nuevo es el `at` recibido, nunca inventado por el dominio', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+      const joinAt = new Date('2026-09-18T00:00:00.000Z')
+
+      const joined = room.join(JOINER, null, joinAt)
+      const newParticipant = [
+        ...joined.teams[0].participants,
+        ...joined.teams[1].participants,
+      ].find((participant) => participant.playerId === JOINER)
+
+      expect(newParticipant?.joinedAt).toEqual(joinAt)
+    })
+
+    it('sin displayName/heroId (retrocompatibilidad de firma): ambos quedan null, mismo comportamiento que antes de esta ampliacion', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT)
+      const newParticipant = [
+        ...joined.teams[0].participants,
+        ...joined.teams[1].participants,
+      ].find((participant) => participant.playerId === JOINER)
+
+      expect(newParticipant).toMatchObject({ displayName: null, heroId: null })
+    })
+
+    it('con displayName/heroId (HU-15.2, fase de integracion): ambos se persisten como snapshot del participante', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT, 'Nombre Visible', 'heroe-123')
+      const newParticipant = [
+        ...joined.teams[0].participants,
+        ...joined.teams[1].participants,
+      ].find((participant) => participant.playerId === JOINER)
+
+      expect(newParticipant).toMatchObject({ displayName: 'Nombre Visible', heroId: 'heroe-123' })
+    })
+
+    it('displayName ya usado por otro HUMAN de la sala -> DuplicateDisplayNameError (DP-2)', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 2 }] }),
+        AT,
+      )
+      const withCreatorNamed = room.join(CREATOR, 'A', AT, 'Mismo Nombre', 'heroe-creador')
+
+      expect(() => withCreatorNamed.join(JOINER, 'B', AT, 'Mismo Nombre', 'heroe-joiner')).toThrow(
+        DuplicateDisplayNameError,
+      )
+    })
+
+    it('displayName duplicado se detecta insensible a mayusculas y espacios extremos', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 2 }] }),
+        AT,
+      )
+      const withCreatorNamed = room.join(CREATOR, 'A', AT, 'Ana', 'heroe-creador')
+
+      expect(() => withCreatorNamed.join(JOINER, 'B', AT, '  ANA  ', 'heroe-joiner')).toThrow(
+        DuplicateDisplayNameError,
+      )
+    })
+
+    it('displayName distinto no colisiona: dos jugadores con nombres distintos se unen sin problema', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 2 }] }),
+        AT,
+      )
+      const withCreatorNamed = room.join(CREATOR, 'A', AT, 'Ana', 'heroe-creador')
+
+      const joined = withCreatorNamed.join(JOINER, 'B', AT, 'Beto', 'heroe-joiner')
+
+      expect(joined.totalParticipants()).toBe(2)
+    })
+
+    it('un participante HUMAN con displayName null (creado por HU-14, initialParticipants) nunca colisiona por nombre', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          // El creador se declara HUMAN via initialParticipants (HU-14, sin
+          // displayName: esa ruta no resuelve Account) y el joiner llega con
+          // displayName resuelto (HU-15.2): no deben chocar solo por
+          // coincidir ambos en null vs un valor real.
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 1 },
+          ],
+        }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT, 'Cualquier Nombre', 'heroe-joiner')
+
+      expect(joined.totalParticipants()).toBe(2)
+    })
+  })
+
+  describe('regresion HU-14 (create/cancel siguen intactos tras HU-15.2)', () => {
+    it('create() sigue produciendo WAITING_FOR_PLAYERS con version 0', () => {
+      const room = BattleRoom.create(ROOM_ID, CREATOR, baseInput(), AT)
+
+      expect(room.status).toBe('WAITING_FOR_PLAYERS')
+      expect(room.version).toBe(0)
+    })
+
+    it('cancel() sigue funcionando y produciendo CANCELLED', () => {
+      const room = BattleRoom.create(ROOM_ID, CREATOR, baseInput(), AT)
+      const cancelled = room.cancel(CREATOR)
+
+      expect(cancelled.status).toBe('CANCELLED')
+    })
+
+    it('duplicado HUMAN declarado en create() sigue lanzando InvalidModeCompositionError (no PlayerAlreadyJoinedError)', () => {
+      expect(() =>
+        BattleRoom.create(
+          ROOM_ID,
+          CREATOR,
+          baseInput({
+            teamConfigs: [
+              { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+              { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            ],
+          }),
+          AT,
+        ),
+      ).toThrow(InvalidModeCompositionError)
     })
   })
 })

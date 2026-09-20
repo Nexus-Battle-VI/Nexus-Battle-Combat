@@ -28,6 +28,16 @@ export interface Participant {
   readonly playerId: string | null
   /** Opcional para ambos tipos. No se modela `difficulty`/`archetype` para `AI`. */
   readonly heroId: string | null
+  /**
+   * Snapshot del nombre visible en el momento de unirse (HU-15.2, RF-15,
+   * DP-2). Resuelto SIEMPRE por `JoinBattleRoom` desde el contrato interno
+   * de Account (`GET /internal/accounts/:subject/battle-profile`), nunca del
+   * cuerpo de la peticion -- mismo criterio que `heroId`. `null` para
+   * participantes `AI` y para `HUMAN` creados antes de esta version (HU-14,
+   * `initialParticipants` al crear la sala, que no resuelve Account) --
+   * campo aditivo y retrocompatible, no una migracion destructiva.
+   */
+  readonly displayName: string | null
   readonly joinedAt: Date
 }
 
@@ -35,6 +45,7 @@ export interface ParticipantInput {
   readonly kind: string
   readonly playerId?: string | null
   readonly heroId?: string | null
+  readonly displayName?: string | null
   /** Cuando se restaura desde persistencia, la fecha guardada. */
   readonly joinedAt?: Date
 }
@@ -55,6 +66,7 @@ export const createParticipant = (input: ParticipantInput, at: Date): Participan
   }
 
   const heroId = normalizeOptional(input.heroId)
+  const displayName = normalizeOptional(input.displayName)
   const joinedAt = input.joinedAt ?? at
 
   if (Number.isNaN(joinedAt.getTime())) {
@@ -68,14 +80,14 @@ export const createParticipant = (input: ParticipantInput, at: Date): Participan
       throw new DomainError('Un participante HUMAN necesita un jugador.')
     }
 
-    return { kind: ParticipantKind.Human, playerId, heroId, joinedAt }
+    return { kind: ParticipantKind.Human, playerId, heroId, displayName, joinedAt }
   }
 
   if (normalizeOptional(input.playerId) !== null) {
     throw new DomainError('Un participante AI no lleva jugador.')
   }
 
-  return { kind: ParticipantKind.Ai, playerId: null, heroId, joinedAt }
+  return { kind: ParticipantKind.Ai, playerId: null, heroId, displayName, joinedAt }
 }
 
 const normalizeOptional = (value: string | null | undefined): string | null => {

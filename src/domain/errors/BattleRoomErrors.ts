@@ -94,3 +94,59 @@ export class RoomNotCancellableError extends DomainError {
     this.name = 'RoomNotCancellableError'
   }
 }
+
+/**
+ * HU-15.2 (RF-15). La sala existe pero no esta en `WAITING_FOR_PLAYERS`: ya
+ * fue cancelada o ya paso a `PREPARING` (cupo total completo). 409: conflicto
+ * con el estado del agregado, mismo criterio que `RoomNotCancellableError`.
+ */
+export class RoomNotJoinableError extends DomainError {
+  constructor(roomId: string, status: string) {
+    super(`La sala "${roomId}" no admite nuevos jugadores porque su estado es ${status}.`)
+    this.name = 'RoomNotJoinableError'
+  }
+}
+
+/**
+ * HU-15.2 (RF-15). El equipo objetivo (solicitado explicitamente o resuelto
+ * por asignacion automatica del servidor) ya alcanzo su `capacity`. 409: la
+ * peticion es valida, pero ya no hay cupo disponible en ese momento.
+ */
+export class RoomFullError extends DomainError {
+  constructor(roomId: string, teamLabel: string) {
+    super(`El equipo "${teamLabel}" de la sala "${roomId}" no tiene cupo disponible.`)
+    this.name = 'RoomFullError'
+  }
+}
+
+/**
+ * HU-15.2 (RF-15). El `playerId` (subject verificado) ya es participante
+ * HUMAN de la sala. 409: distinto de `InvalidModeCompositionError` (que
+ * protege la composicion declarada al CREAR la sala) porque "duplicado en
+ * creacion" y "duplicado al unirse" son casos de uso distintos, aunque
+ * comparten la regla de fondo (un jugador ocupa un unico puesto HUMAN por
+ * sala) — HU-15.2-Auditoria-Entrada.md, pregunta 12.
+ */
+export class PlayerAlreadyJoinedError extends DomainError {
+  constructor(roomId: string, playerId: string) {
+    super(`El jugador "${playerId}" ya es participante de la sala "${roomId}".`)
+    this.name = 'PlayerAlreadyJoinedError'
+  }
+}
+
+/**
+ * HU-15.2 (RF-15, DP-2). El `displayName` resuelto de Account ya lo usa OTRO
+ * participante `HUMAN` de la sala (comparacion insensible a mayusculas y
+ * espacios extremos). 409: mismo criterio que `PlayerAlreadyJoinedError` --
+ * es un conflicto de estado del agregado en el momento de unirse, no una
+ * regla de composicion evaluada al crear. Los participantes con
+ * `displayName === null` (creados por HU-14 antes de esta version, o `AI`)
+ * NUNCA participan de esta comprobacion: `null` no es un nombre "vacio" que
+ * choque consigo mismo.
+ */
+export class DuplicateDisplayNameError extends DomainError {
+  constructor(roomId: string, displayName: string) {
+    super(`El nombre "${displayName}" ya lo usa otro jugador de la sala "${roomId}".`)
+    this.name = 'DuplicateDisplayNameError'
+  }
+}

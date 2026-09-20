@@ -1,16 +1,25 @@
 import { DomainError } from '../errors/DomainError'
 import {
+  DuplicateDisplayNameError,
   InvalidModeCompositionError,
   InvalidRoomCapacityError,
   InvalidTeamCapacityError,
+  PlayerAlreadyJoinedError,
   RoomCancellationForbiddenError,
+  RoomFullError,
   RoomNotCancellableError,
+  RoomNotJoinableError,
 } from '../errors/BattleRoomErrors'
 import { BattleRoomId } from '../value-objects/BattleRoomId'
 import { BattleMode, parseBattleMode } from '../value-objects/BattleMode'
 import { BattleRoomStatus, parseBattleRoomStatus } from '../value-objects/BattleRoomStatus'
 import { RewardConfig, type RewardConfigSnapshot } from '../value-objects/RewardConfig'
-import { ParticipantKind, type Participant, type ParticipantInput } from './Participant'
+import {
+  createParticipant,
+  ParticipantKind,
+  type Participant,
+  type ParticipantInput,
+} from './Participant'
 import { Team, type TeamSnapshot } from './Team'
 
 export interface TeamConfigInput {
@@ -217,6 +226,101 @@ export class BattleRoom {
     )
   }
 
+  /**
+   * Une un jugador autenticado a la sala (HU-15.2, RF-15 — subconjunto
+   * implementable segun `HU-15.2-Plan-Implementacion.md`, seccion 1.3/1.10).
+   *
+   * `playerId` es SIEMPRE `identity.subject` resuelto por el caso de uso
+   * desde el testimonio verificado (nunca del cliente, mismo criterio que
+   * `createdBy` en `create()`). `requestedTeam` es opcional: `null` dispara
+   * asignacion automatica por el servidor (primer equipo del agregado, orden
+   * `[A, B]`, con cupo disponible); si se declara, debe existir en la sala y
+   * tener cupo, o se rechaza (nunca se asigna en silencio a otro equipo).
+   * `at` viene de `ClockPort` resuelto por el caso de uso: nunca del cliente.
+   *
+   * `heroId`/`displayName` (HU-15.2, RF-15, DP-2/DP-4): PARAMETROS OPCIONALES
+   * con valor por defecto `null`, resueltos SIEMPRE por `JoinBattleRoom` desde
+   * los contratos internos de Player-Inventory y Account respectivamente
+   * (nunca del cliente, mismo criterio que `playerId`/`at`). Son opcionales
+   * en la FIRMA (no en el flujo real de `JoinBattleRoom`) para no romper
+   * retrocompatibilidad binaria con quien ya invoca `join()` con 3
+   * argumentos -- todas las pruebas de `HU-15.2` anteriores a esta ampliacion
+   * siguen compilando y pasando sin modificarse.
+   *
+   * Precondiciones, en orden: 1) `status === WAITING_FOR_PLAYERS`
+   * (`RoomNotJoinableError`); 2) el jugador no es ya participante HUMAN de la
+   * sala (`PlayerAlreadyJoinedError`, reutilizando la misma deteccion de
+   * duplicado que `validateUniqueHumanPlayers` usa en `create()`); 3)
+   * `displayName` (si no es `null`) no lo usa ya otro `HUMAN` de la sala,
+   * comparacion insensible a mayusculas/espacios extremos
+   * (`DuplicateDisplayNameError` -- DP-2); 4) el equipo objetivo (explicito o
+   * resuelto automaticamente) tiene cupo (`RoomFullError`). Tras aplicar el
+   * ingreso, EN LA MISMA MUTACION: si `totalParticipants() ===
+   * totalCapacity()`, el estado pasa a `PREPARING`; si no, permanece
+   * `WAITING_FOR_PLAYERS`.
+   */
+  join(
+    playerId: string,
+    requestedTeam: string | null,
+    at: Date,
+    displayName: string | null = null,
+    heroId: string | null = null,
+  ): BattleRoom {
+    if (this.status !== BattleRoomStatus.WaitingForPlayers) {
+      throw new RoomNotJoinableError(this.id, this.status)
+    }
+
+    const participant = createParticipant(
+      { kind: ParticipantKind.Human, playerId, heroId, displayName },
+      at,
+    )
+    const allParticipants = [...this.teams[0].participants, ...this.teams[1].participants]
+
+    if (
+      BattleRoom.findDuplicateHumanPlayerId([...allParticipants, participant]) !== null &&
+      participant.playerId !== null
+    ) {
+      // La guarda `participant.playerId !== null` es defensa en profundidad
+      // de tipos, no una regla de negocio nueva: `createParticipant()` ya
+      // exige `playerId` para `ParticipantKind.Human` (lo contrario lanza
+      // `DomainError` antes de llegar aqui), asi que esta rama siempre se
+      // cumple en la practica; permite narrowing sin asercion de tipos.
+      throw new PlayerAlreadyJoinedError(this.id, participant.playerId)
+    }
+
+    if (participant.displayName !== null) {
+      const normalized = participant.displayName.trim().toLowerCase()
+      const collides = allParticipants.some(
+        (existing) =>
+          existing.displayName !== null && existing.displayName.trim().toLowerCase() === normalized,
+      )
+
+      if (collides) {
+        throw new DuplicateDisplayNameError(this.id, participant.displayName)
+      }
+    }
+
+    const targetIndex = BattleRoom.resolveTargetTeamIndex(this.teams, requestedTeam, this.id)
+    const updatedTeam = this.teams[targetIndex].withParticipant(participant)
+    const teams: readonly [Team, Team] =
+      targetIndex === 0 ? [updatedTeam, this.teams[1]] : [this.teams[0], updatedTeam]
+
+    const totalParticipants = teams[0].totalParticipants + teams[1].totalParticipants
+    const nextStatus =
+      totalParticipants === this.totalCapacity() ? BattleRoomStatus.Preparing : this.status
+
+    return new BattleRoom(
+      this.id,
+      this.mode,
+      nextStatus,
+      teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+    )
+  }
+
   get version(): number {
     return this._version
   }
@@ -287,8 +391,26 @@ export class BattleRoom {
    * composicion imposible (una persona no ocupa dos asientos a la vez), asi
    * que se reutiliza `InvalidModeCompositionError` en vez de inventar una
    * clase nueva fuera del catalogo aprobado.
+   *
+   * Refactor HU-15.2: la busqueda del duplicado se extrajo a
+   * `findDuplicateHumanPlayerId` (sin lanzar) para que `join()` pueda
+   * reutilizar EXACTAMENTE la misma deteccion y decidir su propio error
+   * (`PlayerAlreadyJoinedError`, semanticamente distinto de "composicion
+   * invalida al crear") sin duplicar el bucle. Ver
+   * `HU-15.2-Auditoria-Entrada.md`, pregunta 12.
    */
   private static validateUniqueHumanPlayers(participants: readonly Participant[]): void {
+    const duplicate = BattleRoom.findDuplicateHumanPlayerId(participants)
+
+    if (duplicate !== null) {
+      throw new InvalidModeCompositionError(
+        `El jugador "${duplicate}" no puede ocupar mas de un puesto HUMAN en la misma sala.`,
+      )
+    }
+  }
+
+  /** Devuelve el primer `playerId` HUMAN repetido en la lista, o `null` si no hay ninguno. */
+  private static findDuplicateHumanPlayerId(participants: readonly Participant[]): string | null {
     const seenPlayerIds = new Set<string>()
 
     for (const participant of participants) {
@@ -297,12 +419,58 @@ export class BattleRoom {
       }
 
       if (seenPlayerIds.has(participant.playerId)) {
-        throw new InvalidModeCompositionError(
-          `El jugador "${participant.playerId}" no puede ocupar mas de un puesto HUMAN en la misma sala.`,
-        )
+        return participant.playerId
       }
 
       seenPlayerIds.add(participant.playerId)
     }
+
+    return null
+  }
+
+  /**
+   * Resuelve el indice del equipo objetivo de un `join()` (HU-15.2, DP-1).
+   *
+   * Con `requestedTeam`: debe existir en la sala (`label` exacto) y tener
+   * cupo, o se rechaza — nunca se reasigna en silencio a otro equipo. Sin
+   * `requestedTeam`: asignacion automatica por el servidor, orden estable
+   * `[A, B]` del propio agregado, primer equipo con cupo.
+   */
+  private static resolveTargetTeamIndex(
+    teams: readonly [Team, Team],
+    requestedTeam: string | null,
+    roomId: string,
+  ): 0 | 1 {
+    if (requestedTeam !== null) {
+      const index = teams.findIndex((team) => team.label === requestedTeam)
+
+      if (index === -1) {
+        throw new DomainError(`El equipo "${requestedTeam}" no existe en la sala "${roomId}".`)
+      }
+
+      // Indexacion con literal 0/1 (no con `index`, que TypeScript solo ve
+      // como `number`): sobre una tupla `[Team, Team]` esto tipa `team` como
+      // `Team`, nunca `Team | undefined`, sin recurrir a una asercion.
+      const team = index === 0 ? teams[0] : teams[1]
+
+      if (team.totalParticipants >= team.capacity) {
+        throw new RoomFullError(roomId, requestedTeam)
+      }
+
+      return index === 0 ? 0 : 1
+    }
+
+    const autoIndex = teams.findIndex((team) => team.totalParticipants < team.capacity)
+
+    if (autoIndex === -1) {
+      // Defensa en profundidad: no alcanzable via join() en condiciones
+      // normales, porque la sala solo permanece en WAITING_FOR_PLAYERS
+      // mientras totalParticipants() < totalCapacity() (la propia mutacion
+      // de join() pasa a PREPARING en el mismo instante en que se agota el
+      // cupo total). Mismo criterio que InvalidRoomCapacityError en create().
+      throw new RoomFullError(roomId, 'auto')
+    }
+
+    return autoIndex === 0 ? 0 : 1
   }
 }

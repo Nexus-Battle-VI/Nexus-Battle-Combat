@@ -42,6 +42,12 @@ export interface AppConfig {
   readonly authMode: AuthMode
   readonly cognito: CognitoConfig | null
   readonly internalServiceAuthSecret: string | null
+  /** URL base de Account para el contrato interno `battle-profile` (HU-15.2, DP-2). Sin barra final. */
+  readonly accountServiceBaseUrl: string | null
+  /** URL base de Player-Inventory para el contrato interno `equipped-hero` (HU-15.2, DP-4). Sin barra final. */
+  readonly playerInventoryServiceBaseUrl: string | null
+  /** Tiempo de espera de las llamadas HTTP internas salientes (Account, Player-Inventory). */
+  readonly internalHttpTimeoutMs: number
 }
 
 type RawEnv = Readonly<Record<string, string | undefined>>
@@ -175,6 +181,22 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   }
 
   const internalServiceAuthSecret = readString(env, 'INTERNAL_SERVICE_AUTH_SECRET', '')
+  const accountServiceBaseUrl = readString(env, 'ACCOUNT_SERVICE_BASE_URL', '')
+  const playerInventoryServiceBaseUrl = readString(env, 'PLAYER_INVENTORY_SERVICE_BASE_URL', '')
+
+  // Igual que AUTH_MODE/PERSISTENCE_DRIVER: en produccion, HU-15.2 no puede
+  // arrancar sin poder resolver displayName/heroId -- lo contrario dejaria
+  // POST /v1/combat/rooms/:roomId/join fallando con 503 en cada peticion sin
+  // que el arranque lo advirtiera.
+  if (
+    nodeEnv === 'production' &&
+    (accountServiceBaseUrl === '' || playerInventoryServiceBaseUrl === '')
+  ) {
+    throw new ConfigurationError(
+      'ACCOUNT_SERVICE_BASE_URL y PLAYER_INVENTORY_SERVICE_BASE_URL son obligatorios con ' +
+        'NODE_ENV=production (HU-15.2, RF-15: resolucion de displayName/heroId al unirse).',
+    )
+  }
 
   return {
     nodeEnv,
@@ -194,5 +216,9 @@ export const loadConfig = (env: RawEnv): AppConfig => {
         ? { userPoolId: cognitoUserPoolId, clientId: cognitoClientId }
         : null,
     internalServiceAuthSecret: internalServiceAuthSecret === '' ? null : internalServiceAuthSecret,
+    accountServiceBaseUrl: accountServiceBaseUrl === '' ? null : accountServiceBaseUrl,
+    playerInventoryServiceBaseUrl:
+      playerInventoryServiceBaseUrl === '' ? null : playerInventoryServiceBaseUrl,
+    internalHttpTimeoutMs: readInteger(env, 'INTERNAL_HTTP_TIMEOUT_MS', 3_000, 100, 30_000),
   }
 }

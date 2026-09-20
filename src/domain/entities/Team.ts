@@ -87,6 +87,21 @@ export class Team {
     return this.participants.length
   }
 
+  /**
+   * Devuelve un equipo nuevo con un participante mas (HU-15.2, `join()`).
+   *
+   * NO valida cupo aqui: a diferencia de `create()` (que es la unica entrada
+   * publica y por tanto debe autoprotegerse), este metodo solo lo invoca
+   * `BattleRoom.join()`, que YA decidio el equipo objetivo comprobando su
+   * cupo antes de llamar — mismo criterio de reparto de responsabilidades
+   * que `validateModeComposition` (BattleRoom conoce ambos equipos a la vez,
+   * Team no). Repetir la validacion aqui duplicaria la regla, no la
+   * reforzaria.
+   */
+  withParticipant(participant: Participant): Team {
+    return new Team(this.label, this.capacity, [...this.participants, participant])
+  }
+
   toSnapshot(): TeamSnapshot {
     return {
       label: this.label,
