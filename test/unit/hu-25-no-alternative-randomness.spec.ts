@@ -16,6 +16,7 @@ const HU_25_SOURCES = [
   join(ROOT, 'domain', 'errors', 'RandomEffectErrors.ts'),
   join(ROOT, 'domain', 'value-objects', 'HeroSubtype.ts'),
   join(ROOT, 'application', 'use-cases', 'ResolveRandomEffect.ts'),
+  join(ROOT, 'application', 'use-cases', 'BuildHeroEffectTable.ts'),
 ]
 
 const withoutComments = (source: string): string =>
@@ -46,6 +47,7 @@ describe('HU-25 no usa ni conoce otra fuente de aleatoriedad', () => {
     const relative = HU_25_SOURCES.map((file) => file.slice(ROOT.length + 1).replaceAll('\\', '/'))
 
     expect(relative.sort()).toEqual([
+      'application/use-cases/BuildHeroEffectTable.ts',
       'application/use-cases/ResolveRandomEffect.ts',
       'domain/errors/RandomEffectErrors.ts',
       'domain/random-effects/BaseEffectProfiles.ts',

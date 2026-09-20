@@ -20,7 +20,11 @@ import type { AccountBattleProfilePort } from '../../src/application/ports/Accou
 import type { BattleRoomRepositoryPort } from '../../src/application/ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../../src/application/ports/ClockPort'
 import type { IdGeneratorPort } from '../../src/application/ports/IdGeneratorPort'
-import type { PlayerInventoryEquippedHeroPort } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
+import type {
+  EquippedHero,
+  PlayerInventoryEquippedHeroPort,
+} from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
+import { equippedHeroFixture } from '../fixtures/equipped-hero'
 import { CancelBattleRoom } from '../../src/application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../src/application/use-cases/CreateBattleRoom'
 import { JoinBattleRoom } from '../../src/application/use-cases/JoinBattleRoom'
@@ -48,7 +52,7 @@ const fakeAccountProfiles = (): AccountBattleProfilePort => ({
 
 const fakeEquippedHeroes = (): PlayerInventoryEquippedHeroPort => ({
   getEquippedHero: (playerId) =>
-    Promise.resolve({ playerId, heroId: `heroe-de-${playerId}`, maxPower: 10 }),
+    Promise.resolve(equippedHeroFixture({ playerId, heroId: `heroe-de-${playerId}` })),
 })
 
 const sequentialIds = (): IdGeneratorPort => {
@@ -355,7 +359,7 @@ describe('JoinBattleRoom', () => {
     }
     const equippedHeroes: PlayerInventoryEquippedHeroPort = {
       getEquippedHero: (playerId) =>
-        Promise.resolve({ playerId, heroId: 'heroe-equipado', maxPower: 10 }),
+        Promise.resolve(equippedHeroFixture({ playerId, heroId: 'heroe-equipado' })),
     }
     const join = new JoinBattleRoom(repo, fixedClock(), accountProfiles, equippedHeroes)
 
@@ -398,10 +402,7 @@ describe('JoinBattleRoom', () => {
       basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
     )
 
-    const equippedHeroesSpy = jest.fn<
-      Promise<{ playerId: string; heroId: string; maxPower: number } | null>,
-      [string]
-    >()
+    const equippedHeroesSpy = jest.fn<Promise<EquippedHero | null>, [string]>()
     const join = new JoinBattleRoom(
       repo,
       fixedClock(),
@@ -428,10 +429,7 @@ describe('JoinBattleRoom', () => {
       basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
     )
 
-    const equippedHeroesSpy = jest.fn<
-      Promise<{ playerId: string; heroId: string; maxPower: number } | null>,
-      [string]
-    >()
+    const equippedHeroesSpy = jest.fn<Promise<EquippedHero | null>, [string]>()
     const join = new JoinBattleRoom(
       repo,
       fixedClock(),
