@@ -75,11 +75,14 @@ Puerto que consume la aplicación:
 
 ```ts
 interface RandomSequenceFactoryPort {
-  create(seed: RandomSeed): RandomSequencePort
+  create(seed: RandomSeed): RandomSequencePort // índices: lo que consume el combate
+  createNormalSequence(seed: RandomSeed): NormalSequencePort // normales crudas: solo validación
 }
 interface RandomSequencePort {
-  nextNormal(): number
   nextIndex(): RandomIndex
+}
+interface NormalSequencePort {
+  nextNormal(): number
 }
 ```
 
@@ -147,12 +150,20 @@ CORRECTO     s = create(seed);  s.nextIndex(); s.nextIndex(); …      → el es
   cursor compartido por todas las batallas**: cada batalla podrá reproducirse por separado.
 - El estado (624 palabras de MT y la normal pendiente) vive en campos privados de ECMAScript (`#`), sin
   getters ni `toJSON`: `JSON.stringify` y `Object.keys` no lo revelan (probado).
-- `nextNormal()` y `nextIndex()` consumen **la misma** secuencia.
+- **La normal cruda está separada de la secuencia de índices.** `RandomSequencePort` solo expone
+  `nextIndex()`; la normal vive en `NormalSequencePort`, un objeto **independiente** con su propio
+  MT19937 sembrado igual. Pedir normales nunca desplaza los índices de una secuencia con la misma
+  semilla (probado, incluida una mutación que las hace compartir cursor). Motivo: si ambos métodos
+  compartieran cursor, una llamada de depuración a la normal cambiaría el índice siguiente de la batalla.
+  La normal n-ésima de `createNormalSequence(seed)` es exactamente el valor del que sale el índice
+  n-ésimo de `create(seed)`.
 
 ## Variable normal intermedia
 
 Box-Müller entrega `Z ~ N(0,1)`. Es la "variable pseudoaleatoria con distribución normal" que exige
-RF-24 y que `nextNormal()` expone tal cual. Sobre ella se aplica el mapper para obtener el índice.
+RF-24. Se expone tal cual **solo** por `NormalSequencePort` (validación y diagnóstico, p. ej. el estudio
+de HU-26); la lógica de combate **no** debe consumirla. Sobre ella se aplica el mapper para obtener el
+índice.
 
 ## Conversión provisional a índice uniforme
 
@@ -237,7 +248,8 @@ Verificado en el diff:
 ## Integración futura con HU-25
 
 HU-25 inyectará `RANDOM_SEQUENCE_FACTORY`, creará una secuencia por batalla y usará
-`nextIndex().value` como fila de la tabla de 8000 filas. **HU-25 no está implementada.** HU-24 no
+`nextIndex().value` como fila de la tabla de 8000 filas, y **no** debe usar `createNormalSequence`. **HU-25
+no está implementada.** HU-24 no
 define efectos, críticos, daño ni tablas.
 
 ## Integración futura con HU-26
