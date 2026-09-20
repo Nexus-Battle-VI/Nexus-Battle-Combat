@@ -54,8 +54,15 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def write_text(path: Path, text: str) -> None:
+    """Escribe con saltos de linea LF en cualquier plataforma (en Windows, write_text
+    produciria CRLF y los artefactos cambiarian de bytes segun el sistema)."""
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+
+
 def write_json(path: Path, payload: dict) -> None:
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_text(path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 def fmt(value: float) -> str:
@@ -378,7 +385,7 @@ def write_markdown(path: Path, results: dict[int, dict], decision: dict, cfg: di
         "KS p > alfa significa NO RECHAZAR H0 (la muestra proviene de N(0,1)), no que se haya demostrado la normalidad.",
         "",
     ]
-    path.write_text("\n".join(lines), encoding="utf-8")
+    write_text(path, "\n".join(lines))
 
 
 # --------------------------------------------------------------------------- #

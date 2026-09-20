@@ -5,13 +5,20 @@
 //
 // Requiere el entorno Python de tools/hu-26/requirements.txt (ver ese fichero).
 // No forma parte del runtime de Combat ni de la CI normal.
+//
+// Se lanzan los procesos SIN shell (cada argumento se pasa tal cual): con
+// `shell: true` Node avisa DEP0190 y concatena los argumentos sin escaparlos.
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 const run = (command, args, label) => {
   process.stdout.write(`\n== ${label}\n`)
-  const result = spawnSync(command, args, { stdio: 'inherit', shell: true })
+  const result = spawnSync(command, args, { stdio: 'inherit' })
+
+  if (result.error) {
+    throw result.error
+  }
 
   if (result.status !== 0) {
     process.stderr.write(`Fallo en "${label}" (codigo ${String(result.status)}).\n`)
@@ -19,14 +26,19 @@ const run = (command, args, label) => {
   }
 }
 
-const venv = join('tools', 'hu-26', '.venv')
+const tools = join('tools', 'hu-26')
+const venv = join(tools, '.venv')
 const candidates = [join(venv, 'Scripts', 'python.exe'), join(venv, 'bin', 'python')]
 const python = candidates.find((path) => existsSync(path)) ?? 'python'
 
 run(
-  'npm',
-  ['run', 'study:hu-26:build'],
+  process.execPath,
+  [join('node_modules', 'typescript', 'bin', 'tsc'), '--project', join(tools, 'tsconfig.json')],
   '1/3 compilar el harness (codigo productivo + tools/hu-26)',
 )
-run('npm', ['run', 'study:hu-26:samples'], '2/3 generar muestras con createNormalSequence / create')
-run(`"${python}"`, [join('tools', 'hu-26', 'analyze.py')], '3/3 analisis estadistico offline')
+run(
+  process.execPath,
+  [join(tools, '.build', 'tools', 'hu-26', 'generate-samples.js')],
+  '2/3 generar muestras con createNormalSequence / create',
+)
+run(python, [join(tools, 'analyze.py')], '3/3 analisis estadistico offline')
