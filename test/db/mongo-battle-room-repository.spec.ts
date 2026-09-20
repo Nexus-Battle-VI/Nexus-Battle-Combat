@@ -278,4 +278,67 @@ describe('MongoBattleRoomRepository', () => {
       }),
     ).rejects.toThrow()
   })
+
+  /**
+   * HU-16.2 (DP-6 de la auditoria HU-16.1, migracion 004): el motor real
+   * acepta `heroLoadoutVersion` en un participante, y `join()` lo persiste y
+   * lo recupera de verdad, no solo contra el mapeo puro (ya cubierto por
+   * `battle-room-mapping.spec.ts`).
+   */
+  it('el motor acepta heroLoadoutVersion tras la migracion 004 (HU-16.2), y join() lo persiste y recupera', async () => {
+    const id = nextId()
+    const room = BattleRoom.create(
+      id,
+      CREATOR,
+      validInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+      AT,
+    )
+    await repository.save(room, 0)
+
+    const found = await repository.findById(id)
+    if (found === null) throw new Error('la sala debia existir')
+
+    const joined = found.join('jugador-b', null, AT, 'Nombre Visible', 'heroe-b', 4)
+    await repository.save(joined, found.version)
+
+    const reloaded = await repository.findById(id)
+    const allParticipants = [
+      ...(reloaded?.teams[0].participants ?? []),
+      ...(reloaded?.teams[1].participants ?? []),
+    ]
+
+    expect(allParticipants).toContainEqual(
+      expect.objectContaining({ playerId: 'jugador-b', heroLoadoutVersion: 4 }),
+    )
+  })
+
+  it('el motor rechaza heroLoadoutVersion negativo (fuera del esquema $jsonSchema)', async () => {
+    await expect(
+      rooms().insertOne({
+        _id: nextId(),
+        mode: 'PVP',
+        status: 'WAITING_FOR_PLAYERS',
+        teams: [
+          {
+            label: 'A',
+            capacity: 1,
+            participants: [
+              {
+                kind: 'HUMAN',
+                playerId: 'jugador-1',
+                heroId: 'heroe-1',
+                heroLoadoutVersion: -1,
+                joinedAt: AT,
+              },
+            ],
+          },
+          { label: 'B', capacity: 1, participants: [] },
+        ],
+        reward: { amount: 0 },
+        createdBy: CREATOR,
+        createdAt: AT,
+        version: 0,
+      }),
+    ).rejects.toThrow()
+  })
 })

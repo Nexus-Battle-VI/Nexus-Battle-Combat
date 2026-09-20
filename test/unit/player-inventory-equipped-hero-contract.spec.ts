@@ -241,9 +241,112 @@ describe('PlayerInventoryHttpClient — lista blanca (contrato aditivo)', () => 
         'maxPower',
         'activeEffects',
         'ready',
+        'blockers',
+        'loadoutVersion',
         'selectedAt',
       ].sort(),
     )
+  })
+})
+
+describe('PlayerInventoryHttpClient — blockers y loadoutVersion (HU-16.1/HU-16.2, DP-1/DP-6/DP-7)', () => {
+  it('ready=true con blockers vacio y loadoutVersion=0 se conservan tal cual', async () => {
+    const hero = await fetchHero(equippedHeroContractBody())
+
+    expect(hero).toMatchObject({ ready: true, blockers: [], loadoutVersion: 0 })
+  })
+
+  it('ready=false con blockers reales: se reenvian TAL CUAL, sin envolver ni traducir', async () => {
+    const hero = await fetchHero(
+      equippedHeroContractBody({
+        ready: false,
+        blockers: [
+          {
+            code: 'EQUIPPED_PRODUCT_NOT_OWNED',
+            slot: 'WEAPON_1',
+            reference: 'espada-de-dos-manos',
+            detail: 'El producto equipado ya no esta en el inventario del jugador.',
+          },
+        ],
+      }),
+    )
+
+    expect(hero?.blockers).toEqual([
+      {
+        code: 'EQUIPPED_PRODUCT_NOT_OWNED',
+        slot: 'WEAPON_1',
+        reference: 'espada-de-dos-manos',
+        detail: 'El producto equipado ya no esta en el inventario del jugador.',
+      },
+    ])
+  })
+
+  it('un blocker con slot=null (impedimento del propio heroe, no de una ranura) es valido', async () => {
+    const hero = await fetchHero(
+      equippedHeroContractBody({
+        ready: false,
+        blockers: [
+          {
+            code: 'HERO_NOT_ACTIVE',
+            slot: null,
+            reference: 'guerrero-armas',
+            detail: 'Suspendido.',
+          },
+        ],
+      }),
+    )
+
+    expect(hero?.blockers[0]?.slot).toBeNull()
+  })
+
+  it('un codigo de blocker que Combat no conoce NO se rechaza: el vocabulario lo posee Player-Inventory', async () => {
+    const hero = await fetchHero(
+      equippedHeroContractBody({
+        ready: false,
+        blockers: [
+          { code: 'FUTURE_BLOCKER_CODE', slot: null, reference: 'guerrero-armas', detail: 'x' },
+        ],
+      }),
+    )
+
+    expect(hero?.blockers[0]?.code).toBe('FUTURE_BLOCKER_CODE')
+  })
+
+  it('loadoutVersion mayor que 0 se conserva', async () => {
+    const hero = await fetchHero(equippedHeroContractBody({ loadoutVersion: 5 }))
+
+    expect(hero?.loadoutVersion).toBe(5)
+  })
+
+  it.each([
+    ['loadoutVersion ausente', { loadoutVersion: undefined }],
+    ['loadoutVersion negativo', { loadoutVersion: -1 }],
+    ['loadoutVersion decimal', { loadoutVersion: 1.5 }],
+    ['loadoutVersion como texto', { loadoutVersion: '1' }],
+    [
+      'blockers ausente (Player-Inventory anterior al contrato): NO se sustituye por []',
+      { blockers: undefined },
+    ],
+    ['blockers nulo', { blockers: null }],
+    ['blockers como objeto en vez de lista', { blockers: { 0: 'x' } }],
+    ['un elemento de blockers que no es un objeto', { blockers: ['motivo'] }],
+    ['un blocker sin code', { blockers: [{ slot: null, reference: 'r', detail: 'd' }] }],
+    [
+      'un blocker con code vacio',
+      { blockers: [{ code: '', slot: null, reference: 'r', detail: 'd' }] },
+    ],
+    ['un blocker sin reference', { blockers: [{ code: 'C', slot: null, detail: 'd' }] }],
+    ['un blocker sin detail', { blockers: [{ code: 'C', slot: null, reference: 'r' }] }],
+    [
+      'un blocker con slot numerico (no string ni null)',
+      { blockers: [{ code: 'C', slot: 1, reference: 'r', detail: 'd' }] },
+    ],
+    [
+      'un blocker con slot vacio (distinto de null, se exige no vacio)',
+      { blockers: [{ code: 'C', slot: '', reference: 'r', detail: 'd' }] },
+    ],
+  ])('%s -> respuesta invalida (503)', async (_case, change) => {
+    await expectRejected(equippedHeroContractBody(change))
   })
 })
 

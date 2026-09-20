@@ -1,5 +1,6 @@
 import type {
   EquippedHero,
+  EquippedHeroBlocker,
   EquippedHeroEffect,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
 
@@ -65,6 +66,19 @@ export const opponentDamageDiceEffect: EquippedHeroEffect = {
   appliedToStats: false,
 }
 
+/**
+ * Motivo de bloqueo de `HeroReadinessPolicy` de Player-Inventory (HU-16.1/
+ * HU-16.2, Management#401/#402), tal como llega en `blockers` del contrato
+ * `equipped-hero`. Combat REENVIA estos codigos tal cual: no crea una
+ * segunda taxonomia.
+ */
+export const equippedProductNotOwnedBlocker: EquippedHeroBlocker = {
+  code: 'EQUIPPED_PRODUCT_NOT_OWNED',
+  slot: 'WEAPON_1',
+  reference: 'espada-de-dos-manos',
+  detail: 'El producto equipado ya no esta en el inventario del jugador.',
+}
+
 const baseStats = {
   power: 8,
   health: 40,
@@ -94,6 +108,8 @@ export const equippedHeroContractBody = (
     opponentDamageDiceEffect,
   ],
   ready: true,
+  blockers: [],
+  loadoutVersion: 0,
   selectedAt: '2026-09-19T12:00:00.000Z',
   ...overrides,
 })
@@ -114,6 +130,8 @@ export const equippedHeroFixture = (overrides: Partial<EquippedHero> = {}): Equi
     opponentDamageDiceEffect,
   ],
   ready: true,
+  blockers: [],
+  loadoutVersion: 0,
   selectedAt: '2026-09-19T12:00:00.000Z',
   ...overrides,
 })

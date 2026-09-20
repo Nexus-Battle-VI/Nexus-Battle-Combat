@@ -535,6 +535,56 @@ describe('BattleRoom', () => {
       expect(newParticipant).toMatchObject({ displayName: 'Nombre Visible', heroId: 'heroe-123' })
     })
 
+    it('sin heroLoadoutVersion (retrocompatibilidad de firma, HU-16.2): queda null', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT, 'Nombre Visible', 'heroe-123')
+      const newParticipant = [
+        ...joined.teams[0].participants,
+        ...joined.teams[1].participants,
+      ].find((participant) => participant.playerId === JOINER)
+
+      expect(newParticipant).toMatchObject({ heroLoadoutVersion: null })
+    })
+
+    it('con heroLoadoutVersion (HU-16.2, DP-6): se captura como snapshot del participante', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT, 'Nombre Visible', 'heroe-123', 3)
+      const newParticipant = [
+        ...joined.teams[0].participants,
+        ...joined.teams[1].participants,
+      ].find((participant) => participant.playerId === JOINER)
+
+      expect(newParticipant).toMatchObject({ heroLoadoutVersion: 3 })
+    })
+
+    it('heroLoadoutVersion negativo o decimal -> DomainError (defensa en profundidad, no una regla de negocio)', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+
+      expect(() => room.join(JOINER, null, AT, 'Nombre Visible', 'heroe-123', -1)).toThrow(
+        DomainError,
+      )
+      expect(() => room.join(JOINER, null, AT, 'Nombre Visible', 'heroe-123', 1.5)).toThrow(
+        DomainError,
+      )
+    })
+
     it('displayName ya usado por otro HUMAN de la sala -> DuplicateDisplayNameError (DP-2)', () => {
       const room = BattleRoom.create(
         ROOM_ID,

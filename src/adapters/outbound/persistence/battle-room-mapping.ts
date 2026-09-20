@@ -27,6 +27,13 @@ export interface ParticipantDocument {
    * documento existente necesita reescribirse.
    */
   readonly displayName?: string | null
+  /**
+   * Aditivo (HU-16.2, migracion 004, DP-6 de la auditoria HU-16.1):
+   * documentos escritos antes de esta version no lo tienen. MISMO criterio
+   * que `displayName`: `toSnapshot` lo trata como `undefined -> null`, sin
+   * backfill.
+   */
+  readonly heroLoadoutVersion?: number | null
   readonly joinedAt: Date
 }
 
@@ -75,6 +82,7 @@ const toTeamSnapshot = (team: TeamDocument, roomId: string): TeamSnapshot => ({
     kind: participant.kind,
     playerId: participant.playerId,
     heroId: participant.heroId,
+    heroLoadoutVersion: participant.heroLoadoutVersion ?? null,
     displayName: participant.displayName ?? null,
     joinedAt: participant.joinedAt,
   })),
@@ -109,6 +117,7 @@ const toTeamDocument = (team: TeamSnapshot): TeamDocument => ({
     kind: participant.kind,
     playerId: participant.playerId ?? null,
     heroId: participant.heroId ?? null,
+    heroLoadoutVersion: participant.heroLoadoutVersion ?? null,
     displayName: participant.displayName ?? null,
     joinedAt: participant.joinedAt ?? new Date(0),
   })),

@@ -33,6 +33,7 @@ import {
   RoomNotLeavableError,
 } from '../../../domain/errors/BattleRoomErrors'
 import { RoomConflictError, RoomNotFoundError } from '../../../application/errors/ApplicationError'
+import { PrecombatEligibilityBlockedError } from '../../../application/errors/PrecombatEligibilityError'
 import {
   AccountProfileMissingError,
   PlayerWithoutEquippedHeroError,
@@ -160,10 +161,14 @@ export class BattleRoomController {
       'de `displayName` (Account, DP-2) y `heroId` (Player-Inventory, DP-4) via HTTP interno ' +
       'firmado HMAC -- nunca del cuerpo de la peticion -- unicidad de nombre dentro de la sala, ' +
       'seleccion/asignacion de equipo, cupo, jugador duplicado, transicion ' +
-      'WAITING_FOR_PLAYERS -> PREPARING, persistencia con bloqueo optimista. ' +
-      'LIMITACION CONOCIDA que persiste, documentada explicitamente (no un error oculto): DP-3 ' +
-      '(nivel de heroe) sigue sin implementarse porque Player-Inventory confirmo que ese dato ' +
-      'no existe en su dominio -- no se inventa aqui; trazado hacia HU-15.4.',
+      'WAITING_FOR_PLAYERS -> PREPARING, persistencia con bloqueo optimista, y (HU-16, RF-16) ' +
+      'elegibilidad precombate del heroe equipado para esta sala concreta: readiness de ' +
+      'Player-Inventory reenviada sin reinterpretar, y restriccion de clase (Chaman/Medico) ' +
+      'segun el formato derivado de la sala. ' +
+      'LIMITACIONES CONOCIDAS que persisten, documentadas explicitamente (no errores ocultos): ' +
+      'nivel de heroe, nivel minimo de sala y mision activa (DP-2/DP-3/DP-4 de la auditoria ' +
+      'HU-16.1) siguen sin implementarse porque ningun servicio confirma hoy una fuente ' +
+      'autoritativa real -- no se inventan aqui; ver docs/hu-16-precombat-eligibility.md.',
   })
   @ApiResponse({ status: 200, type: BattleRoomResponse })
   @ApiResponse({
@@ -182,8 +187,10 @@ export class BattleRoomController {
   @ApiResponse({
     status: 422,
     description:
-      'El jugador no tiene un heroe equipado en Player-Inventory (DP-4), o el sujeto ' +
-      'verificado no tiene cuenta en Account todavia (code: ACCOUNT_PROFILE_NOT_FOUND, HU-15.4)',
+      'El jugador no tiene un heroe equipado en Player-Inventory (code: HERO_NOT_SELECTED), el ' +
+      'heroe equipado no es elegible para esta sala (readiness=false y/o clase no permitida en ' +
+      'el formato de la sala; cuerpo con `blockers[]`, HU-16), o el sujeto verificado no tiene ' +
+      'cuenta en Account todavia (code: ACCOUNT_PROFILE_NOT_FOUND, HU-15.4)',
   })
   @ApiResponse({
     status: 503,
@@ -291,10 +298,33 @@ export class BattleRoomController {
       error instanceof InvalidTeamCapacityError ||
       error instanceof InvalidRoomCapacityError ||
       error instanceof InvalidModeCompositionError ||
-      error instanceof InvalidRewardError ||
-      error instanceof PlayerWithoutEquippedHeroError
+      error instanceof InvalidRewardError
     ) {
       return new UnprocessableEntityException(error.message)
+    }
+
+    // HU-16.1 (DP-7, hallazgo de la auditoria): antes caia en el 422 generico
+    // de arriba, sin `code` -- indistinguible en el cuerpo de cualquier otro
+    // 422. Mismo patron que `AccountProfileMissingError` de mas abajo.
+    if (error instanceof PlayerWithoutEquippedHeroError) {
+      return new UnprocessableEntityException({
+        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+        message: error.message,
+        code: error.code,
+      })
+    }
+
+    // HU-16 (RF-16, Management#25/#401/#402). El jugador SI tiene un heroe
+    // equipado (a diferencia del caso de arriba), pero no es elegible para
+    // ESTA sala: `blockers` viaja completo, sin colapsar a un unico `code`,
+    // porque pueden concurrir varios motivos a la vez (mismo patron que
+    // `HeroReadiness.blockers[].code` de Player-Inventory).
+    if (error instanceof PrecombatEligibilityBlockedError) {
+      return new UnprocessableEntityException({
+        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+        message: error.message,
+        blockers: error.blockers,
+      })
     }
 
     // HU-15.4 (hallazgo de validacion integral): Account SI respondio (404
