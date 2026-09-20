@@ -80,14 +80,25 @@ describe('AccountHttpClient (HU-15.2, DP-2)', () => {
     const client = new AccountHttpClient({ ...baseOptions, fetchImpl })
     const profile = await client.getBattleProfile('sujeto-1')
 
-    expect(capturedUrl).toBe('https://account.internal/internal/accounts/sujeto-1/battle-profile')
+    // Account monta TODAS sus rutas -incluidas las internas- bajo el prefijo
+    // global `api` (`app.setGlobalPrefix(config.globalPrefix)` en
+    // `Nexus-Battle-Account/src/main.ts`, por defecto `GLOBAL_PREFIX=api`,
+    // sin excepcion para `@InternalOnly()`). Catalog ya lo hace bien para su
+    // propio cliente interno (`EVIDENCE_PATH = '/api/internal/mfa-evidence/verification'`
+    // en `AccountMfaEvidenceClient.ts`); `AccountHttpClient` debe seguir el
+    // mismo patron. Sin el prefijo, la peticion no encuentra ninguna ruta y
+    // Account responde 404 de framework -no de negocio- antes de que el
+    // guard interno o el repositorio lleguen a intervenir.
+    expect(capturedUrl).toBe(
+      'https://account.internal/api/internal/accounts/sujeto-1/battle-profile',
+    )
     expect(capturedHeaders?.[INTERNAL_SERVICE_HEADER]).toBe('combat')
     expect(capturedHeaders?.[INTERNAL_TIMESTAMP_HEADER]).toBe(String(NOW.getTime()))
 
     const expectedSignature = signInternalRequest(SECRET, {
       service: 'combat',
       method: 'GET',
-      path: '/internal/accounts/sujeto-1/battle-profile',
+      path: '/api/internal/accounts/sujeto-1/battle-profile',
       timestamp: String(NOW.getTime()),
       body: {},
     })

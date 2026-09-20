@@ -24,9 +24,15 @@ export class AccountHttpClient implements AccountBattleProfilePort {
   constructor(private readonly options: InternalHttpClientOptions) {}
 
   async getBattleProfile(subject: string): Promise<BattleProfile> {
+    // Account monta TODAS sus rutas -incluidas las internas `@InternalOnly()`-
+    // bajo su prefijo global (`app.setGlobalPrefix(config.globalPrefix)`,
+    // `GLOBAL_PREFIX=api` por defecto): no hay excepcion para el contrato
+    // interno. `/api` es, por tanto, parte del contrato, igual que ya lo
+    // trata `AccountMfaEvidenceClient` de Catalog
+    // (`EVIDENCE_PATH = '/api/internal/mfa-evidence/verification'`).
     const result = await getInternalJson(
       SERVICE,
-      `/internal/accounts/${encodeURIComponent(subject)}/battle-profile`,
+      `/api/internal/accounts/${encodeURIComponent(subject)}/battle-profile`,
       this.options,
     )
 
