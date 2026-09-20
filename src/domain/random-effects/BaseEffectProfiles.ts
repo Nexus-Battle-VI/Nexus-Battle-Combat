@@ -9,21 +9,27 @@ export type EffectPercentages = Readonly<Record<RandomEffectType, number>>
 /** 8000 filas = 100 %, luego 1 punto porcentual = 80 filas. */
 export const ROWS_PER_PERCENT = EFFECT_TABLE_ROWS / 100
 
-const percentages = (
-  damage: number,
-  criticalDamage: number,
-  evade: number,
-  resist: number,
-  escape: number,
-  noDamage: number,
-): EffectPercentages =>
+/**
+ * Porcentajes de un perfil con NOMBRE, no por posicion: intercambiar `evade` y
+ * `resist` (o cualquier otro par) es visible en la lectura y en la revision.
+ */
+interface EffectProfileDefinition {
+  readonly damage: number
+  readonly criticalDamage: number
+  readonly evade: number
+  readonly resist: number
+  readonly escape: number
+  readonly noDamage: number
+}
+
+const profile = (definition: EffectProfileDefinition): EffectPercentages =>
   Object.freeze({
-    [RandomEffectType.Damage]: damage,
-    [RandomEffectType.CriticalDamage]: criticalDamage,
-    [RandomEffectType.Evade]: evade,
-    [RandomEffectType.Resist]: resist,
-    [RandomEffectType.Escape]: escape,
-    [RandomEffectType.NoDamage]: noDamage,
+    [RandomEffectType.Damage]: definition.damage,
+    [RandomEffectType.CriticalDamage]: definition.criticalDamage,
+    [RandomEffectType.Evade]: definition.evade,
+    [RandomEffectType.Resist]: definition.resist,
+    [RandomEffectType.Escape]: definition.escape,
+    [RandomEffectType.NoDamage]: definition.noDamage,
   })
 
 /**
@@ -48,14 +54,70 @@ const percentages = (
  */
 export const BASE_EFFECT_PERCENTAGES: Readonly<Record<HeroSubtype, EffectPercentages>> =
   Object.freeze({
-    [HeroSubtype.GuerreroTanque]: percentages(40, 0, 5, 0, 5, 50),
-    [HeroSubtype.GuerreroArmas]: percentages(60, 5, 3, 0, 2, 30),
-    [HeroSubtype.MagoFuego]: percentages(70, 5, 0, 5, 0, 20),
-    [HeroSubtype.MagoHielo]: percentages(70, 6, 0, 4, 0, 20),
-    [HeroSubtype.PicaroVeneno]: percentages(55, 10, 0, 0, 0, 35),
-    [HeroSubtype.PicaroMachete]: percentages(60, 8, 0, 0, 2, 30),
-    [HeroSubtype.Chaman]: percentages(0, 0, 0, 0, 0, 0),
-    [HeroSubtype.Medico]: percentages(0, 0, 0, 0, 0, 0),
+    [HeroSubtype.GuerreroTanque]: profile({
+      damage: 40,
+      criticalDamage: 0,
+      evade: 5,
+      resist: 0,
+      escape: 5,
+      noDamage: 50,
+    }),
+    [HeroSubtype.GuerreroArmas]: profile({
+      damage: 60,
+      criticalDamage: 5,
+      evade: 3,
+      resist: 0,
+      escape: 2,
+      noDamage: 30,
+    }),
+    [HeroSubtype.MagoFuego]: profile({
+      damage: 70,
+      criticalDamage: 5,
+      evade: 0,
+      resist: 5,
+      escape: 0,
+      noDamage: 20,
+    }),
+    [HeroSubtype.MagoHielo]: profile({
+      damage: 70,
+      criticalDamage: 6,
+      evade: 0,
+      resist: 4,
+      escape: 0,
+      noDamage: 20,
+    }),
+    [HeroSubtype.PicaroVeneno]: profile({
+      damage: 55,
+      criticalDamage: 10,
+      evade: 0,
+      resist: 0,
+      escape: 0,
+      noDamage: 35,
+    }),
+    [HeroSubtype.PicaroMachete]: profile({
+      damage: 60,
+      criticalDamage: 8,
+      evade: 0,
+      resist: 0,
+      escape: 2,
+      noDamage: 30,
+    }),
+    [HeroSubtype.Chaman]: profile({
+      damage: 0,
+      criticalDamage: 0,
+      evade: 0,
+      resist: 0,
+      escape: 0,
+      noDamage: 0,
+    }),
+    [HeroSubtype.Medico]: profile({
+      damage: 0,
+      criticalDamage: 0,
+      evade: 0,
+      resist: 0,
+      escape: 0,
+      noDamage: 0,
+    }),
   })
 
 /**
