@@ -5,10 +5,12 @@ import {
   InvalidRoomCapacityError,
   InvalidTeamCapacityError,
   PlayerAlreadyJoinedError,
+  PlayerNotInRoomError,
   RoomCancellationForbiddenError,
   RoomFullError,
   RoomNotCancellableError,
   RoomNotJoinableError,
+  RoomNotLeavableError,
 } from '../errors/BattleRoomErrors'
 import { BattleRoomId } from '../value-objects/BattleRoomId'
 import { BattleMode, parseBattleMode } from '../value-objects/BattleMode'
@@ -308,6 +310,64 @@ export class BattleRoom {
     const totalParticipants = teams[0].totalParticipants + teams[1].totalParticipants
     const nextStatus =
       totalParticipants === this.totalCapacity() ? BattleRoomStatus.Preparing : this.status
+
+    return new BattleRoom(
+      this.id,
+      this.mode,
+      nextStatus,
+      teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+    )
+  }
+
+  /**
+   * Un participante `HUMAN` abandona la sala (ciclo de vida del lobby,
+   * HU-15.2): libera su cupo. Aplica al propietario igual que a cualquier
+   * otro participante -- abandonar es distinto de `cancel()` (que es
+   * exclusivo de `createdBy` y afecta a la sala entera, no a un cupo
+   * individual); `createdBy` no cambia solo porque el creador deje de
+   * ocupar un puesto.
+   *
+   * Precondiciones, en orden, mismo criterio de "estado antes que
+   * pertenencia" que `join()`: 1) `status !== CANCELLED`
+   * (`RoomNotLeavableError` -- una sala cancelada ya no tiene participantes
+   * que gestionar); 2) el `playerId` es HUMAN participante de ALGUN equipo
+   * (`PlayerNotInRoomError` si no).
+   *
+   * Efecto sobre el estado: si la sala estaba `PREPARING` (llena) y este
+   * abandono libera un cupo, vuelve a `WAITING_FOR_PLAYERS` en la MISMA
+   * mutacion -- simetrico a como `join()` transiciona a `PREPARING` al
+   * completar el cupo total.
+   */
+  leave(playerId: string): BattleRoom {
+    if (this.status === BattleRoomStatus.Cancelled) {
+      throw new RoomNotLeavableError(this.id, this.status)
+    }
+
+    const isMember = (team: Team): boolean =>
+      team.participants.some(
+        (participant) =>
+          participant.kind === ParticipantKind.Human && participant.playerId === playerId,
+      )
+
+    let teams: readonly [Team, Team]
+
+    if (isMember(this.teams[0])) {
+      teams = [this.teams[0].withoutParticipant(playerId), this.teams[1]]
+    } else if (isMember(this.teams[1])) {
+      teams = [this.teams[0], this.teams[1].withoutParticipant(playerId)]
+    } else {
+      throw new PlayerNotInRoomError(this.id, playerId)
+    }
+
+    const totalParticipants = teams[0].totalParticipants + teams[1].totalParticipants
+    const nextStatus =
+      this.status === BattleRoomStatus.Preparing && totalParticipants < this.totalCapacity()
+        ? BattleRoomStatus.WaitingForPlayers
+        : this.status
 
     return new BattleRoom(
       this.id,

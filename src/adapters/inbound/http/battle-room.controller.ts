@@ -25,10 +25,12 @@ import {
   InvalidRoomCapacityError,
   InvalidTeamCapacityError,
   PlayerAlreadyJoinedError,
+  PlayerNotInRoomError,
   RoomCancellationForbiddenError,
   RoomFullError,
   RoomNotCancellableError,
   RoomNotJoinableError,
+  RoomNotLeavableError,
 } from '../../../domain/errors/BattleRoomErrors'
 import { RoomConflictError, RoomNotFoundError } from '../../../application/errors/ApplicationError'
 import {
@@ -40,6 +42,7 @@ import type { BattleRoomDto } from '../../../application/dto/BattleRoomDto'
 import type { CancelBattleRoom } from '../../../application/use-cases/CancelBattleRoom'
 import type { CreateBattleRoom } from '../../../application/use-cases/CreateBattleRoom'
 import type { JoinBattleRoom } from '../../../application/use-cases/JoinBattleRoom'
+import type { LeaveBattleRoom } from '../../../application/use-cases/LeaveBattleRoom'
 import type { ListAvailableBattleRooms } from '../../../application/use-cases/ListAvailableBattleRooms'
 import {
   REALTIME_NOTIFIER,
@@ -56,6 +59,7 @@ import {
   CANCEL_BATTLE_ROOM,
   CREATE_BATTLE_ROOM,
   JOIN_BATTLE_ROOM,
+  LEAVE_BATTLE_ROOM,
   LIST_AVAILABLE_BATTLE_ROOMS,
 } from './tokens'
 
@@ -80,6 +84,7 @@ export class BattleRoomController {
     private readonly listAvailableBattleRooms: ListAvailableBattleRooms,
     @Inject(CANCEL_BATTLE_ROOM) private readonly cancelBattleRoom: CancelBattleRoom,
     @Inject(JOIN_BATTLE_ROOM) private readonly joinBattleRoom: JoinBattleRoom,
+    @Inject(LEAVE_BATTLE_ROOM) private readonly leaveBattleRoom: LeaveBattleRoom,
     @Inject(REALTIME_NOTIFIER) private readonly realtime: RealtimeNotifierPort,
   ) {}
 
@@ -207,6 +212,41 @@ export class BattleRoomController {
     }
   }
 
+  @Post(':roomId/leave')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Abandona una sala propia como participante (ciclo de vida del lobby, HU-15.2)',
+    description:
+      'Libera el cupo del jugador autenticado. Aplica igual al propietario que a cualquier ' +
+      'otro participante -- distinto de `cancel`, que es exclusivo del creador y afecta a la ' +
+      'sala entera. Si la sala estaba PREPARING (llena) y este abandono libera cupo, vuelve a ' +
+      'WAITING_FOR_PLAYERS en la misma mutacion.',
+  })
+  @ApiResponse({ status: 200, type: BattleRoomResponse })
+  @ApiResponse({ status: 400, description: 'roomId no es un UUID v4 valido' })
+  @ApiResponse({ status: 401, description: 'Falta el testimonio o no es valido' })
+  @ApiResponse({ status: 404, description: 'La sala no existe' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'El jugador no es participante de la sala, la sala ya esta CANCELLED, o conflicto de ' +
+      'version (bloqueo optimista)',
+  })
+  async leave(
+    @Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string,
+    @CurrentIdentity() identity: VerifiedIdentity,
+  ): Promise<BattleRoomDto> {
+    try {
+      const dto = await this.leaveBattleRoom.execute(roomId, identity.subject)
+
+      this.notifyRoomUpdated(dto)
+
+      return dto
+    } catch (error: unknown) {
+      throw BattleRoomController.translate(error)
+    }
+  }
+
   /**
    * Notifica `battle-room.updated` (HU-15.2, ADR-020) DESPUES de que
    * `repository.save()` ya persistio -- nunca antes: el controlador no
@@ -240,7 +280,9 @@ export class BattleRoomController {
       error instanceof RoomNotJoinableError ||
       error instanceof RoomFullError ||
       error instanceof PlayerAlreadyJoinedError ||
-      error instanceof DuplicateDisplayNameError
+      error instanceof DuplicateDisplayNameError ||
+      error instanceof PlayerNotInRoomError ||
+      error instanceof RoomNotLeavableError
     ) {
       return new ConflictException(error.message)
     }

@@ -8,10 +8,12 @@ import {
 import {
   DuplicateDisplayNameError,
   PlayerAlreadyJoinedError,
+  PlayerNotInRoomError,
   RoomCancellationForbiddenError,
   RoomFullError,
   RoomNotCancellableError,
   RoomNotJoinableError,
+  RoomNotLeavableError,
 } from '../../src/domain/errors/BattleRoomErrors'
 import { BattleRoom, type CreateBattleRoomInput } from '../../src/domain/entities/BattleRoom'
 import type { AccountBattleProfilePort } from '../../src/application/ports/AccountBattleProfilePort'
@@ -22,6 +24,7 @@ import type { PlayerInventoryEquippedHeroPort } from '../../src/application/port
 import { CancelBattleRoom } from '../../src/application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../src/application/use-cases/CreateBattleRoom'
 import { JoinBattleRoom } from '../../src/application/use-cases/JoinBattleRoom'
+import { LeaveBattleRoom } from '../../src/application/use-cases/LeaveBattleRoom'
 import { ListAvailableBattleRooms } from '../../src/application/use-cases/ListAvailableBattleRooms'
 
 const AT = new Date('2026-09-17T12:00:00.000Z')
@@ -476,5 +479,90 @@ describe('JoinBattleRoom', () => {
       DuplicateDisplayNameError,
     )
     expect(saveSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('LeaveBattleRoom (HU-15.2, ciclo de vida del lobby)', () => {
+  const GUEST = 'jugador-invitado'
+
+  it('un participante abandona y libera su cupo', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const leave = new LeaveBattleRoom(repo)
+
+    const created = await create.execute(
+      CREATOR,
+      basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+    )
+    const joined = await join.execute(created.id, GUEST, 'A')
+    expect(joined.teams[0].participants).toHaveLength(1)
+
+    const left = await leave.execute(created.id, GUEST)
+
+    expect(left.teams[0].participants).toHaveLength(0)
+    expect(left.status).toBe('WAITING_FOR_PLAYERS')
+    expect(left.version).toBe(joined.version + 1)
+  })
+
+  it('sala inexistente -> RoomNotFoundError', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const leave = new LeaveBattleRoom(repo)
+
+    await expect(leave.execute('sala-que-no-existe', GUEST)).rejects.toBeInstanceOf(
+      RoomNotFoundError,
+    )
+  })
+
+  it('quien no es participante no puede abandonar -> PlayerNotInRoomError, nunca invoca repository.save()', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const leave = new LeaveBattleRoom(repo)
+    const created = await create.execute(CREATOR, basicInput())
+    const saveSpy = jest.spyOn(repo, 'save')
+
+    await expect(leave.execute(created.id, 'nunca-se-unio')).rejects.toBeInstanceOf(
+      PlayerNotInRoomError,
+    )
+    expect(saveSpy).not.toHaveBeenCalled()
+  })
+
+  it('sala ya CANCELLED -> RoomNotLeavableError', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const cancel = new CancelBattleRoom(repo)
+    const leave = new LeaveBattleRoom(repo)
+
+    const created = await create.execute(
+      CREATOR,
+      basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+    )
+    await join.execute(created.id, GUEST, 'A')
+    await cancel.execute(created.id, CREATOR)
+
+    await expect(leave.execute(created.id, GUEST)).rejects.toBeInstanceOf(RoomNotLeavableError)
+  })
+
+  it('conflicto de bloqueo optimista -> RoomConflictError', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const created = await create.execute(
+      CREATOR,
+      basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+    )
+    await join.execute(created.id, GUEST, 'A')
+
+    const room = await repo.findById(created.id)
+    if (room === null) throw new Error('la sala debia existir')
+
+    const left = room.leave(GUEST)
+
+    // Primer guardado con la version leida: prospera y la adelanta.
+    await repo.save(left, room.version)
+    // Segundo guardado con la MISMA version esperada, ya desactualizada:
+    // otra escritura (la anterior) ya avanzo la version real.
+    await expect(repo.save(left, room.version)).rejects.toBeInstanceOf(RoomConflictError)
   })
 })

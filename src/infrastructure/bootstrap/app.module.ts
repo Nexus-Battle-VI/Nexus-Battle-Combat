@@ -9,6 +9,7 @@ import {
   CANCEL_BATTLE_ROOM,
   CREATE_BATTLE_ROOM,
   JOIN_BATTLE_ROOM,
+  LEAVE_BATTLE_ROOM,
   LIST_AVAILABLE_BATTLE_ROOMS,
 } from '../../adapters/inbound/http/tokens'
 import { AnonymousIdentityGuard } from '../../adapters/inbound/http/auth/anonymous.guard'
@@ -42,6 +43,7 @@ import { TOKEN_VERIFIER, type TokenVerifierPort } from '../../application/ports/
 import { CancelBattleRoom } from '../../application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../application/use-cases/CreateBattleRoom'
 import { JoinBattleRoom } from '../../application/use-cases/JoinBattleRoom'
+import { LeaveBattleRoom } from '../../application/use-cases/LeaveBattleRoom'
 import { ListAvailableBattleRooms } from '../../application/use-cases/ListAvailableBattleRooms'
 import { UpstreamServiceError } from '../../application/errors/UpstreamErrors'
 import { AuthMode, loadConfig, PersistenceDriver, type AppConfig } from '../config/env'
@@ -312,6 +314,11 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         ACCOUNT_BATTLE_PROFILE,
         PLAYER_INVENTORY_EQUIPPED_HERO,
       ],
+    },
+    {
+      provide: LEAVE_BATTLE_ROOM,
+      useFactory: (rooms: BattleRoomRepositoryPort): LeaveBattleRoom => new LeaveBattleRoom(rooms),
+      inject: [BATTLE_ROOM_REPOSITORY],
     },
     // HU-15.2 (RF-15, ADR-020): gateway WebSocket nativo. Provider normal de
     // Nest (no un controlador): `BattleRoomController` lo consume a traves

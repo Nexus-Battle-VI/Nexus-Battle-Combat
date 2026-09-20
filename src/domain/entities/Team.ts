@@ -102,6 +102,21 @@ export class Team {
     return new Team(this.label, this.capacity, [...this.participants, participant])
   }
 
+  /**
+   * Devuelve un equipo nuevo sin el participante `HUMAN` con ese `playerId`
+   * (HU-15.2, `leave()`). Si nadie coincide, devuelve un equipo equivalente
+   * sin cambios -- `BattleRoom.leave()` ya verifico antes de llamar que el
+   * jugador esta presente en ALGUN equipo de la sala, mismo reparto de
+   * responsabilidades que `withParticipant()`.
+   */
+  withoutParticipant(playerId: string): Team {
+    return new Team(
+      this.label,
+      this.capacity,
+      this.participants.filter((participant) => participant.playerId !== playerId),
+    )
+  }
+
   toSnapshot(): TeamSnapshot {
     return {
       label: this.label,
