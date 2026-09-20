@@ -64,29 +64,54 @@ describe('Mt19937BoxMullerRandomSequenceFactory', () => {
     })
   })
 
-  describe('nextNormal y nextIndex comparten la misma secuencia', () => {
-    it('el indice n-esimo es el mapeo de la normal n-esima', () => {
+  describe('la normal cruda esta SEPARADA de la secuencia de indices', () => {
+    it('la secuencia de indices solo expone nextIndex (la normal no es accesible desde ella)', () => {
+      const sequence = factory().create(RandomSeed.create(5489))
+
+      expect(typeof sequence.nextIndex).toBe('function')
+      expect('nextNormal' in sequence).toBe(false)
+    })
+
+    it('pedir normales NUNCA desplaza los indices de una secuencia con la misma semilla', () => {
+      const seed = RandomSeed.create(5489)
+      const shared = factory()
+      const withoutDebug = indices(shared.create(seed), 50)
+
+      const combat = shared.create(seed)
+      const diagnostics = shared.createNormalSequence(seed)
+      const withDebug: number[] = []
+
+      for (let i = 0; i < 50; i += 1) {
+        // Una llamada de depuracion a la normal entre dos tiradas de combate.
+        diagnostics.nextNormal()
+        diagnostics.nextNormal()
+        withDebug.push(combat.nextIndex().value)
+      }
+
+      expect(withDebug).toEqual(withoutDebug)
+    })
+
+    it('la normal n-esima es el valor del que sale el indice n-esimo', () => {
       const seed = RandomSeed.create(5489)
       const mapper = new CdfUniformIndexMapper()
-      const asNormals = factory().create(seed)
+      const normals = factory().createNormalSequence(seed)
       const asIndices = factory().create(seed)
 
       for (let i = 0; i < 100; i += 1) {
-        expect(asIndices.nextIndex().value).toBe(mapper.map(asNormals.nextNormal()).value)
+        expect(asIndices.nextIndex().value).toBe(mapper.map(normals.nextNormal()).value)
       }
     })
 
-    it('intercalarlos avanza un unico estado (aprovecha Z0 y Z1 de la misma pareja)', () => {
-      const seed = RandomSeed.create(5489)
-      const mapper = new CdfUniformIndexMapper()
-      const mixed = factory().create(seed)
-      const reference = factory().create(seed)
+    it('la secuencia normal es reproducible, con estado y sin semilla expuesta', () => {
+      const seed = RandomSeed.create(3_000_000)
+      const first = factory().createNormalSequence(seed)
+      const second = factory().createNormalSequence(seed)
+      const values = Array.from({ length: 20 }, () => first.nextNormal())
 
-      const normal0 = mixed.nextNormal()
-      const index1 = mixed.nextIndex()
-
-      expect(normal0).toBe(reference.nextNormal())
-      expect(index1.value).toBe(mapper.map(reference.nextNormal()).value)
+      expect(Array.from({ length: 20 }, () => second.nextNormal())).toEqual(values)
+      expect(new Set(values).size).toBe(20)
+      expect(JSON.stringify(first)).toBe('{}')
+      expect(Object.keys(first)).toEqual([])
     })
   })
 
@@ -94,14 +119,17 @@ describe('Mt19937BoxMullerRandomSequenceFactory', () => {
     it('otra estrategia cambia los indices pero NO las normales', () => {
       const seed = RandomSeed.create(2026)
       const constantMapper: NormalToIndexMapper = { map: () => RandomIndex.create(1234) }
-      const custom = new Mt19937BoxMullerRandomSequenceFactory(constantMapper).create(seed)
-      const standard = factory().create(seed)
+      const custom = new Mt19937BoxMullerRandomSequenceFactory(constantMapper)
+      const standard = factory()
 
-      expect(custom.nextIndex().value).toBe(1234)
+      expect(custom.create(seed).nextIndex().value).toBe(1234)
 
-      // El generador normal subyacente es el mismo: la siguiente normal coincide.
-      standard.nextNormal()
-      expect(custom.nextNormal()).toBe(standard.nextNormal())
+      // El generador normal subyacente es el mismo: las normales coinciden.
+      const customNormals = custom.createNormalSequence(seed)
+      const standardNormals = standard.createNormalSequence(seed)
+
+      expect(customNormals.nextNormal()).toBe(standardNormals.nextNormal())
+      expect(customNormals.nextNormal()).toBe(standardNormals.nextNormal())
     })
   })
 
@@ -110,9 +138,9 @@ describe('Mt19937BoxMullerRandomSequenceFactory', () => {
       const spy = jest.spyOn(Math, 'random')
 
       try {
-        const sequence = factory().create(RandomSeed.create(1))
-        indices(sequence, 2_000)
-        sequence.nextNormal()
+        const shared = factory()
+        indices(shared.create(RandomSeed.create(1)), 2_000)
+        shared.createNormalSequence(RandomSeed.create(1)).nextNormal()
 
         expect(spy).not.toHaveBeenCalled()
       } finally {
