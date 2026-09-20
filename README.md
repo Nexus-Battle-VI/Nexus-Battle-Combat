@@ -23,6 +23,10 @@ Este repositorio contiene código y Pull Requests. No contiene Issues ni Product
 
 **Generador implementado** (Mersenne Twister MT19937 → Box-Müller → índice 1..8000), registrado en la raíz de composición como `RANDOM_SEQUENCE_FACTORY`. **No es el motor de combate**: todavía no hay turnos, ataque, tabla de efectos (HU-25) ni selección de semilla (HU-26), y **ningún caso de uso ni endpoint lo consume aún**. La semilla y el estado son solo del servidor. Ver [docs/hu-24-randomness-engine.md](docs/hu-24-randomness-engine.md).
 
+### Tabla de control de efectos aleatorios (HU-25)
+
+**Implementada la resolución `RandomIndex` (HU-24) → fila → efecto y magnitud**: tabla de 8000 filas por tipo de héroe (Tabla 21 del documento oficial: Guerrero Tanque/Armas, Mago Fuego/Hielo, Pícaro Veneno/Machete), mecánica de modificadores (+6 % de crítico compensado desde «no causar daño», Tabla 23) y caso de uso `ResolveRandomEffect`. **Aún no la invoca ningún flujo** (HU-20 deberá hacerlo cuando Ataque > Defensa), no calcula daño numérico y **no hay endpoint público**. Pendientes: Chamán/Médico sin tabla válida en el documento, selección concreta del crítico 120–180 % y contrato de modificadores desde Player-Inventory. Ver [docs/hu-25-effect-control-table.md](docs/hu-25-effect-control-table.md).
+
 ## Qué posee este contexto
 
 - Salas y lobby: modalidad, cupo, composición humana/IA, recompensa, estado.
