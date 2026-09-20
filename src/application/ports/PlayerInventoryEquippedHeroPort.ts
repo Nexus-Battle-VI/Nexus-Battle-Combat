@@ -1,7 +1,7 @@
 /**
  * Heroe equipado resuelto de Player-Inventory (HU-15.2, RF-15, DP-4).
  *
- * Espejo del contrato `GET /internal/v1/players/:playerId/equipped-hero`
+ * Espejo del contrato `GET /api/internal/v1/players/:playerId/equipped-hero`
  * (`@InternalOnly()`, rama `feat/hu-15-equipped-hero-internal-contract` de
  * Nexus-Battle-Player-Inventory): `{ playerId, heroId, reference, subtype,
  * name, baseStats, effectiveStats, ready, selectedAt }`.
