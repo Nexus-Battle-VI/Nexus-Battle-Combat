@@ -19,6 +19,10 @@ Este repositorio contiene código y Pull Requests. No contiene Issues ni Product
 
 **No tiene todavía ninguna ruta de negocio ni ninguna tabla o colección**: las añade cada Historia de Usuario. Mientras tanto, cualquier ruta bajo ese prefijo responde `404` desde NestJS.
 
+### Motor pseudoaleatorio (HU-24)
+
+**Generador implementado** (Mersenne Twister MT19937 → Box-Müller → índice 1..8000), registrado en la raíz de composición como `RANDOM_SEQUENCE_FACTORY`. **No es el motor de combate**: todavía no hay turnos, ataque, tabla de efectos (HU-25) ni selección de semilla (HU-26), y **ningún caso de uso ni endpoint lo consume aún**. La semilla y el estado son solo del servidor. Ver [docs/hu-24-randomness-engine.md](docs/hu-24-randomness-engine.md).
+
 ## Qué posee este contexto
 
 - Salas y lobby: modalidad, cupo, composición humana/IA, recompensa, estado.

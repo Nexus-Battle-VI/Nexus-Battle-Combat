@@ -22,6 +22,8 @@ import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClien
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
 import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
+import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
+import { Mt19937BoxMullerRandomSequenceFactory } from '../../adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
 import { UuidGenerator } from '../../adapters/outbound/system/UuidGenerator'
 import {
@@ -38,6 +40,10 @@ import {
   PLAYER_INVENTORY_EQUIPPED_HERO,
   type PlayerInventoryEquippedHeroPort,
 } from '../../application/ports/PlayerInventoryEquippedHeroPort'
+import {
+  RANDOM_SEQUENCE_FACTORY,
+  type RandomSequenceFactoryPort,
+} from '../../application/ports/RandomSequencePort'
 import { REALTIME_NOTIFIER } from '../../application/ports/RealtimeNotifierPort'
 import { TOKEN_VERIFIER, type TokenVerifierPort } from '../../application/ports/TokenVerifierPort'
 import { CancelBattleRoom } from '../../application/use-cases/CancelBattleRoom'
@@ -202,6 +208,17 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     {
       provide: ID_GENERATOR,
       useFactory: (): IdGeneratorPort => new UuidGenerator(),
+    },
+    // HU-24 (RF-24): motor pseudoaleatorio centralizado (MT19937 -> Box-Muller ->
+    // indice 1..8000). Todavia NINGUN caso de uso lo consume: queda registrado
+    // para HU-25 (tabla de efectos) y la futura simulacion para Missions. La
+    // estrategia normal -> indice es la decision tecnica provisional de HU-24
+    // (docs/hu-24-randomness-engine.md) y se elige AQUI, no dentro del generador.
+    // No hay semilla global: cada batalla o simulacion crea su secuencia.
+    {
+      provide: RANDOM_SEQUENCE_FACTORY,
+      useFactory: (): RandomSequenceFactoryPort =>
+        new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper()),
     },
     // HU-15.2 (RF-15): clientes HTTP internos hacia Account y
     // Player-Inventory. Sin INTERNAL_SERVICE_AUTH_SECRET configurado, se
