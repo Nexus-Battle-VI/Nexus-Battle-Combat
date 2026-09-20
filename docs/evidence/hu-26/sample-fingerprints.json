@@ -1,0 +1,541 @@
+{
+  "schemaVersion": 1,
+  "description": "Huellas de las muestras generadas con el codigo productivo (createNormalSequence / create). Las muestras no se commitean: se regeneran de forma determinista.",
+  "sampleSize": 100000,
+  "format": {
+    "normal": "Float64 little-endian, sin cabecera (normal-<semilla>.f64)",
+    "index": "Uint16 little-endian, sin cabecera (index-<semilla>.u16)"
+  },
+  "normal": [
+    {
+      "seed": 0,
+      "sampleSize": 100000,
+      "sha256": "64ecb2cf2d6910e66def5a75126dec86101285eab22fa7f79c30bc528e0c7961",
+      "sum": 434.7302698975021,
+      "sumOfSquares": 100268.087122955,
+      "anchors": [
+        {
+          "position": 0,
+          "value": -0.23769110805472846
+        },
+        {
+          "position": 1,
+          "value": -1.069343784914356
+        },
+        {
+          "position": 2,
+          "value": -0.9664641253610937
+        },
+        {
+          "position": 3,
+          "value": -0.2800147054049211
+        },
+        {
+          "position": 4,
+          "value": -0.7974456523665814
+        },
+        {
+          "position": 9999,
+          "value": -2.5191727840177927
+        },
+        {
+          "position": 49999,
+          "value": -0.19286447783895846
+        },
+        {
+          "position": 99999,
+          "value": 1.0791102721064423
+        }
+      ]
+    },
+    {
+      "seed": 1,
+      "sampleSize": 100000,
+      "sha256": "b59cf9f3a1b39d9c35a60c3ec239eb252a79310c7e28ede1e84623787203f0c3",
+      "sum": 350.4116580465219,
+      "sumOfSquares": 100498.13447790244,
+      "anchors": [
+        {
+          "position": 0,
+          "value": -0.24517851535942076
+        },
+        {
+          "position": 1,
+          "value": -1.2996615230957085
+        },
+        {
+          "position": 2,
+          "value": -1.3758166332833228
+        },
+        {
+          "position": 3,
+          "value": 4.0322683261769505
+        },
+        {
+          "position": 4,
+          "value": 1.6384980752793061
+        },
+        {
+          "position": 9999,
+          "value": -2.1027942366961114
+        },
+        {
+          "position": 49999,
+          "value": -1.7659225413642428
+        },
+        {
+          "position": 99999,
+          "value": -0.6937463776543952
+        }
+      ]
+    },
+    {
+      "seed": 42,
+      "sampleSize": 100000,
+      "sha256": "5710c70ede106e9546c98ea2f5ee765123c18b4f0b8360aa5b1733840fc99066",
+      "sum": -293.8826810296484,
+      "sumOfSquares": 100127.12035992663,
+      "anchors": [
+        {
+          "position": 0,
+          "value": 1.334805599237729
+        },
+        {
+          "position": 1,
+          "value": -0.4270910007389246
+        },
+        {
+          "position": 2,
+          "value": -0.6429456889490754
+        },
+        {
+          "position": 3,
+          "value": -0.4588975088184734
+        },
+        {
+          "position": 4,
+          "value": 1.073476689939755
+        },
+        {
+          "position": 9999,
+          "value": 1.3295254586899554
+        },
+        {
+          "position": 49999,
+          "value": -0.872004240842943
+        },
+        {
+          "position": 99999,
+          "value": 0.7516299269503345
+        }
+      ]
+    },
+    {
+      "seed": 53,
+      "sampleSize": 100000,
+      "sha256": "ff2b7c9dc5e5e68f6758c585b06b7ed03521347444f63d7ce6b724091930eced",
+      "sum": -131.88894777042634,
+      "sumOfSquares": 99387.44369281131,
+      "anchors": [
+        {
+          "position": 0,
+          "value": -0.5348930387268188
+        },
+        {
+          "position": 1,
+          "value": -0.21632363285266304
+        },
+        {
+          "position": 2,
+          "value": -0.751580468576679
+        },
+        {
+          "position": 3,
+          "value": 1.005281192528688
+        },
+        {
+          "position": 4,
+          "value": -1.008128947088593
+        },
+        {
+          "position": 9999,
+          "value": -1.2867364745353769
+        },
+        {
+          "position": 49999,
+          "value": 0.36956563583426416
+        },
+        {
+          "position": 99999,
+          "value": -0.13962826048899485
+        }
+      ]
+    },
+    {
+      "seed": 234,
+      "sampleSize": 100000,
+      "sha256": "70bd7c6f449fe838b98779d03f7314157da2f4f2ce6af1766dfc19dd18387a30",
+      "sum": 167.5671950508493,
+      "sumOfSquares": 100351.96770151213,
+      "anchors": [
+        {
+          "position": 0,
+          "value": -0.07091903941181482
+        },
+        {
+          "position": 1,
+          "value": 2.635263672244879
+        },
+        {
+          "position": 2,
+          "value": 0.4206999462111686
+        },
+        {
+          "position": 3,
+          "value": -0.0797756869448226
+        },
+        {
+          "position": 4,
+          "value": -0.5289771305086711
+        },
+        {
+          "position": 9999,
+          "value": -1.0992960671261651
+        },
+        {
+          "position": 49999,
+          "value": -1.1333440902736074
+        },
+        {
+          "position": 99999,
+          "value": -1.4508403165490131
+        }
+      ]
+    },
+    {
+      "seed": 365,
+      "sampleSize": 100000,
+      "sha256": "4797c45fa1c35c71e6d06eea533c634b89f6437fc54f114950b4e638746c6a57",
+      "sum": -112.44384064814412,
+      "sumOfSquares": 99752.01897013855,
+      "anchors": [
+        {
+          "position": 0,
+          "value": -0.21870639810087825
+        },
+        {
+          "position": 1,
+          "value": -0.2698580890225581
+        },
+        {
+          "position": 2,
+          "value": -0.7391912181548637
+        },
+        {
+          "position": 3,
+          "value": -0.45979002724230206
+        },
+        {
+          "position": 4,
+          "value": -0.7456885703732221
+        },
+        {
+          "position": 9999,
+          "value": 0.5769962262827478
+        },
+        {
+          "position": 49999,
+          "value": 0.5648316089734047
+        },
+        {
+          "position": 99999,
+          "value": -2.321932744884762
+        }
+      ]
+    },
+    {
+      "seed": 777,
+      "sampleSize": 100000,
+      "sha256": "39081d8da3f7231887dff38e85bda53b2fffa0d12065246cc354a6f3ee94e698",
+      "sum": -109.44285378779837,
+      "sumOfSquares": 100252.05469396488,
+      "anchors": [
+        {
+          "position": 0,
+          "value": -0.6263657302746398
+        },
+        {
+          "position": 1,
+          "value": 1.8348572551522064
+        },
+        {
+          "position": 2,
+          "value": -2.2833838172177923
+        },
+        {
+          "position": 3,
+          "value": 0.5884095578393143
+        },
+        {
+          "position": 4,
+          "value": 0.5380097989255938
+        },
+        {
+          "position": 9999,
+          "value": -0.517931330357983
+        },
+        {
+          "position": 49999,
+          "value": 1.7052256624121322
+        },
+        {
+          "position": 99999,
+          "value": 0.3450410035553836
+        }
+      ]
+    },
+    {
+      "seed": 1000,
+      "sampleSize": 100000,
+      "sha256": "9a5af803a9d55492b9bc548734bd4bf5a598992183df7086865a5f7a204a3f77",
+      "sum": -393.69712176923923,
+      "sumOfSquares": 99427.00872831109,
+      "anchors": [
+        {
+          "position": 0,
+          "value": 0.6917658792148433
+        },
+        {
+          "position": 1,
+          "value": 0.6099272970642077
+        },
+        {
+          "position": 2,
+          "value": -0.31736338912470885
+        },
+        {
+          "position": 3,
+          "value": 0.03566024066553061
+        },
+        {
+          "position": 4,
+          "value": 0.12247276615500577
+        },
+        {
+          "position": 9999,
+          "value": -1.2409581938368435
+        },
+        {
+          "position": 49999,
+          "value": -0.22311220997873912
+        },
+        {
+          "position": 99999,
+          "value": -0.7150232526327432
+        }
+      ]
+    },
+    {
+      "seed": 1500,
+      "sampleSize": 100000,
+      "sha256": "176b830d043434fe679fe07b0ac8b5c5d5040cab6f221ebb3c206dbf03d5b7e4",
+      "sum": -64.39583143473797,
+      "sumOfSquares": 100146.96805822552,
+      "anchors": [
+        {
+          "position": 0,
+          "value": 0.14280162975097985
+        },
+        {
+          "position": 1,
+          "value": 0.10401899255707205
+        },
+        {
+          "position": 2,
+          "value": 0.511813657770343
+        },
+        {
+          "position": 3,
+          "value": 0.6428332613187574
+        },
+        {
+          "position": 4,
+          "value": 0.7845796276751794
+        },
+        {
+          "position": 9999,
+          "value": 0.16417011870503248
+        },
+        {
+          "position": 49999,
+          "value": -0.24758839990593015
+        },
+        {
+          "position": 99999,
+          "value": -0.75767594908779
+        }
+      ]
+    },
+    {
+      "seed": 3000000,
+      "sampleSize": 100000,
+      "sha256": "249ca00f1d6cdab53d186a641f0ee1ad2b652e5b17708fcb8178047f760afd15",
+      "sum": -421.81739736961435,
+      "sumOfSquares": 99746.81960858809,
+      "anchors": [
+        {
+          "position": 0,
+          "value": -0.43720037393349565
+        },
+        {
+          "position": 1,
+          "value": -0.1481396670342545
+        },
+        {
+          "position": 2,
+          "value": -0.144125791425559
+        },
+        {
+          "position": 3,
+          "value": 1.7128865736876675
+        },
+        {
+          "position": 4,
+          "value": 1.161409574171299
+        },
+        {
+          "position": 9999,
+          "value": 0.2759116132489431
+        },
+        {
+          "position": 49999,
+          "value": 0.12140888068840654
+        },
+        {
+          "position": 99999,
+          "value": -0.42267306752751044
+        }
+      ]
+    },
+    {
+      "seed": 4294967295,
+      "sampleSize": 100000,
+      "sha256": "db5964a1577f27ab4cd711c8f629a2e6407a383498bd72f9fa8860dd3b02c9d7",
+      "sum": -545.8754808557904,
+      "sumOfSquares": 100299.06271374144,
+      "anchors": [
+        {
+          "position": 0,
+          "value": 1.8384036911625685
+        },
+        {
+          "position": 1,
+          "value": -1.128437510574155
+        },
+        {
+          "position": 2,
+          "value": 0.12900775039385004
+        },
+        {
+          "position": 3,
+          "value": -0.6761992558145569
+        },
+        {
+          "position": 4,
+          "value": 2.7838586619340475
+        },
+        {
+          "position": 9999,
+          "value": 0.0718066622912325
+        },
+        {
+          "position": 49999,
+          "value": 0.6223950592248022
+        },
+        {
+          "position": 99999,
+          "value": -0.5057249755214246
+        }
+      ]
+    }
+  ],
+  "index": [
+    {
+      "seed": 0,
+      "sampleSize": 100000,
+      "sha256": "40da87c52b6a7058c4bb8adecb5f5fc201e9203c9dd37b1f54f1cc528c4def14",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 1,
+      "sampleSize": 100000,
+      "sha256": "247b819fb0ad78eecba219168e036779add162cd3dd570c88335ad0165c5ff7d",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 42,
+      "sampleSize": 100000,
+      "sha256": "dfff2d90a302de23ccb00e9ffb48cf80597232f776356d1bd251c6bb80d99b57",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 53,
+      "sampleSize": 100000,
+      "sha256": "0083c00a60a7002ab29458306c5d15478a971221887b9c8591694177d93862ff",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 234,
+      "sampleSize": 100000,
+      "sha256": "caa5232c53047644ef443064c53dcd42f450cde7609c0abc2cfa43551eb3372e",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 365,
+      "sampleSize": 100000,
+      "sha256": "b109199080fcc60735e42fbbd38834cf63902e4b9fbb7682a2d693da7060ac96",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 777,
+      "sampleSize": 100000,
+      "sha256": "6cfc51d7b864f18a3d5fef3ff063501e5553b99103ddbcca49741cc7ccab3a54",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 1000,
+      "sampleSize": 100000,
+      "sha256": "a5385c2b0067ed74da7536ebbc29c324c741158e329580d7f57e551d1ab89a38",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 1500,
+      "sampleSize": 100000,
+      "sha256": "1722a2ced259d8922ac97b88b77f842b7d154439d3778a3fd1c0c999beb69912",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 3000000,
+      "sampleSize": 100000,
+      "sha256": "aadedfa03d51c5e9a24d0d055bb1a43bda86d4d31d321a69406220762ac2abbd",
+      "minimum": 1,
+      "maximum": 8000
+    },
+    {
+      "seed": 4294967295,
+      "sampleSize": 100000,
+      "sha256": "6cf1f1d0fe4fc52649fd6a92555f8bbe2c663a5cd1f7eb72d86097cff220faba",
+      "minimum": 1,
+      "maximum": 8000
+    }
+  ]
+}

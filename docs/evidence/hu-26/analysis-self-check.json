@@ -1,0 +1,35 @@
+{
+  "all_passed": true,
+  "checks": [
+    {
+      "name": "Ljung-Box statsmodels vs implementacion independiente",
+      "passed": true,
+      "detail": "max |dif p| = 9.992e-16"
+    },
+    {
+      "name": "KS rechaza N(0.05, 1)",
+      "passed": true,
+      "detail": "KS p = 1.255e-39"
+    },
+    {
+      "name": "KS rechaza una uniforme",
+      "passed": true,
+      "detail": "KS p = 5.687e-245"
+    },
+    {
+      "name": "Ljung-Box rechaza AR(1) phi=0.05",
+      "passed": true,
+      "detail": "LB min p = 6.443e-42"
+    },
+    {
+      "name": "Muestra N(0,1) independiente: metricas ~ teoricas",
+      "passed": true,
+      "detail": "mean=0.0010 std=1.0024 skew=-0.0017 exkurt=0.0077 qq_r=0.999993"
+    },
+    {
+      "name": "Regla de seleccion: menor KS D entre aceptadas; sin aceptadas no se elige",
+      "passed": true,
+      "detail": "elegida=2 sin_aceptadas=NO_ACCEPTED_CANDIDATE"
+    }
+  ]
+}

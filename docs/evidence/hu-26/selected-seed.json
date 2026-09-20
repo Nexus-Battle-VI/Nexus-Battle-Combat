@@ -1,0 +1,80 @@
+{
+  "status": "SELECTED",
+  "seed": 777,
+  "sampleSize": 100000,
+  "alpha": 0.05,
+  "ljungBoxLags": [
+    10,
+    20,
+    30,
+    40,
+    50
+  ],
+  "referenceDistribution": "N(0,1)",
+  "selectionRule": {
+    "step1_filters": [
+      "KS p-value > alpha",
+      "minimo de los p-values de Ljung-Box (lags 10,20,30,40,50) > alpha"
+    ],
+    "step2_ranking": "entre las candidatas aceptadas por AMBOS filtros, ordenar por menor estadistico KS D",
+    "tieBreak": "menor valor de semilla (desempate tecnico determinista; con estadisticos continuos no se espera)",
+    "ifNoCandidateAccepted": "NO se elige la 'menos mala': se informa que no hay candidata aceptada, se documentan los resultados y se eleva la decision",
+    "notUsedForSelection": [
+      "el indice 1..8000",
+      "las proporciones de la tabla de efectos de HU-25",
+      "valores objetivo de una semilla concreta (no se favorece 3000000 ni ninguna otra)"
+    ]
+  },
+  "acceptedSeedsRankedByKsD": [
+    777,
+    234,
+    1500,
+    53,
+    1000,
+    1,
+    3000000,
+    42
+  ],
+  "rejected": {
+    "0": [
+      "KS p <= alpha",
+      "Ljung-Box min p <= alpha"
+    ],
+    "365": [
+      "Ljung-Box min p <= alpha"
+    ],
+    "4294967295": [
+      "KS p <= alpha"
+    ]
+  },
+  "candidateSeeds": [
+    0,
+    1,
+    42,
+    53,
+    234,
+    365,
+    777,
+    1000,
+    1500,
+    3000000,
+    4294967295
+  ],
+  "historicalInvalidSeeds": [
+    {
+      "seed": 7294967295,
+      "status": "CANDIDATA_HISTORICA_INVALIDA_PARA_LA_IMPLEMENTACION_PRODUCTIVA",
+      "reason": "7294967295 > 4294967295 (2^32 - 1, RandomSeed.MAX). RandomSeed solo admite uint32 (init_genrand); no se trunca, no se aplica modulo ni se hace un cast uint32 silencioso."
+    }
+  ],
+  "interpretation": "Mejor ajuste DENTRO del conjunto de candidatas, la muestra finita y el criterio experimental definidos. No significa que la semilla sea matematicamente superior ni 'mas aleatoria' en general.",
+  "notASecurityProperty": "Seleccionar una semilla no vuelve criptograficamente seguro a MT19937.",
+  "runtimeSeedPolicy": "NO DEFINIDA: esta seleccion no implica usar esta semilla para todas las batallas.",
+  "environment": {
+    "python": "3.13.11",
+    "numpy": "2.4.2",
+    "scipy": "1.17.0",
+    "statsmodels": "0.14.6",
+    "matplotlib": "3.11.2"
+  }
+}
