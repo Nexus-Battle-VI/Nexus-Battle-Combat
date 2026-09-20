@@ -14,6 +14,7 @@ import {
 } from '../../src/application/errors/UpstreamErrors'
 import type { ClockPort } from '../../src/application/ports/ClockPort'
 import { createHeroPower } from '../../src/domain/policies/HeroPowerPolicy'
+import { equippedHeroContractBody, equippedHeroFixture } from '../fixtures/equipped-hero'
 import type { Logger } from '../../src/infrastructure/observability/logger'
 
 /**
@@ -178,6 +179,12 @@ describe('AccountHttpClient (HU-15.2, DP-2)', () => {
   })
 })
 
+/** `effectiveStats` del contrato con otro valor de `power` (el resto, validos). */
+const statsWithPower = (power: unknown): Record<string, unknown> => ({
+  ...(equippedHeroContractBody().effectiveStats as Record<string, unknown>),
+  power,
+})
+
 describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
   const baseOptions = {
     baseUrl: 'https://player-inventory.internal',
@@ -195,19 +202,7 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
       capturedUrl = url
       capturedHeaders = init?.headers as Record<string, string>
 
-      return Promise.resolve(
-        jsonResponse(200, {
-          playerId: 'jugador-1',
-          heroId: 'heroe-1',
-          reference: 'referencia-catalogo',
-          subtype: 'guerrero',
-          name: 'Heroe Uno',
-          baseStats: { ataque: 10 },
-          effectiveStats: { power: 10, health: 44, defense: 11, attack: 12 },
-          ready: true,
-          selectedAt: '2026-09-19T00:00:00.000Z',
-        }),
-      )
+      return Promise.resolve(jsonResponse(200, equippedHeroContractBody()))
     }) as unknown as typeof fetch
 
     const client = new PlayerInventoryHttpClient({ ...baseOptions, fetchImpl })
@@ -245,25 +240,20 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
     })
     expect(capturedHeaders?.[INTERNAL_SIGNATURE_HEADER]).toBe(expectedSignature)
 
-    // Solo se modelan `playerId`, `heroId` y el Poder maximo (`effectiveStats.power`,
-    // HU-11); el resto del cuerpo no llega al puerto.
-    expect(equipped).toEqual({ playerId: 'jugador-1', heroId: 'heroe-1', maxPower: 10 })
+    // El contrato completo llega al puerto ya validado (HU-25): identidad, subtipo,
+    // estadisticas y efectos, y el Poder maximo (`effectiveStats.power`, HU-11).
+    expect(equipped).toEqual(equippedHeroFixture())
   })
 
   it('el Poder maximo sale de effectiveStats.power, incluido 0 (Catalog admite basePower 0)', async () => {
     const fetchImpl = (): Promise<Response> =>
       Promise.resolve(
-        jsonResponse(200, {
-          playerId: 'jugador-1',
-          heroId: 'heroe-1',
-          effectiveStats: { power: 0 },
-        }),
+        jsonResponse(200, equippedHeroContractBody({ effectiveStats: statsWithPower(0) })),
       )
     const client = new PlayerInventoryHttpClient({ ...baseOptions, fetchImpl })
 
-    await expect(client.getEquippedHero('jugador-1')).resolves.toEqual({
+    await expect(client.getEquippedHero('jugador-1')).resolves.toMatchObject({
       playerId: 'jugador-1',
-      heroId: 'heroe-1',
       maxPower: 0,
     })
   })
@@ -271,11 +261,7 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
   it('el Poder maximo del contrato es el que arranca el Poder del participante (HU-11)', async () => {
     const fetchImpl = (): Promise<Response> =>
       Promise.resolve(
-        jsonResponse(200, {
-          playerId: 'jugador-1',
-          heroId: 'heroe-1',
-          effectiveStats: { power: 12 },
-        }),
+        jsonResponse(200, equippedHeroContractBody({ effectiveStats: statsWithPower(12) })),
       )
     const client = new PlayerInventoryHttpClient({ ...baseOptions, fetchImpl })
 
@@ -283,7 +269,7 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
     if (equipped === null) throw new Error('se esperaba un heroe equipado')
 
     expect(createHeroPower(equipped.heroId, equipped.maxPower)).toEqual({
-      heroId: 'heroe-1',
+      heroId: equipped.heroId,
       current: 12,
       max: 12,
     })
@@ -293,18 +279,16 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
     ['sin effectiveStats', undefined],
     ['effectiveStats nulo', null],
     ['effectiveStats que no es un objeto', 'texto'],
-    ['effectiveStats sin power', {}],
-    ['power decimal', { power: 7.5 }],
-    ['power negativo', { power: -1 }],
-    ['power como texto', { power: '10' }],
-    ['power nulo', { power: null }],
+    ['effectiveStats sin power', { ...statsWithPower(0), power: undefined }],
+    ['power decimal', statsWithPower(7.5)],
+    ['power negativo', statsWithPower(-1)],
+    ['power como texto', statsWithPower('10')],
+    ['power nulo', statsWithPower(null)],
   ])(
     'respuesta invalida (%s) -> UpstreamServiceError: Combat no inventa el Poder maximo',
     async (_case, effectiveStats) => {
       const fetchImpl = (): Promise<Response> =>
-        Promise.resolve(
-          jsonResponse(200, { playerId: 'jugador-1', heroId: 'heroe-1', effectiveStats }),
-        )
+        Promise.resolve(jsonResponse(200, equippedHeroContractBody({ effectiveStats })))
       const client = new PlayerInventoryHttpClient({ ...baseOptions, fetchImpl })
 
       await expect(client.getEquippedHero('jugador-1')).rejects.toBeInstanceOf(UpstreamServiceError)
@@ -327,7 +311,7 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
 
   it('playerId de la respuesta no coincide con el pedido -> UpstreamServiceError (respuesta invalida)', async () => {
     const fetchImpl = (): Promise<Response> =>
-      Promise.resolve(jsonResponse(200, { playerId: 'otro-jugador', heroId: 'heroe-1' }))
+      Promise.resolve(jsonResponse(200, equippedHeroContractBody({ playerId: 'otro-jugador' })))
     const client = new PlayerInventoryHttpClient({ ...baseOptions, fetchImpl })
 
     await expect(client.getEquippedHero('jugador-1')).rejects.toBeInstanceOf(UpstreamServiceError)

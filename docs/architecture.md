@@ -42,7 +42,7 @@ Implementado como puerto `RandomSequenceFactoryPort` (`application/ports/RandomS
 
 ## Tabla de control de efectos aleatorios (HU-25)
 
-Dominio puro en `domain/random-effects` (`EffectControlTable`, `ProbabilityModifier`, `BaseEffectProfiles`) y el caso de uso `ResolveRandomEffect`, que consume **solo** `RandomSequencePort.nextIndex()` (HU-24) y resuelve el efecto y su magnitud relativa. Combat sigue siendo la única autoridad: el cliente no selecciona fila ni efecto y no hay endpoint. Todavía **no lo invoca ningún flujo de batalla** (HU-20) y **nadie construye la tabla a partir del héroe equipado real** (Player-Inventory aún no entrega los modificadores). Detalle y pendientes en [hu-25-effect-control-table.md](hu-25-effect-control-table.md).
+Dominio puro en `domain/random-effects` (`EffectControlTable`, `ProbabilityModifier`, `BaseEffectProfiles`) y el caso de uso `ResolveRandomEffect`, que consume **solo** `RandomSequencePort.nextIndex()` (HU-24) y resuelve el efecto y su magnitud relativa. Combat sigue siendo la única autoridad: el cliente no selecciona fila ni efecto y no hay endpoint. Todavía **no lo invoca ningún flujo de batalla** (HU-20) y **ningún efecto de equipamiento modifica todavía la tabla**: `BuildHeroEffectTable` la construye a partir del héroe equipado real (`subtype` y `activeEffects` del contrato interno de Player-Inventory, con parser estricto en `PlayerInventoryHttpClient`) y declara como pendientes los efectos cuya semántica no está definida (p. ej. la unidad de `CRITICAL_CHANCE`). Detalle y pendientes en [hu-25-effect-control-table.md](hu-25-effect-control-table.md).
 
 ## Contrato previsto
 

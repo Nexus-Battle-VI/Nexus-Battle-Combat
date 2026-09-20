@@ -16,6 +16,7 @@ import {
   PLAYER_INVENTORY_EQUIPPED_HERO,
   type PlayerInventoryEquippedHeroPort,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
+import { equippedHeroFixture } from '../fixtures/equipped-hero'
 import {
   Role,
   TOKEN_VERIFIER,
@@ -93,7 +94,7 @@ const stubAccountProfiles: AccountBattleProfilePort = {
 
 const stubEquippedHeroes: PlayerInventoryEquippedHeroPort = {
   getEquippedHero: (playerId) =>
-    Promise.resolve({ playerId, heroId: `heroe-de-${playerId}`, maxPower: 10 }),
+    Promise.resolve(equippedHeroFixture({ playerId, heroId: `heroe-de-${playerId}` })),
 }
 
 const withEnv = (values: Record<string, string>): (() => void) => {
