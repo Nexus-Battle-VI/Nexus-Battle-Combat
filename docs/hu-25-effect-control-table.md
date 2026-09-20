@@ -30,6 +30,33 @@
 | 6   | Evidencia                         | Las Tasks #358–#361 (prototipo Colab) modelaron la misma estructura índice → rango → efecto; la validación estadística determinista de esta rama                                                                                                                                                           |
 | 7   | Pendientes funcionales            | Chamán y Médico sin distribución válida; selección concreta del crítico 120–180 %; contrato de modificadores desde Player-Inventory; distribución «normal» del índice (ver [Tensión documental](#tensión-documental-abierta))                                                                              |
 
+## Alcance funcional: qué está conectado y qué no
+
+Hoy existe, implementado y probado:
+
+```text
+RandomIndex  →  tabla YA PREPARADA  →  efecto y magnitud
+```
+
+**No existe todavía** la cadena completa desde el jugador:
+
+```text
+playerId
+  ↓  héroe equipado real            (Player-Inventory: contrato equipped-hero)
+  ↓  subtype                        (disponible aguas arriba; no modelado en el puerto de Combat)
+  ↓  equipamiento / modificadores   (NO los entrega el contrato upstream)
+  ↓  tabla vigente                  (nadie la construye aún a partir del héroe real)
+  ↓  índice                         (HU-24)
+  ↓
+efecto y magnitud                   (HU-25)   →   daño numérico final   (HU-20/HU-18)
+```
+
+Nadie construye hoy la `table` que recibe `ResolveRandomEffect.execute({ sequence, table })` a partir de
+un héroe equipado real: en producción no hay caller, y en las pruebas la tabla se obtiene de los perfiles
+base (`baseEffectTableFor`) y de modificadores expresados a mano. Por tanto **HU-25 no está terminada de
+extremo a extremo**: lo entregado es el núcleo de dominio y la resolución índice → efecto. Ver
+[Pendientes](#pendientes).
+
 ## Arquitectura
 
 Clean + Hexagonal. **Domain puro**: no importa NestJS, adaptadores, infraestructura ni nada de HU-24 más
@@ -170,6 +197,14 @@ puede consumir todo `NO_DAMAGE` (queda en 0 filas y sin rango).
 
 No se define redistribución entre varios efectos ni un orden de apilamiento distinto de la suma.
 
+**Sobre varios incrementos simultáneos.** `withModifiers` acepta una lista y suma los incrementos antes de
+descontarlos de «no causar daño»: es coherente con la regla («todo incremento se resta de no causar
+daño») y su resultado no depende del orden. Pero **la semántica de apilamiento del equipamiento real
+NO está formalizada**: cómo se traducen varios efectos de Catalog/Player-Inventory (varias piezas, cada
+una con su `CRITICAL_CHANCE`, con duración o condición de activación) a `ProbabilityModifier` — y si
+esos efectos se acumulan o no — pertenece a la **integración futura**, no a esta rama. La abstracción se
+conserva porque es útil, sin afirmar que ya modela el apilamiento real.
+
 ## Efectos y magnitudes
 
 Magnitud **relativa** (lo único que HU-25 conoce), conservada exactamente como en el documento:
@@ -285,10 +320,14 @@ Garantizadas por construcción y probadas recorriendo las 8000 filas de cada tab
 4. Todo `RandomIndex` válido resuelve exactamente un efecto.
 5. Las filas de cada efecto son enteras y suman 8000 (sin redondeo).
 6. Las tablas son inmutables; `withModifiers` devuelve una nueva.
+7. Las reglas autoritativas están **congeladas en runtime** (`Object.freeze`), no solo `readonly` de
+   TypeScript: `RANDOM_EFFECT_ORDER`, `HERO_SUBTYPES`, `RandomEffectType`, `HeroSubtype`,
+   `EFFECT_MAGNITUDES` y `BASE_EFFECT_PERCENTAGES`. Un `reverse()`, `push()` o reasignación desde
+   JavaScript lanza `TypeError` y no puede alterar cómo se construyen las tablas.
 
 ## Pruebas
 
-**199 pruebas nuevas** en 8 suites (7 unitarias y 1 de integración):
+**222 pruebas nuevas** en 9 suites (8 unitarias y 1 de integración):
 
 - `effect-control-table` — invariantes, orden, fronteras, rechazo de distribuciones inválidas.
 - `base-effect-profiles` — Tabla 21 de los 8 héroes: 6 configuraciones válidas con suma 8000, cobertura
@@ -296,14 +335,15 @@ Garantizadas por construcción y probadas recorriendo las 8000 filas de cada tab
 - `official-effect-tables` — **Tabla 22** y **Tabla 23** reproducidas columna por columna.
 - `probability-modifier` — +6 crítico → Tabla 23 exacta, modificador 0, errores (superar «sin daño»,
   negativos, `NO_DAMAGE`, efecto desconocido, redondeo).
+- `hu-25-authoritative-constants` — intenta `reverse`/`sort`/`push`/`pop`/`splice`/asignación sobre las constantes autoritativas y verifica que fallan sin alterar la construcción de tablas.
 - `hero-subtype`, `resolve-random-effect` (un solo índice por golpe; solo `nextIndex`),
   `hu-25-no-alternative-randomness` (guarda estática).
 - `random-effect-resolution` (integración HU-24 → HU-25): golden con semilla fija y **convergencia
   estadística determinista** sobre 200.000 golpes: Guerrero Armas base ≈ 60 / 5 / 3 / 2 / 30 % y con +6 %
   de crítico ≈ 60 / 11 / 3 / 2 / 24 %, tolerancia 0,5 puntos (medido: error ≤ 0,13). No reemplaza HU-26.
-- **Prueba de mutación manual:** 13 defectos deliberados (orden, equivalencia filas/%, frontera,
+- **Prueba de mutación manual:** 17 defectos deliberados (13 de las reglas de negocio + 4 de inmutabilidad: quitar el `Object.freeze` de cada constante) (orden, equivalencia filas/%, frontera,
   compensación, Tabla 21, sanadores, magnitud, `NO_DAMAGE`, doble índice, `Math.random`, cobertura de la
-  fila 8000, redondeo) — **13 de 13 detectados**.
+  fila 8000, redondeo) — **17 de 17 detectados**.
 
 ## Limitaciones
 
@@ -314,6 +354,10 @@ Garantizadas por construcción y probadas recorriendo las 8000 filas de cada tab
 - Sin persistencia ni endpoint (no hay requisito que los pida).
 
 ## Pendientes
+
+0. **Integración de extremo a extremo** (lo que separa «núcleo de dominio» de «HU-25 Done»): construir la
+   tabla vigente a partir del héroe equipado real (`subtype` + modificadores) y conectarla al flujo de
+   combate de HU-20. Depende de los puntos 3 y 5 y de HU-20.
 
 1. **Chamán y Médico**: definir su distribución de 100 % (la nota del proyecto pide diseñarla; los
    valores los aprueba el PO/profesor).
