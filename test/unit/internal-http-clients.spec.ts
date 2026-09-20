@@ -13,6 +13,7 @@ import {
   UpstreamServiceError,
 } from '../../src/application/errors/UpstreamErrors'
 import type { ClockPort } from '../../src/application/ports/ClockPort'
+import { createHeroPower } from '../../src/domain/policies/HeroPowerPolicy'
 import type { Logger } from '../../src/infrastructure/observability/logger'
 
 /**
@@ -202,7 +203,7 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
           subtype: 'guerrero',
           name: 'Heroe Uno',
           baseStats: { ataque: 10 },
-          effectiveStats: { ataque: 12 },
+          effectiveStats: { power: 10, health: 44, defense: 11, attack: 12 },
           ready: true,
           selectedAt: '2026-09-19T00:00:00.000Z',
         }),
@@ -244,8 +245,71 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
     })
     expect(capturedHeaders?.[INTERNAL_SIGNATURE_HEADER]).toBe(expectedSignature)
 
-    expect(equipped).toEqual({ playerId: 'jugador-1', heroId: 'heroe-1' })
+    // Solo se modelan `playerId`, `heroId` y el Poder maximo (`effectiveStats.power`,
+    // HU-11); el resto del cuerpo no llega al puerto.
+    expect(equipped).toEqual({ playerId: 'jugador-1', heroId: 'heroe-1', maxPower: 10 })
   })
+
+  it('el Poder maximo sale de effectiveStats.power, incluido 0 (Catalog admite basePower 0)', async () => {
+    const fetchImpl = (): Promise<Response> =>
+      Promise.resolve(
+        jsonResponse(200, {
+          playerId: 'jugador-1',
+          heroId: 'heroe-1',
+          effectiveStats: { power: 0 },
+        }),
+      )
+    const client = new PlayerInventoryHttpClient({ ...baseOptions, fetchImpl })
+
+    await expect(client.getEquippedHero('jugador-1')).resolves.toEqual({
+      playerId: 'jugador-1',
+      heroId: 'heroe-1',
+      maxPower: 0,
+    })
+  })
+
+  it('el Poder maximo del contrato es el que arranca el Poder del participante (HU-11)', async () => {
+    const fetchImpl = (): Promise<Response> =>
+      Promise.resolve(
+        jsonResponse(200, {
+          playerId: 'jugador-1',
+          heroId: 'heroe-1',
+          effectiveStats: { power: 12 },
+        }),
+      )
+    const client = new PlayerInventoryHttpClient({ ...baseOptions, fetchImpl })
+
+    const equipped = await client.getEquippedHero('jugador-1')
+    if (equipped === null) throw new Error('se esperaba un heroe equipado')
+
+    expect(createHeroPower(equipped.heroId, equipped.maxPower)).toEqual({
+      heroId: 'heroe-1',
+      current: 12,
+      max: 12,
+    })
+  })
+
+  it.each([
+    ['sin effectiveStats', undefined],
+    ['effectiveStats nulo', null],
+    ['effectiveStats que no es un objeto', 'texto'],
+    ['effectiveStats sin power', {}],
+    ['power decimal', { power: 7.5 }],
+    ['power negativo', { power: -1 }],
+    ['power como texto', { power: '10' }],
+    ['power nulo', { power: null }],
+  ])(
+    'respuesta invalida (%s) -> UpstreamServiceError: Combat no inventa el Poder maximo',
+    async (_case, effectiveStats) => {
+      const fetchImpl = (): Promise<Response> =>
+        Promise.resolve(
+          jsonResponse(200, { playerId: 'jugador-1', heroId: 'heroe-1', effectiveStats }),
+        )
+      const client = new PlayerInventoryHttpClient({ ...baseOptions, fetchImpl })
+
+      await expect(client.getEquippedHero('jugador-1')).rejects.toBeInstanceOf(UpstreamServiceError)
+    },
+  )
 
   it('404 (sin heroe equipado) -> null: A DIFERENCIA de Account, es un camino de negocio valido', async () => {
     const fetchImpl = (): Promise<Response> => Promise.resolve(jsonResponse(404, {}))

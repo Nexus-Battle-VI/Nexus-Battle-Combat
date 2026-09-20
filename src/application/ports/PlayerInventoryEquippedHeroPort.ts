@@ -10,14 +10,22 @@
  * dominio (DP-3). Combat NO LO INVENTA aqui tampoco -- ver el informe final
  * de esta tarea, seccion DP-3, para la traza hacia HU-15.4.
  *
- * Combat solo necesita `playerId`/`heroId` para resolver el `Participant`;
- * el resto del contrato (`reference`, `subtype`, `baseStats`,
- * `effectiveStats`, `ready`, `selectedAt`) NO SE MODELA aqui porque HU-15.2
- * no lo usa (HU-16 validara equipamiento de combate, no esta version).
+ * Combat necesita `playerId`/`heroId` para resolver el `Participant` y
+ * `maxPower` para el Poder de la batalla (HU-11, RF-11). `maxPower` es
+ * `effectiveStats.power` (HU-28): la base de Catalog mas los modificadores
+ * permanentes del equipamiento. Combat NO lo calcula ni lo inventa: si el
+ * contrato no lo trae como entero no negativo, la respuesta es invalida.
+ *
+ * El resto del contrato (`reference`, `subtype`, `baseStats`, `ready`,
+ * `selectedAt` y las demas estadisticas de `effectiveStats`) NO SE MODELA aqui
+ * porque nada lo usa todavia (HU-16 validara equipamiento de combate, no esta
+ * version).
  */
 export interface EquippedHero {
   readonly playerId: string
   readonly heroId: string
+  /** Poder maximo del heroe (`effectiveStats.power`). Entero no negativo. */
+  readonly maxPower: number
 }
 
 /**

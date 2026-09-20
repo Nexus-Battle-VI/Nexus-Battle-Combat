@@ -47,7 +47,8 @@ const fakeAccountProfiles = (): AccountBattleProfilePort => ({
 })
 
 const fakeEquippedHeroes = (): PlayerInventoryEquippedHeroPort => ({
-  getEquippedHero: (playerId) => Promise.resolve({ playerId, heroId: `heroe-de-${playerId}` }),
+  getEquippedHero: (playerId) =>
+    Promise.resolve({ playerId, heroId: `heroe-de-${playerId}`, maxPower: 10 }),
 })
 
 const sequentialIds = (): IdGeneratorPort => {
@@ -353,7 +354,8 @@ describe('JoinBattleRoom', () => {
         Promise.resolve({ subject, displayName: 'Nombre De Cuenta', avatarUrl: 'https://a/x.png' }),
     }
     const equippedHeroes: PlayerInventoryEquippedHeroPort = {
-      getEquippedHero: (playerId) => Promise.resolve({ playerId, heroId: 'heroe-equipado' }),
+      getEquippedHero: (playerId) =>
+        Promise.resolve({ playerId, heroId: 'heroe-equipado', maxPower: 10 }),
     }
     const join = new JoinBattleRoom(repo, fixedClock(), accountProfiles, equippedHeroes)
 
@@ -397,7 +399,7 @@ describe('JoinBattleRoom', () => {
     )
 
     const equippedHeroesSpy = jest.fn<
-      Promise<{ playerId: string; heroId: string } | null>,
+      Promise<{ playerId: string; heroId: string; maxPower: number } | null>,
       [string]
     >()
     const join = new JoinBattleRoom(
@@ -427,7 +429,7 @@ describe('JoinBattleRoom', () => {
     )
 
     const equippedHeroesSpy = jest.fn<
-      Promise<{ playerId: string; heroId: string } | null>,
+      Promise<{ playerId: string; heroId: string; maxPower: number } | null>,
       [string]
     >()
     const join = new JoinBattleRoom(
