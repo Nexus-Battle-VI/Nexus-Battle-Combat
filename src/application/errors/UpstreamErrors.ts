@@ -39,7 +39,7 @@ export class UpstreamServiceError extends Error {
 /**
  * HU-15.2 (RF-15, DP-4). El jugador autenticado no tiene ningun heroe
  * equipado en Player-Inventory (`GET
- * /internal/v1/players/:playerId/equipped-hero` respondio 404). 422: la
+ * /api/internal/v1/players/:playerId/equipped-hero` respondio 404). 422: la
  * peticion de union es sintacticamente correcta, pero una precondicion de
  * negocio -- "unirse a una batalla exige un heroe equipado" -- no se cumple
  * todavia. Distinto de `UpstreamServiceError`: aqui Player-Inventory SI
