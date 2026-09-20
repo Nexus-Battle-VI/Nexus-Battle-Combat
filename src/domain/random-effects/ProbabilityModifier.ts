@@ -29,10 +29,10 @@ const ROWS_PER_TEN_THOUSAND_BASIS_POINTS = 8000
  * de filas se rechaza. Las conversiones usan solo aritmetica entera (sin
  * decimales binarios: `0.1 + 0.2` no aparece).
  *
- * Este objeto NO sabe de donde sale el modificador. Como se traduce un efecto
- * de equipamiento de Catalog/Player-Inventory (p. ej. `CRITICAL_CHANCE
- * INCREASE PERCENTAGE 300`) a un `ProbabilityModifier` es una decision de
- * integracion pendiente, no de esta clase.
+ * Este objeto NO sabe de donde sale el modificador. La traduccion de un efecto
+ * de equipamiento (`CRITICAL_CHANCE INCREASE PERCENTAGE 300` = +3 puntos
+ * porcentuales absolutos) la hace la capa de aplicacion (`BuildHeroEffectTable`),
+ * no esta clase.
  */
 export class ProbabilityModifier {
   readonly effect: IncreasableEffectType

@@ -1,5 +1,8 @@
+import { InvalidProbabilityModifierError } from '../../domain/errors/RandomEffectErrors'
 import { baseEffectTableFor } from '../../domain/random-effects/BaseEffectProfiles'
 import type { EffectControlTable } from '../../domain/random-effects/EffectControlTable'
+import { ProbabilityModifier } from '../../domain/random-effects/ProbabilityModifier'
+import { RandomEffectType } from '../../domain/random-effects/RandomEffectType'
 import { parseHeroSubtype, type HeroSubtype } from '../../domain/value-objects/HeroSubtype'
 import { PlayerWithoutEquippedHeroError } from '../errors/UpstreamErrors'
 import type {
@@ -13,6 +16,9 @@ import type {
  * aleatorios de HU-25. Cada efecto recibido tiene exactamente uno: ninguno se
  * aplica ni se descarta en silencio.
  *
+ *  - `APPLIED_TO_TABLE`: modifico la tabla. Hoy solo lo hace `CRITICAL_CHANCE
+ *    INCREASE PERCENTAGE` incondicional, permanente y sobre uno mismo (ver
+ *    `assessEquipmentEffect`). Lleva el `ProbabilityModifier` que se aplico.
  *  - `REFLECTED_IN_STATS`: ya esta dentro de `effectiveStats` (Player-Inventory
  *    lo marca `appliedToStats`). Ignorado A PROPOSITO para no aplicarlo dos
  *    veces.
@@ -22,12 +28,9 @@ import type {
  *  - `PENDING_DEFINITION`: podria modificar la tabla, pero el requisito no
  *    define como. NO se aplica y se declara, con sus motivos. Tambien cae aqui
  *    todo efecto que esta version de Combat no reconoce.
- *
- * NO EXISTE un resultado `APPLIED`: hoy ningun efecto tiene una semantica
- * formal que lo traduzca a un `ProbabilityModifier` (ver `PendingReason`).
- * Anadirlo sin esa regla seria inventarla.
  */
 export const EquipmentEffectOutcome = Object.freeze({
+  AppliedToTable: 'APPLIED_TO_TABLE',
   ReflectedInStats: 'REFLECTED_IN_STATS',
   NotATableModifier: 'NOT_A_TABLE_MODIFIER',
   PendingDefinition: 'PENDING_DEFINITION',
@@ -40,11 +43,15 @@ export type EquipmentEffectOutcome =
  * Por que un efecto queda pendiente. Se listan TODOS los que aplican: cuando
  * el primero se resuelva, los demas siguen diciendo que mas falta.
  *
- *  - `CRITICAL_CHANCE_UNIT_UNDEFINED`: `CRITICAL_CHANCE` con `PERCENTAGE 300 pb`
- *    no dice si son +3 PUNTOS PORCENTUALES ABSOLUTOS (como el «+6 %» de la
- *    Tabla 23, que `ProbabilityModifier.ofBasisPoints` interpreta asi) o un
- *    +3 % RELATIVO al critico base. Ningun requisito lo define. Aplica a
- *    cualquier magnitud (`FIXED` tampoco dice en que unidad esta).
+ *  - `CRITICAL_CHANCE_UNIT_UNDEFINED`: `CRITICAL_CHANCE` con una magnitud que no
+ *    es `PERCENTAGE` (`FIXED`, `DICE` o ausente): ningun requisito dice en que
+ *    unidad de probabilidad estaria.
+ *  - `CRITICAL_CHANCE_NOT_ROW_ALIGNED`: `PERCENTAGE` cuyos puntos basicos no son
+ *    un numero exacto de filas (1 fila = 1,25 pb, asi que solo valen multiplos de
+ *    5 pb) o no son un entero >= 0. No se redondea.
+ *  - `CRITICAL_CHANCE_ALREADY_IN_STATS_INCONSISTENT`: `CRITICAL_CHANCE` marcado
+ *    `appliedToStats`. `effectiveStats` no tiene ningun campo de critico, asi que
+ *    es una contradiccion del contrato: ni se da por consolidado ni se aplica.
  *  - `ACTIVATION_CONDITION_UNEVALUATED`: hay una condicion y nadie define
  *    cuando se evalua; no se trata como bonus permanente.
  *  - `TEMPORARY_EFFECT_UNDEFINED`: tiene duracion; HU-25 solo modela una tabla
@@ -58,6 +65,8 @@ export type EquipmentEffectOutcome =
  */
 export const PendingReason = Object.freeze({
   CriticalChanceUnitUndefined: 'CRITICAL_CHANCE_UNIT_UNDEFINED',
+  CriticalChanceNotRowAligned: 'CRITICAL_CHANCE_NOT_ROW_ALIGNED',
+  CriticalChanceAlreadyInStatsInconsistent: 'CRITICAL_CHANCE_ALREADY_IN_STATS_INCONSISTENT',
   ActivationConditionUnevaluated: 'ACTIVATION_CONDITION_UNEVALUATED',
   TemporaryEffectUndefined: 'TEMPORARY_EFFECT_UNDEFINED',
   NonSelfTargetUndefined: 'NON_SELF_TARGET_UNDEFINED',
@@ -72,6 +81,8 @@ export interface EquipmentEffectAssessment {
   readonly outcome: EquipmentEffectOutcome
   /** Vacio salvo en `PENDING_DEFINITION`. */
   readonly reasons: readonly PendingReason[]
+  /** Solo en `APPLIED_TO_TABLE`: el incremento que se aplico a la tabla. */
+  readonly modifier?: ProbabilityModifier
 }
 
 const STAT_MODIFIER = 'STAT_MODIFIER'
@@ -106,8 +117,36 @@ const isKnownNonTableEffect = (effect: EquippedHeroEffect): boolean =>
     ? effect.statistic !== undefined && NON_TABLE_STATISTICS.has(effect.statistic)
     : NON_TABLE_KINDS.has(effect.kind)
 
-const criticalChanceBlockers = (effect: EquippedHeroEffect): readonly PendingReason[] => [
-  PendingReason.CriticalChanceUnitUndefined,
+/**
+ * `PERCENTAGE` de `CRITICAL_CHANCE` -> incremento de la tabla. Regla LOCAL a la
+ * tabla de HU-25 (Tabla 23: 5 % + 6 % = 11 %): los puntos basicos son PUNTOS
+ * PORCENTUALES ABSOLUTOS de probabilidad (100 pb = +1 pp = +80 filas). NO
+ * redefine `PERCENTAGE` para ninguna otra estadistica.
+ *
+ * Devuelve `undefined` si los puntos basicos no equivalen a un numero exacto de
+ * filas; la conversion (y su rechazo) es de `ProbabilityModifier`.
+ */
+const criticalChanceModifier = (basisPoints: number): ProbabilityModifier | undefined => {
+  try {
+    return ProbabilityModifier.ofBasisPoints(RandomEffectType.CriticalDamage, basisPoints)
+  } catch (error) {
+    if (error instanceof InvalidProbabilityModifierError) {
+      return undefined
+    }
+
+    throw error
+  }
+}
+
+const criticalChanceBlockers = (
+  effect: EquippedHeroEffect,
+  modifier: ProbabilityModifier | undefined,
+): readonly PendingReason[] => [
+  ...(effect.magnitude?.mode === 'PERCENTAGE' ? [] : [PendingReason.CriticalChanceUnitUndefined]),
+  ...(effect.magnitude?.mode === 'PERCENTAGE' && modifier === undefined
+    ? [PendingReason.CriticalChanceNotRowAligned]
+    : []),
+  ...(effect.appliedToStats ? [PendingReason.CriticalChanceAlreadyInStatsInconsistent] : []),
   ...(effect.hasActivationCondition ? [PendingReason.ActivationConditionUnevaluated] : []),
   ...(effect.durationTurns === undefined ? [] : [PendingReason.TemporaryEffectUndefined]),
   ...(effect.target === 'SELF' ? [] : [PendingReason.NonSelfTargetUndefined]),
@@ -116,8 +155,14 @@ const criticalChanceBlockers = (effect: EquippedHeroEffect): readonly PendingRea
 
 /**
  * Clasifica un efecto de equipamiento respecto a la tabla de HU-25. Pura y sin
- * estado. Es la UNICA decision de Combat sobre efectos de equipamiento en esta
- * fase, y no traduce ninguno: ver `EquipmentEffectOutcome`.
+ * estado.
+ *
+ * UNICO efecto que modifica la tabla: `STAT_MODIFIER` sobre `CRITICAL_CHANCE`,
+ * `INCREASE`, magnitud `PERCENTAGE`, objetivo `SELF`, sin condicion de
+ * activacion, sin duracion y sin `appliedToStats`. Se traduce a
+ * `ProbabilityModifier.ofBasisPoints(CRITICAL_DAMAGE, basisPoints)`. Cualquier
+ * otra variante de `CRITICAL_CHANCE` (DECREASE, SET, MULTIPLY, BLOCK, FIXED,
+ * DICE, condicionada, temporal, hacia otro objetivo) queda PENDIENTE.
  *
  * El critico se evalua ANTES que `appliedToStats`: `effectiveStats` no tiene
  * ningun campo de critico, asi que un `CRITICAL_CHANCE` marcado como ya
@@ -126,11 +171,17 @@ const criticalChanceBlockers = (effect: EquippedHeroEffect): readonly PendingRea
  */
 export const assessEquipmentEffect = (effect: EquippedHeroEffect): EquipmentEffectAssessment => {
   if (effect.kind === STAT_MODIFIER && effect.statistic === CRITICAL_CHANCE) {
-    return {
-      effect,
-      outcome: EquipmentEffectOutcome.PendingDefinition,
-      reasons: criticalChanceBlockers(effect),
+    const modifier =
+      effect.magnitude?.mode === 'PERCENTAGE'
+        ? criticalChanceModifier(effect.magnitude.basisPoints)
+        : undefined
+    const reasons = criticalChanceBlockers(effect, modifier)
+
+    if (reasons.length === 0 && modifier !== undefined) {
+      return { effect, outcome: EquipmentEffectOutcome.AppliedToTable, reasons, modifier }
     }
+
+    return { effect, outcome: EquipmentEffectOutcome.PendingDefinition, reasons }
   }
 
   if (effect.appliedToStats) {
@@ -149,20 +200,26 @@ export const assessEquipmentEffect = (effect: EquippedHeroEffect): EquipmentEffe
 }
 
 /**
- * Tabla de control vigente de un heroe equipado, mas lo que Combat NO pudo
- * reflejar en ella.
+ * Tabla de control vigente de un heroe equipado, mas lo que Combat hizo con cada
+ * efecto de su equipamiento.
  */
 export interface HeroEffectTable {
   readonly heroId: string
   readonly subtype: HeroSubtype
   /**
-   * La tabla que HU-20 debe usar. HOY es la tabla BASE del subtipo, sin
-   * modificadores: ver `buildHeroEffectTable`. Si `pendingEffects` no esta
-   * vacio, esta tabla NO incluye el efecto de esos productos.
+   * La tabla que HU-20 debe usar: la BASE del subtipo mas los incrementos de
+   * `appliedEffects`. Si `pendingEffects` no esta vacio, esta tabla NO incluye el
+   * efecto de esos productos.
    */
   readonly table: EffectControlTable
   /** Una entrada por efecto recibido, en el orden del contrato. */
   readonly assessments: readonly EquipmentEffectAssessment[]
+  /** Los efectos que modificaron la tabla (cada uno con su `modifier`). */
+  readonly appliedEffects: readonly EquipmentEffectAssessment[]
+  /** Los efectos ya incluidos en `effectiveStats`: no se aplican otra vez. */
+  readonly reflectedInStatsEffects: readonly EquipmentEffectAssessment[]
+  /** Los efectos conocidos que no son una probabilidad de la tabla. */
+  readonly nonTableEffects: readonly EquipmentEffectAssessment[]
   /** Los efectos que podrian modificar la tabla y NO se aplicaron. */
   readonly pendingEffects: readonly EquipmentEffectAssessment[]
 }
@@ -171,18 +228,20 @@ export interface HeroEffectTable {
  * De un heroe equipado a su tabla de efectos (HU-25):
  *
  *   subtype  ->  parseHeroSubtype  ->  baseEffectTableFor  ->  tabla base
- *   activeEffects  ->  assessEquipmentEffect  ->  que se aplico y que queda pendiente
+ *   activeEffects  ->  assessEquipmentEffect  ->  ProbabilityModifier[]
+ *   tabla base  ->  withModifiers(modifiers)  ->  tabla vigente
  *
  * Falla de forma EXPLICITA, sin inventar tabla:
  *  - subtipo fuera del registro `hero-subtypes-v1`: `DomainError`;
  *  - `CHAMAN` / `MEDICO`: `UnsupportedHeroEffectProfileError` (la Tabla 21 no
- *    les da una distribucion valida; no se inventa una).
+ *    les da una distribucion valida; no se inventa una);
+ *  - incrementos que suman mas que el «no causar dano» disponible:
+ *    `InsufficientNoDamageProbabilityError` (no se recorta ni se redistribuye).
  *
- * LA TABLA VIGENTE ES LA BASE. Ningun efecto de equipamiento se traduce hoy a
- * un `ProbabilityModifier` porque ninguno tiene una semantica formalmente
- * definida (ver `PendingReason`). Cuando una regla aprobada traduzca alguno, el
- * cambio es UN punto: aplicar aqui `table.withModifiers(...)`. Mientras tanto
- * el resultado no finge: `pendingEffects` dice que efectos no estan en la tabla.
+ * El apilamiento de varios incrementos es el aditivo de
+ * `EffectControlTable.withModifiers`: no depende del orden. La tabla base es
+ * inmutable y compartida: `withModifiers` devuelve una tabla NUEVA; ni ella ni
+ * `activeEffects` se mutan.
  *
  * Pura y sin E/S: se prueba sin puerto ni generador, y no toca la aleatoriedad
  * (HU-24). No invoca `ResolveRandomEffect`: eso lo hara HU-20 tras un golpe
@@ -190,17 +249,23 @@ export interface HeroEffectTable {
  */
 export const buildHeroEffectTable = (hero: EquippedHero): HeroEffectTable => {
   const subtype = parseHeroSubtype(hero.subtype)
-  const table = baseEffectTableFor(subtype)
   const assessments = hero.activeEffects.map(assessEquipmentEffect)
+  const withOutcome = (outcome: EquipmentEffectOutcome): readonly EquipmentEffectAssessment[] =>
+    assessments.filter((assessment) => assessment.outcome === outcome)
+  const appliedEffects = withOutcome(EquipmentEffectOutcome.AppliedToTable)
+  const modifiers = appliedEffects.flatMap(({ modifier }) =>
+    modifier === undefined ? [] : [modifier],
+  )
 
   return {
     heroId: hero.heroId,
     subtype,
-    table,
+    table: baseEffectTableFor(subtype).withModifiers(modifiers),
     assessments,
-    pendingEffects: assessments.filter(
-      (assessment) => assessment.outcome === EquipmentEffectOutcome.PendingDefinition,
-    ),
+    appliedEffects,
+    reflectedInStatsEffects: withOutcome(EquipmentEffectOutcome.ReflectedInStats),
+    nonTableEffects: withOutcome(EquipmentEffectOutcome.NotATableModifier),
+    pendingEffects: withOutcome(EquipmentEffectOutcome.PendingDefinition),
   }
 }
 
