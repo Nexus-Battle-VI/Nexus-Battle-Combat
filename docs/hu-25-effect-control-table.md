@@ -1,14 +1,16 @@
 # HU-25 — Tabla de control de efectos aleatorios
 
 > Estado: **implementados el modelo de tabla, las configuraciones base definidas en el documento, la
-> resolución por índice, la mecánica de modificadores y la construcción de la tabla base a partir del
-> héroe equipado real (`subtype`, vía Player-Inventory)**. Los efectos del equipamiento (`activeEffects`)
-> ya **se reciben y se clasifican**, pero **ninguno se traduce todavía a un modificador de la tabla**: falta
-> definir formalmente la unidad de `CRITICAL_CHANCE` con `PERCENTAGE`. No es el motor de combate: no
-> compara Ataque contra Defensa (HU-20), no calcula daño numérico ni vida, y **ningún flujo de batalla la
-> invoca todavía**. **HU-25 no está terminada de extremo a extremo.** Este documento distingue en cada punto
-> qué es requisito explícito, aclaración formal, decisión arquitectónica, decisión técnica, evidencia o
-> pendiente funcional.
+> resolución por índice, la mecánica de modificadores, la construcción de la tabla del héroe equipado real
+> (`subtype`, vía Player-Inventory) y la aplicación de `CRITICAL_CHANCE` del equipamiento a esa tabla**.
+> Los efectos del equipamiento (`activeEffects`) se reciben y se clasifican; **solo `CRITICAL_CHANCE INCREASE
+PERCENTAGE`, incondicional, permanente y sobre uno mismo, modifica la tabla** (100 pb = +1 punto porcentual
+> absoluto; ver [Traducción de `CRITICAL_CHANCE`](#traducción-de-critical_chance)). El resto de efectos
+> queda clasificado o pendiente. No es el motor de combate: no compara Ataque contra Defensa (HU-20), no
+> calcula daño numérico ni vida, y **ningún flujo de batalla la invoca todavía**. **HU-25 no está terminada
+> de extremo a extremo** (falta el consumidor, HU-20). Este documento distingue en cada punto qué es
+> requisito explícito, aclaración formal, decisión arquitectónica, decisión técnica, evidencia o pendiente
+> funcional.
 
 ## Trazabilidad
 
@@ -24,15 +26,15 @@
 
 ## Clasificación de lo que se decidió
 
-| #   | Tipo                              | Contenido                                                                                                                                                                                                                                                                                                                                  |
-| --- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | Requisito explícito               | Tabla de 8000 filas por tipo de héroe, modificada por equipamiento; cada fila es un efecto; el índice del generador centralizado selecciona la fila; todo incremento se resta de «no causar daño»; ninguna otra fuente de aleatoriedad; el resultado identifica efecto y magnitud (issue #72, CA-01…CA-08)                                 |
-| 2   | Fuente oficial                    | Documento «Proyecto Integrador II», sección 6.1.4: **Tabla 21** (porcentajes base), **Tabla 22** (Guerrero Armas) y **Tabla 23** (Guerrero Armas con +6 % de crítico)                                                                                                                                                                      |
-| 3   | Aclaración formal del profesor    | La tabla conserva **siempre el mismo orden** de efectos (ver abajo)                                                                                                                                                                                                                                                                        |
-| 4   | Decisión arquitectónica existente | Combat es el único dueño de la aleatoriedad (ADR-019); HU-24 entrega un `RandomIndex` y HU-25 solo lo consume mediante `RandomSequencePort.nextIndex()`                                                                                                                                                                                    |
-| 5   | Decisión técnica necesaria        | Tabla almacenada como **rangos contiguos** (equivalente a las 8000 filas); filas enteras como representación autoritativa; incrementos en filas o puntos básicos **sin redondeo**; magnitud como valor o rango; dominio puro sin providers de Nest                                                                                         |
-| 6   | Evidencia                         | Las Tasks #358–#361 (prototipo Colab) modelaron la misma estructura índice → rango → efecto; la validación estadística determinista de esta rama                                                                                                                                                                                           |
-| 7   | Pendientes funcionales            | Chamán y Médico sin distribución válida; selección concreta del crítico 120–180 %; **unidad de `CRITICAL_CHANCE` con `PERCENTAGE`** (el contrato de efectos ya llega, ver [Integración con Player-Inventory](#integración-con-player-inventory)); distribución «normal» del índice (ver [Tensión documental](#tensión-documental-abierta)) |
+| #   | Tipo                              | Contenido                                                                                                                                                                                                                                                                                                  |
+| --- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Requisito explícito               | Tabla de 8000 filas por tipo de héroe, modificada por equipamiento; cada fila es un efecto; el índice del generador centralizado selecciona la fila; todo incremento se resta de «no causar daño»; ninguna otra fuente de aleatoriedad; el resultado identifica efecto y magnitud (issue #72, CA-01…CA-08) |
+| 2   | Fuente oficial                    | Documento «Proyecto Integrador II», sección 6.1.4: **Tabla 21** (porcentajes base), **Tabla 22** (Guerrero Armas) y **Tabla 23** (Guerrero Armas con +6 % de crítico)                                                                                                                                      |
+| 3   | Aclaración formal del profesor    | La tabla conserva **siempre el mismo orden** de efectos (ver abajo)                                                                                                                                                                                                                                        |
+| 4   | Decisión arquitectónica existente | Combat es el único dueño de la aleatoriedad (ADR-019); HU-24 entrega un `RandomIndex` y HU-25 solo lo consume mediante `RandomSequencePort.nextIndex()`                                                                                                                                                    |
+| 5   | Decisión técnica necesaria        | Tabla almacenada como **rangos contiguos** (equivalente a las 8000 filas); filas enteras como representación autoritativa; incrementos en filas o puntos básicos **sin redondeo**; magnitud como valor o rango; dominio puro sin providers de Nest                                                         |
+| 6   | Evidencia                         | Las Tasks #358–#361 (prototipo Colab) modelaron la misma estructura índice → rango → efecto; la validación estadística determinista de esta rama                                                                                                                                                           |
+| 7   | Pendientes funcionales            | Chamán y Médico sin distribución válida; selección concreta del crítico 120–180 %; efectos de equipamiento aún sin semántica formal (ver [Casos aún pendientes](#casos-aún-pendientes)); distribución «normal» del índice (ver [Tensión documental](#tensión-documental-abierta))                          |
 
 ## Alcance funcional: qué está conectado y qué no
 
@@ -42,7 +44,7 @@ Hoy existe, implementado y probado:
 RandomIndex  →  tabla  →  efecto y magnitud
 
 playerId  →  héroe equipado real  →  subtype  →  tabla BASE del subtipo
-                                      activeEffects  →  clasificados (ninguno modifica la tabla todavía)
+                                      activeEffects  →  CRITICAL_CHANCE soportado  →  ProbabilityModifier  →  tabla VIGENTE
 ```
 
 Estado de cada eslabón de la cadena completa:
@@ -52,18 +54,19 @@ playerId
   ↓  héroe equipado real            IMPLEMENTADO   Player-Inventory: contrato equipped-hero → PlayerInventoryHttpClient (parser estricto)
   ↓  subtype                        IMPLEMENTADO   parseHeroSubtype → baseEffectTableFor
   ↓  activeEffects                  IMPLEMENTADO   se reciben, se validan y se clasifican (BuildHeroEffectTable)
-  ↓  modificadores de la tabla      PENDIENTE      ningún efecto tiene una semántica formal que lo traduzca (CRITICAL_CHANCE: unidad sin definir)
-  ↓  tabla vigente                  PARCIAL        hoy es la tabla base; `pendingEffects` declara lo que no está en ella
+  ↓  modificadores de la tabla      IMPLEMENTADO   solo CRITICAL_CHANCE INCREASE PERCENTAGE (incondicional, permanente, SELF) → ProbabilityModifier
+  ↓  tabla vigente                  IMPLEMENTADO   base + withModifiers; `pendingEffects` declara lo que no se pudo aplicar
   ↓  índice                         IMPLEMENTADO   HU-24
   ↓
 efecto y magnitud                   IMPLEMENTADO   HU-25   →   daño numérico final   PENDIENTE (HU-20/HU-18)
 ```
 
-`BuildHeroEffectTable` produce hoy la `table` que recibe `ResolveRandomEffect.execute({ sequence, table })`,
+`BuildHeroEffectTable` produce la `table` que recibe `ResolveRandomEffect.execute({ sequence, table })`,
 pero **en producción sigue sin haber caller**: ningún flujo de batalla la invoca (HU-20). Por tanto **HU-25
-no está terminada de extremo a extremo**, y no lo estará mientras la tabla vigente ignore los efectos del
-equipamiento. Ver [Integración con Player-Inventory](#integración-con-player-inventory) y
-[Pendientes](#pendientes).
+no está terminada de extremo a extremo**: el componente de tabla está listo para que HU-20 lo consuma, pero
+el flujo Ataque > Defensa → tabla → efecto no existe todavía. Los efectos de equipamiento distintos del
+crítico soportado siguen sin modificar la tabla. Ver
+[Integración con Player-Inventory](#integración-con-player-inventory) y [Pendientes](#pendientes).
 
 ## Arquitectura
 
@@ -211,13 +214,11 @@ No se define redistribución entre varios efectos ni un orden de apilamiento dis
 
 **Sobre varios incrementos simultáneos.** `withModifiers` acepta una lista y suma los incrementos antes de
 descontarlos de «no causar daño»: es coherente con la regla («todo incremento se resta de no causar
-daño») y su resultado no depende del orden. Pero **la semántica de apilamiento del equipamiento real
-NO está formalizada**: cómo se traducen varios efectos de Catalog/Player-Inventory (varias piezas, cada
-una con su `CRITICAL_CHANCE`, con duración o condición de activación) a `ProbabilityModifier` — y si
-esos efectos se acumulan o no — **sigue sin formalizarse** (ver
-[Integración con Player-Inventory](#integración-con-player-inventory): hoy ningún efecto de equipamiento se
-traduce a un `ProbabilityModifier`). La abstracción se conserva porque es útil, sin afirmar que ya modela el
-apilamiento real.
+daño») y su resultado no depende del orden. `BuildHeroEffectTable` **reutiliza ese modelo aditivo** para
+los efectos de `CRITICAL_CHANCE` soportados (varias piezas con +3 y +2 puntos dan +5 puntos, restados de
+«no causar daño»); no existe otra fórmula de apilamiento. Lo que **no** está formalizado es el apilamiento
+de efectos condicionados, temporales o dirigidos a otro participante: esos no se aplican (ver
+[Casos aún pendientes](#casos-aún-pendientes)).
 
 ## Efectos y magnitudes
 
@@ -273,8 +274,10 @@ HeroEquipmentDto.activeEffects (HU-28)
                                                         → PlayerInventoryEquippedHeroPort
                                                         → BuildHeroEffectTable
                                                             subtype  → parseHeroSubtype → baseEffectTableFor
-                                                            effects  → assessEquipmentEffect
-                                                        → HeroEffectTable { table, assessments, pendingEffects }
+                                                            effects  → assessEquipmentEffect → ProbabilityModifier[]
+                                                            table    → baseTable.withModifiers(modifiers)
+                                                        → HeroEffectTable { table, assessments, appliedEffects,
+                                                            reflectedInStatsEffects, nonTableEffects, pendingEffects }
 ```
 
 ### Puerto y parser
@@ -296,61 +299,97 @@ EquippedHero`). Una estructura inválida → `UpstreamServiceError(player-invent
   contrato, Combat ejecutaría la tabla base ignorando el equipamiento real. Ver
   [Orden de despliegue](#orden-de-despliegue).
 
-### De `subtype` a la tabla
+### De `subtype` a la tabla vigente
 
-`buildHeroEffectTable(hero)` → `baseEffectTableFor(parseHeroSubtype(hero.subtype))`. Falla de forma
-explícita, sin inventar tabla: subtipo fuera de `hero-subtypes-v1` → `DomainError`; `CHAMAN` / `MEDICO` →
-`UnsupportedHeroEffectProfileError`. `BuildHeroEffectTable.execute(playerId)` añade la lectura por el puerto
-y lanza `PlayerWithoutEquippedHeroError` si no hay héroe equipado. **No está registrado en `app.module.ts`**
-(no hay consumidor hasta HU-20) y **no invoca `ResolveRandomEffect`**.
+`buildHeroEffectTable(hero)` → `baseEffectTableFor(parseHeroSubtype(hero.subtype))` →
+`.withModifiers(modificadores de los efectos aplicados)`. Falla de forma explícita, sin inventar tabla:
+subtipo fuera de `hero-subtypes-v1` → `DomainError`; `CHAMAN` / `MEDICO` →
+`UnsupportedHeroEffectProfileError`; incrementos mayores que el «no causar daño» disponible →
+`InsufficientNoDamageProbabilityError` (no se recorta ni se redistribuye). `BuildHeroEffectTable.execute(playerId)`
+añade la lectura por el puerto y lanza `PlayerWithoutEquippedHeroError` si no hay héroe equipado. **No está
+registrado en `app.module.ts`** (no hay consumidor hasta HU-20) y **no invoca `ResolveRandomEffect`**.
+
+La tabla base es inmutable y compartida: `withModifiers` devuelve una tabla **nueva**. No se mutan
+`BASE_EFFECT_PERCENTAGES`, la tabla base ni `activeEffects`, y cada ejecución es determinista.
 
 ### Qué se hace con cada efecto
 
-Cada efecto recibido tiene exactamente un resultado; ninguno se descarta ni se aplica en silencio:
+Cada efecto recibido tiene exactamente un resultado; ninguno se descarta ni se aplica en silencio. El
+resultado (`HeroEffectTable`) los separa en `appliedEffects`, `reflectedInStatsEffects`, `nonTableEffects` y
+`pendingEffects` (y `assessments` los conserva todos, en el orden del contrato):
 
 | Resultado              | Cuándo                                                                                                                                                                                                                                                           | Modifica la tabla |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `APPLIED_TO_TABLE`     | `STAT_MODIFIER` sobre `CRITICAL_CHANCE`, `INCREASE`, magnitud `PERCENTAGE`, objetivo `SELF`, sin condición de activación, sin duración y sin `appliedToStats`. Lleva el `ProbabilityModifier` aplicado.                                                          | **Sí**            |
 | `REFLECTED_IN_STATS`   | `appliedToStats = true`: ya está en `effectiveStats`. Se ignora **a propósito** para no aplicarlo dos veces.                                                                                                                                                     | No                |
 | `NOT_A_TABLE_MODIFIER` | Vocabulario conocido que no es una probabilidad de la tabla: `POWER`, `HEALTH`, `DEFENSE`, `ATTACK`, `DAMAGE`, `HEALING` y los `kind` `DAMAGE`, `HEALING`, `IMMUNITY`, `REFLECT_DAMAGE`, `REVIVE`, `TEMPORARY_STATUS`. Su semántica pertenece a otras historias. | No                |
-| `PENDING_DEFINITION`   | Podría modificar la tabla y el requisito no define cómo (`CRITICAL_CHANCE`), o Combat no reconoce el efecto. **No se aplica y se declara** en `pendingEffects`, con motivos.                                                                                     | No                |
+| `PENDING_DEFINITION`   | Podría modificar la tabla y el requisito no define cómo (variantes no soportadas de `CRITICAL_CHANCE`), o Combat no reconoce el efecto. **No se aplica y se declara** en `pendingEffects`, con motivos.                                                          | No                |
 
-Motivos de `PENDING_DEFINITION` (se listan todos los que aplican): `CRITICAL_CHANCE_UNIT_UNDEFINED`,
+Motivos de `PENDING_DEFINITION` (se listan todos los que aplican): `CRITICAL_CHANCE_UNIT_UNDEFINED`
+(magnitud `FIXED`, `DICE` o ausente), `CRITICAL_CHANCE_NOT_ROW_ALIGNED` (puntos básicos que no son un número
+exacto de filas), `CRITICAL_CHANCE_ALREADY_IN_STATS_INCONSISTENT` (`appliedToStats = true`),
 `ACTIVATION_CONDITION_UNEVALUATED`, `TEMPORARY_EFFECT_UNDEFINED`, `NON_SELF_TARGET_UNDEFINED`,
 `OPERATION_UNDEFINED` y `UNRECOGNIZED_EFFECT`. La lista cerrada de `NOT_A_TABLE_MODIFIER` es deliberada: una
 estadística o un `kind` que no esté ahí **no se presume irrelevante**, porque podría ser justo una
 probabilidad futura.
 
-**No existe un resultado «aplicado».** Hoy ningún efecto tiene semántica formal, así que no hay traducción
-a `ProbabilityModifier`. Cuando exista una regla aprobada, el cambio es un único punto
-(`buildHeroEffectTable` → `table.withModifiers(...)`).
+`CRITICAL_CHANCE` con `appliedToStats = true` es una contradicción del contrato (`effectiveStats` no tiene
+ningún campo de crítico): no se da por consolidado ni se aplica una segunda vez; queda pendiente. No se
+altera `effectiveStats`.
 
-### `CRITICAL_CHANCE`: la ambigüedad sigue abierta
+### Traducción de `CRITICAL_CHANCE`
 
-Catalog publica efectos como `CRITICAL_CHANCE INCREASE PERCENTAGE 300` (p. ej. la _Espada de dos manos_
-para `GUERRERO_ARMAS`). **No existe ninguna fuente formal** —ni el issue de HU-25 (#72), ni HU-28 (#75) y
-su Task (#152), ni el contrato de Catalog— que diga si eso es:
+Para la tabla de HU-25, un efecto `CRITICAL_CHANCE INCREASE PERCENTAGE` de Player-Inventory se traduce así:
 
-- **(a)** **+3 puntos porcentuales absolutos** (como el «+6 %» de la Tabla 23): el crítico de Guerrero
-  Armas pasaría de 5 % a 8 % (400 → 640 filas), o
-- **(b)** **+3 % relativo** sobre el crítico base: 5 % × 1,03 = 5,15 % (400 → 412 filas).
+```text
+PERCENTAGE basisPoints  →  puntos porcentuales ABSOLUTOS de probabilidad
+100 pb = +1 pp = +80 filas          300 pb = +3 pp = +240 filas          600 pb = +6 pp = +480 filas
+```
 
-`ProbabilityModifier.ofBasisPoints` interpreta los puntos básicos como (a), pero eso describe **su**
-entrada, ya expresada en puntos absolutos, no cómo traducir un efecto de Catalog. Player-Inventory trata los
-`PERCENTAGE` de las estadísticas numéricas como relativos a la base, lo que tampoco resuelve el crítico.
-**Combat no elige.** Lo decide el PO.
+La conversión la hace `ProbabilityModifier.ofBasisPoints(RandomEffectType.CriticalDamage, basisPoints)`
+(1 fila = 1,25 pb; solo valen múltiplos de 5 pb, sin redondeo) y el incremento se aplica con
+`EffectControlTable.withModifiers`: sale entero de «no causar daño».
 
-Pruebas que lo fijan (`test/unit/build-hero-effect-table.spec.ts`): con la espada crítica la tabla vigente
-**es** la base (crítico = 400 filas), ni 640 (a) ni 412 (b); lo mismo con 100, 600 y 10 000 pb y con
-magnitud `FIXED` o `DICE`; y la fila 5201 resuelve `EVADE` (con (a) sería crítico).
+**Justificación (Tabla 23).** Guerrero Armas base tiene crítico 5 % y «no causar daño» 30 %. Con «+6 % de
+probabilidad de crítico» del equipamiento, la tabla oficial queda en crítico **11 %** y «no causar daño»
+**24 %**: 5 + 6 = 11 y 30 − 6 = 24. Es decir, el bono es un incremento en puntos porcentuales absolutos, no un
+porcentaje relativo sobre el 5 % (que daría 5,3 %).
 
-### Condiciones, efectos temporales y apilamiento
+**Ejemplo +300 pb (Espada de dos manos, Guerrero Armas)**
+
+| Efecto    | Base             | +300 pb          | Filas (base → +300) |
+| --------- | ---------------- | ---------------- | ------------------- |
+| DAMAGE    | 60 % · 1–4800    | 60 % · 1–4800    | 4800 → 4800         |
+| CRITICAL  | 5 % · 4801–5200  | 8 % · 4801–5440  | 400 → 640           |
+| EVADE     | 3 % · 5201–5440  | 3 % · 5441–5680  | 240 → 240           |
+| ESCAPE    | 2 % · 5441–5600  | 2 % · 5681–5840  | 160 → 160           |
+| NO_DAMAGE | 30 % · 5601–8000 | 27 % · 5841–8000 | 2400 → 2160         |
+
+**Ejemplo +600 pb: reproduce la Tabla 23 exacta**: DAMAGE 1–4800, CRITICAL 11 % (880 filas, 4801–5680),
+EVADE 5681–5920, ESCAPE 5921–6080, NO_DAMAGE 24 % (1920 filas, 6081–8000).
+
+**Varios bonos.** +300 y +200 dan +5 puntos (800 filas de crítico, 2000 de «no causar daño»), en cualquier
+orden. Si la suma supera el «no causar daño» disponible: `InsufficientNoDamageProbabilityError` (consumirlo
+justo hasta 0 es válido).
+
+**Alcance de la regla.** Es **local** a `CRITICAL_CHANCE` + `EffectControlTable`. **No redefine `PERCENTAGE`**
+para otras estadísticas: `ATTACK`, `DEFENSE`, `POWER`, `HEALTH`, `DAMAGE` y `HEALING` con `PERCENTAGE` no se
+interpretan aquí (siguen `NOT_A_TABLE_MODIFIER`), y no cambia nada en Catalog ni en Player-Inventory.
+
+### Casos aún pendientes
+
+No se aplican, **no se inventa su comportamiento** y quedan en `pendingEffects` con su motivo:
 
 - **`hasActivationCondition = true`**: no se trata como modificador permanente. La condición en sí no
   cruza la frontera (Player-Inventory solo envía el indicador): nadie define cuándo se evalúa.
-- **`durationTurns`**: un efecto temporal no es un modificador de una tabla vigente.
+- **`durationTurns`** (efecto temporal): no es un modificador de una tabla vigente.
 - **`target` distinto de `SELF`**: cómo afecta a la tabla del _otro_ participante no está definido.
-- **Varios efectos de la misma estadística** (varias piezas con crítico): no se suman ni se escoge uno; todos
-  quedan pendientes. El apilamiento sigue sin formalizarse (ver más arriba).
+- **Operaciones distintas de `INCREASE`** (`DECREASE`, `SET`, `MULTIPLY`, `BLOCK`...): HU-25 solo define
+  incrementos de probabilidad.
+- **Magnitud `FIXED` o `DICE`** en `CRITICAL_CHANCE`: no dice en qué unidad de probabilidad estaría.
+- **`PERCENTAGE` sin equivalencia exacta en filas** (no múltiplo de 5 pb, negativo o no entero): no se redondea.
+- **`CRITICAL_CHANCE` con `appliedToStats = true`**: contradicción del contrato.
+- **Otras estadísticas de probabilidad** (p. ej. evasión) o efectos que Combat no reconoce: `UNRECOGNIZED_EFFECT`.
 
 ### Contrato cruzado entre repositorios
 
@@ -454,37 +493,49 @@ nuevas** en 2 suites unitarias (y 691 → 866 pruebas en total; se actualizaron 
   ignorados, y rechazo de `playerId` distinto, `heroId` vacío, `subtype` faltante, estadísticas o efectos malformados
   y `activeEffects` ausente (**no** se sustituye por `[]`); `404` → `null` y errores de transporte sin cambios.
 - `build-hero-effect-table` (72) — `subtype` → tabla (Tabla 22, Mago Fuego, Pícaro Machete, Chamán/Médico, subtipo
-  inválido), clasificación de cada efecto, y **las pruebas de que `CRITICAL_CHANCE` no se interpreta** (ni +240 filas
-  ni 412); cadena completa JSON → tabla → efecto.
+  inválido), clasificación de cada efecto, y la aplicación de `CRITICAL_CHANCE` (ver la sección siguiente); cadena completa JSON → tabla → efecto.
 - `test/fixtures/equipped-hero.ts` — fixture contractual único.
-- **Controles de mutación:** 8 defectos deliberados (`activeEffects ?? []`, lectura absoluta del crítico, spread que
+- **Controles de mutación (integración original):** 8 defectos deliberados (`activeEffects ?? []`, lectura absoluta del crítico, spread que
   filtra `raw`, `appliedToStats` antes que el crítico, cast ciego del subtipo, subtipo ignorado, héroe por defecto
   ante `null`, `maxPower` desde `baseStats`) — **8 de 8 detectados**.
+
+**Aplicación de `CRITICAL_CHANCE` a la tabla** (rama `feat/hu-25-critical-chance-modifier`):
+
+- `build-hero-effect-table` — sin efectos → base; +300 pb → crítico 400 → 640 y «sin daño» 2400 → 2160, rangos
+  y fronteras exactos (filas 4800/4801/5440/5441/5680/5681/5840/5841/8000); +600 pb → **Tabla 23 exacta**
+  (880 / 1920); +300 +200 = +5 puntos e independiente del orden; 0 pb; consumo exacto de «no causar daño» (válido) y
+  exceso (`InsufficientNoDamageProbabilityError`); condición de activación, objetivo distinto de `SELF`,
+  temporal, `DECREASE`/`SET`/`MULTIPLY`/`BLOCK`, `FIXED`, `DICE` y `appliedToStats` → pendientes sin cambiar la
+  tabla; no muta la base ni `activeEffects`; `ATTACK PERCENTAGE` sigue sin ser un modificador de la tabla;
+  cadena JSON de Player-Inventory → `PlayerInventoryHttpClient` → tabla (crítico 640, sin daño 2160).
+- `random-effect-resolution` (integración) — con un `RandomSequencePort` controlado, el índice 5300 da `EVADE`
+  con la tabla base y `CRITICAL_DAMAGE` con la espada; con el generador real (HU-24) el equipamiento cambia el
+  resultado sin ninguna otra fuente aleatoria.
 
 ## Limitaciones
 
 - No es el motor de combate: sin Ataque/Defensa, HP, turnos, ataque ni daño numérico.
 - Sin consumidor: ningún flujo invoca `ResolveRandomEffect` ni `BuildHeroEffectTable` (HU-20).
-- **La tabla vigente ignora el equipamiento.** El héroe real y su `subtype` ya determinan la tabla base y los
-  efectos ya llegan, pero ninguno se traduce a un modificador (unidad de `CRITICAL_CHANCE` sin definir).
-  `pendingEffects` lo declara; no se finge que se aplicó.
+- **Solo un efecto de equipamiento modifica la tabla:** `CRITICAL_CHANCE INCREASE PERCENTAGE` incondicional,
+  permanente y sobre uno mismo. Los demás se clasifican y los que podrían afectarla quedan en
+  `pendingEffects` (ver [Casos aún pendientes](#casos-aún-pendientes)); no se finge que se aplicaron.
 - La integración exige que Player-Inventory ya entregue `activeEffects`: contra una versión anterior el
   ingreso a sala falla con 503 (ver [Orden de despliegue](#orden-de-despliegue)).
 - Sin persistencia ni endpoint (no hay requisito que los pida).
 
 ## Pendientes
 
-0. **Integración de extremo a extremo** (lo que separa «núcleo de dominio» de «HU-25 Done»): la parte
-   `subtype` → tabla base **está hecha**; falta traducir los efectos del equipamiento a modificadores
-   (punto 3) y conectar la tabla al flujo de combate de HU-20.
+0. **Integración de extremo a extremo** (lo que separa «núcleo de dominio» de «HU-25 Done»): las partes
+   `subtype` → tabla base y `CRITICAL_CHANCE` → tabla vigente **están hechas**; falta conectar la tabla al
+   flujo de combate de HU-20 (Ataque > Defensa → `BuildHeroEffectTable` → `ResolveRandomEffect`).
 
 1. **Chamán y Médico**: definir su distribución de 100 % (la nota del proyecto pide diseñarla; los
    valores los aprueba el PO/profesor).
 2. **Crítico 120–180 %**: definir cómo se materializa un valor concreto (y con qué fuente).
-3. **Modificadores**: el contrato que entrega los efectos **ya existe** (`activeEffects`). Falta que el
-   PO/profesor defina **la unidad** de `CRITICAL_CHANCE` con `PERCENTAGE` (+3 puntos absolutos vs. +3 %
-   relativo), y además cómo se apilan varios efectos, cuándo se evalúa una condición de activación y qué
-   hacer con los efectos temporales o dirigidos a otro participante. **No se elige por Combat.**
+3. **Modificadores**: `CRITICAL_CHANCE INCREASE PERCENTAGE` incondicional ya modifica la tabla. Falta
+   que el PO/profesor defina cómo tratar el resto: efectos condicionados (cuándo se evalúa la condición),
+   temporales, dirigidos a otro participante, operaciones distintas de `INCREASE`, magnitudes `FIXED`/`DICE`
+   y otras probabilidades. **No se elige por Combat.**
 4. **Distribución «normal» del índice**: ratificar la decisión del índice uniforme.
 5. ~~**`subtype` en el puerto de Combat**~~ — **hecho**: el puerto modela `subtype`, estadísticas y
    `activeEffects`, y `BuildHeroEffectTable` construye la tabla base del héroe real.
