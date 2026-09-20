@@ -25,7 +25,7 @@ Este repositorio contiene código y Pull Requests. No contiene Issues ni Product
 
 ### Tabla de control de efectos aleatorios (HU-25)
 
-**Implementada la resolución `RandomIndex` (HU-24) → fila → efecto y magnitud**: tabla de 8000 filas por tipo de héroe (Tabla 21 del documento oficial: Guerrero Tanque/Armas, Mago Fuego/Hielo, Pícaro Veneno/Machete), mecánica de modificadores (+6 % de crítico compensado desde «no causar daño», Tabla 23) y caso de uso `ResolveRandomEffect`. **Aún no la invoca ningún flujo** (HU-20 deberá hacerlo cuando Ataque > Defensa), no calcula daño numérico y **no hay endpoint público**. Pendientes: Chamán/Médico sin tabla válida en el documento, selección concreta del crítico 120–180 % y contrato de modificadores desde Player-Inventory. Ver [docs/hu-25-effect-control-table.md](docs/hu-25-effect-control-table.md).
+**Implementada la resolución `RandomIndex` (HU-24) → fila → efecto y magnitud**: tabla de 8000 filas por tipo de héroe (Tabla 21 del documento oficial: Guerrero Tanque/Armas, Mago Fuego/Hielo, Pícaro Veneno/Machete), mecánica de modificadores (+6 % de crítico compensado desde «no causar daño», Tabla 23) y caso de uso `ResolveRandomEffect`. **Aún no la invoca ningún flujo** (HU-20 deberá hacerlo cuando Ataque > Defensa), **nadie construye todavía la tabla a partir del héroe equipado real**, no calcula daño numérico y **no hay endpoint público**. Pendientes: Chamán/Médico sin tabla válida en el documento, selección concreta del crítico 120–180 % y contrato de modificadores desde Player-Inventory. Ver [docs/hu-25-effect-control-table.md](docs/hu-25-effect-control-table.md).
 
 ## Qué posee este contexto
 

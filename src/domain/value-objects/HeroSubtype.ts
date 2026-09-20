@@ -11,8 +11,11 @@ import { DomainError } from '../errors/DomainError'
  *
  * Terminologia de la Tabla 21: Guerrero (Tanque, Armas), Mago (Fuego, Hielo),
  * Picaro (Veneno, Machete) y Sanadores (Chaman, Medico).
+ *
+ * CONGELADO en runtime (`Object.freeze`): `as const` solo protege en tiempo de
+ * compilacion, y este registro decide que tabla de efectos se usa.
  */
-export const HeroSubtype = {
+export const HeroSubtype = Object.freeze({
   GuerreroTanque: 'GUERRERO_TANQUE',
   GuerreroArmas: 'GUERRERO_ARMAS',
   MagoFuego: 'MAGO_FUEGO',
@@ -21,11 +24,12 @@ export const HeroSubtype = {
   PicaroMachete: 'PICARO_MACHETE',
   Chaman: 'CHAMAN',
   Medico: 'MEDICO',
-} as const
+} as const)
 
 export type HeroSubtype = (typeof HeroSubtype)[keyof typeof HeroSubtype]
 
-export const HERO_SUBTYPES: readonly HeroSubtype[] = Object.values(HeroSubtype)
+/** Lista CONGELADA en runtime: un `push()` o `reverse()` desde JavaScript lanza `TypeError`. */
+export const HERO_SUBTYPES = Object.freeze<readonly HeroSubtype[]>(Object.values(HeroSubtype))
 
 /**
  * Valida un codigo de subtipo recibido de otro servicio. El codigo se compara
