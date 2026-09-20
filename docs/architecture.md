@@ -40,6 +40,10 @@ Todas las llamadas salientes que mueven créditos o productos siguen el patrón 
 
 Implementado como puerto `RandomSequenceFactoryPort` (`application/ports/RandomSequencePort.ts`) con adaptador en `adapters/outbound/system`: **MT19937 → Box-Müller → estrategia normal→índice → `RandomIndex` (1..8000)**. La lógica de combate consume solo `RandomSequencePort.nextIndex()`; la normal cruda (`NormalSequencePort`) es un objeto independiente reservado a validación y no desplaza los índices. La semilla se entrega al crear una secuencia con estado; no hay singleton ni cursor global, y ningún cliente conoce semilla, estado ni índice. La estrategia normal→índice es una **decisión técnica provisional** y está aislada en `NormalToIndexMapper`. Aún **no lo consume ningún caso de uso** (HU-25 y la simulación para Missions lo harán) y no se creó ninguna ruta. Detalle, evidencia y decisiones pendientes en [hu-24-randomness-engine.md](hu-24-randomness-engine.md).
 
+## Tabla de control de efectos aleatorios (HU-25)
+
+Dominio puro en `domain/random-effects` (`EffectControlTable`, `ProbabilityModifier`, `BaseEffectProfiles`) y el caso de uso `ResolveRandomEffect`, que consume **solo** `RandomSequencePort.nextIndex()` (HU-24) y resuelve el efecto y su magnitud relativa. Combat sigue siendo la única autoridad: el cliente no selecciona fila ni efecto y no hay endpoint. Todavía **no lo invoca ningún flujo de batalla** (HU-20) y **nadie construye la tabla a partir del héroe equipado real** (Player-Inventory aún no entrega los modificadores). Detalle y pendientes en [hu-25-effect-control-table.md](hu-25-effect-control-table.md).
+
 ## Contrato previsto
 
 - `POST /api/v1/combat/rooms` y `GET /api/v1/combat/rooms` — crear y listar salas (HU-14, implementado).
