@@ -45,6 +45,12 @@ const IDENTITIES: Readonly<Record<string, VerifiedIdentity>> = {
     email: null,
     roles: new Set([Role.Player]),
   },
+  // HU-16 (RF-16, Management#25/#401/#402): testimonios validos para
+  // sujetos cuyo heroe equipado hace que `PrecombatEligibilityPolicy`
+  // rechace la union, ver `stubEquippedHeroes` mas abajo.
+  'token-sin-heroe': { subject: 'sujeto-sin-heroe', email: null, roles: new Set([Role.Player]) },
+  'token-no-listo': { subject: 'sujeto-no-listo', email: null, roles: new Set([Role.Player]) },
+  'token-chaman': { subject: 'sujeto-chaman', email: null, roles: new Set([Role.Player]) },
 }
 
 const stubVerifier: TokenVerifierPort = {
@@ -92,9 +98,45 @@ const stubAccountProfiles: AccountBattleProfilePort = {
   },
 }
 
+/**
+ * HU-16 (RF-16, Management#25/#401/#402): tres sujetos reservados ejercitan
+ * `PrecombatEligibilityPolicy` sobre HTTP, mismo criterio que
+ * `stubAccountProfiles` de arriba con `sujeto-sin-cuenta`/`sujeto-account-caido`.
+ * Cualquier otro sujeto sigue resolviendo un heroe listo y sin restriccion,
+ * igual que antes de HU-16.
+ */
 const stubEquippedHeroes: PlayerInventoryEquippedHeroPort = {
-  getEquippedHero: (playerId) =>
-    Promise.resolve(equippedHeroFixture({ playerId, heroId: `heroe-de-${playerId}` })),
+  getEquippedHero: (playerId) => {
+    if (playerId === 'sujeto-sin-heroe') {
+      return Promise.resolve(null)
+    }
+
+    if (playerId === 'sujeto-no-listo') {
+      return Promise.resolve(
+        equippedHeroFixture({
+          playerId,
+          heroId: `heroe-de-${playerId}`,
+          ready: false,
+          blockers: [
+            {
+              code: 'EQUIPPED_PRODUCT_NOT_OWNED',
+              slot: 'WEAPON_1',
+              reference: 'espada-de-dos-manos',
+              detail: 'El producto equipado ya no esta en el inventario del jugador.',
+            },
+          ],
+        }),
+      )
+    }
+
+    if (playerId === 'sujeto-chaman') {
+      return Promise.resolve(
+        equippedHeroFixture({ playerId, heroId: `heroe-de-${playerId}`, subtype: 'CHAMAN' }),
+      )
+    }
+
+    return Promise.resolve(equippedHeroFixture({ playerId, heroId: `heroe-de-${playerId}` }))
+  },
 }
 
 const withEnv = (values: Record<string, string>): (() => void) => {
@@ -596,6 +638,82 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
 
       const statuses = [first.status, second.status].sort((a, b) => a - b)
       expect(statuses).toEqual([200, 409])
+    })
+
+    describe('elegibilidad precombate (HU-16, RF-16, Management#25/#401/#402)', () => {
+      it('422 con code HERO_NOT_SELECTED cuando el jugador no tiene ningun heroe equipado', async () => {
+        const created = await authed('token-creador')(
+          request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+        )
+
+        const response = await authed('token-sin-heroe')(
+          request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+        )
+
+        expect(response.status).toBe(422)
+        expect(response.body).toMatchObject({ code: 'HERO_NOT_SELECTED' })
+      })
+
+      it('422 con blockers reenviados de Player-Inventory cuando el heroe equipado no esta listo', async () => {
+        const created = await authed('token-creador')(
+          request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+        )
+
+        const response = await authed('token-no-listo')(
+          request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+        )
+
+        expect(response.status).toBe(422)
+        expect(response.body.blockers).toEqual([
+          expect.objectContaining({ code: 'EQUIPPED_PRODUCT_NOT_OWNED' }),
+        ])
+      })
+
+      it('422 con blockers HERO_CLASS_NOT_ALLOWED_FOR_FORMAT cuando un CHAMAN intenta unirse a una sala 1 contra 1', async () => {
+        const created = await authed('token-creador')(
+          // validRoom() ya es 1v1 (dos equipos de capacidad 1).
+          request(app.getHttpServer()).post('/api/v1/combat/rooms').send(validRoom()),
+        )
+
+        const response = await authed('token-chaman')(
+          request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+        )
+
+        expect(response.status).toBe(422)
+        expect(response.body.blockers).toEqual([
+          expect.objectContaining({ code: 'HERO_CLASS_NOT_ALLOWED_FOR_FORMAT' }),
+        ])
+      })
+
+      it('200: un CHAMAN SI puede unirse a una sala de equipo (2v2)', async () => {
+        const created = await authed('token-creador')(
+          request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+        )
+
+        const response = await authed('token-chaman')(
+          request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+        )
+
+        expect(response.status).toBe(200)
+      })
+
+      it('el DTO de respuesta de un join valido no expone heroLoadoutVersion (detalle interno de TOCTOU, fuera de alcance de HU-16.2)', async () => {
+        const created = await authed('token-creador')(
+          request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+        )
+
+        const response = await authed('token-otro')(
+          request(app.getHttpServer()).post(`/api/v1/combat/rooms/${String(created.body.id)}/join`),
+        )
+
+        expect(response.status).toBe(200)
+        const allParticipants = (
+          response.body.teams as { participants: Record<string, unknown>[] }[]
+        ).flatMap((team) => team.participants)
+        for (const participant of allParticipants) {
+          expect(participant).not.toHaveProperty('heroLoadoutVersion')
+        }
+      })
     })
   })
 

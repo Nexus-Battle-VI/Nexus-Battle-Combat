@@ -45,8 +45,18 @@ export class UpstreamServiceError extends Error {
  * todavia. Distinto de `UpstreamServiceError`: aqui Player-Inventory SI
  * respondio, y la respuesta es "no hay heroe", un camino de negocio valido,
  * no una falla de integracion.
+ *
+ * `code` (HU-16.1/HU-16.2, DP-7): estructurado y ADITIVO, siguiendo el MISMO
+ * patron que `AccountProfileMissingError` de mas abajo -- antes de esta
+ * ampliacion este error caia en el 422 generico sin codigo (hallazgo de la
+ * auditoria HU-16.1), indistinguible en el cuerpo de la respuesta de
+ * cualquier otro 422. Distinto de `PrecombatEligibilityBlockedError`
+ * (HU-16): aqui el jugador NO TIENE NINGUN heroe equipado; alli SI lo tiene,
+ * pero no es elegible para la sala concreta.
  */
 export class PlayerWithoutEquippedHeroError extends Error {
+  readonly code = 'HERO_NOT_SELECTED'
+
   constructor(playerId: string) {
     super(`El jugador "${playerId}" no tiene un heroe equipado.`)
     this.name = 'PlayerWithoutEquippedHeroError'

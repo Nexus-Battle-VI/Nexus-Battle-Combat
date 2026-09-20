@@ -1,5 +1,6 @@
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { RoomConflictError, RoomNotFoundError } from '../../src/application/errors/ApplicationError'
+import { PrecombatEligibilityBlockedError } from '../../src/application/errors/PrecombatEligibilityError'
 import {
   AccountProfileMissingError,
   PlayerWithoutEquippedHeroError,
@@ -479,6 +480,132 @@ describe('JoinBattleRoom', () => {
       DuplicateDisplayNameError,
     )
     expect(saveSpy).not.toHaveBeenCalled()
+  })
+
+  describe('elegibilidad precombate (HU-16, RF-16, Management#25/#401/#402)', () => {
+    it('heroe con ready=false -> PrecombatEligibilityBlockedError con los blockers de Player-Inventory, nunca invoca repository.save()', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+      const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+      const created = await create.execute(
+        CREATOR,
+        basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+      )
+
+      const blocker = {
+        code: 'EQUIPPED_PRODUCT_NOT_OWNED',
+        slot: 'WEAPON_1',
+        reference: 'espada-de-dos-manos',
+        detail: 'El producto equipado ya no esta en el inventario del jugador.',
+      }
+      const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
+        getEquippedHero: (playerId) =>
+          Promise.resolve(equippedHeroFixture({ playerId, ready: false, blockers: [blocker] })),
+      })
+      const saveSpy = jest.spyOn(repo, 'save')
+
+      const outcome = join.execute(created.id, JOINER, null)
+
+      await expect(outcome).rejects.toBeInstanceOf(PrecombatEligibilityBlockedError)
+      await expect(outcome).rejects.toMatchObject({ blockers: [blocker] })
+      expect(saveSpy).not.toHaveBeenCalled()
+    })
+
+    it.each(['CHAMAN', 'MEDICO'])(
+      '%s intenta unirse a una sala 1 contra 1 (1v1) -> PrecombatEligibilityBlockedError (DP-5)',
+      async (subtype) => {
+        const repo = new InMemoryBattleRoomRepository()
+        const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+        const created = await create.execute(
+          CREATOR,
+          basicInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        )
+
+        const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
+          getEquippedHero: (playerId) =>
+            Promise.resolve(equippedHeroFixture({ playerId, subtype })),
+        })
+        const saveSpy = jest.spyOn(repo, 'save')
+
+        const outcome = join.execute(created.id, JOINER, null)
+
+        await expect(outcome).rejects.toBeInstanceOf(PrecombatEligibilityBlockedError)
+        await expect(outcome).rejects.toMatchObject({
+          blockers: [expect.objectContaining({ code: 'HERO_CLASS_NOT_ALLOWED_FOR_FORMAT' })],
+        })
+        expect(saveSpy).not.toHaveBeenCalled()
+      },
+    )
+
+    it.each(['CHAMAN', 'MEDICO'])(
+      '%s SI puede unirse a una sala de EQUIPO (2v2) (DP-5)',
+      async (subtype) => {
+        const repo = new InMemoryBattleRoomRepository()
+        const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+        const created = await create.execute(
+          CREATOR,
+          basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+        )
+
+        const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
+          getEquippedHero: (playerId) =>
+            Promise.resolve(equippedHeroFixture({ playerId, subtype })),
+        })
+
+        const dto = await join.execute(created.id, JOINER, null)
+
+        expect(dto.status).toBe('WAITING_FOR_PLAYERS')
+      },
+    )
+
+    it('guerrero (clase no restringida) SI puede unirse a una sala 1 contra 1', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+      const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+      const created = await create.execute(
+        CREATOR,
+        basicInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+      )
+
+      const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
+        getEquippedHero: (playerId) =>
+          Promise.resolve(equippedHeroFixture({ playerId, subtype: 'GUERRERO_TANQUE' })),
+      })
+
+      const dto = await join.execute(created.id, JOINER, null)
+
+      expect(dto.status).toBe('WAITING_FOR_PLAYERS')
+    })
+
+    it('DP-6: la version del loadout de Player-Inventory se captura en el participante persistido (no en el DTO publico, minimizacion de datos)', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+      const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+      const created = await create.execute(
+        CREATOR,
+        basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+      )
+
+      const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
+        getEquippedHero: (playerId) =>
+          Promise.resolve(equippedHeroFixture({ playerId, loadoutVersion: 7 })),
+      })
+
+      const dto = await join.execute(created.id, JOINER, null)
+      const room = await repo.findById(created.id)
+      const allParticipants = [
+        ...(room?.teams[0].participants ?? []),
+        ...(room?.teams[1].participants ?? []),
+      ]
+
+      expect(allParticipants).toContainEqual(
+        expect.objectContaining({ playerId: JOINER, heroLoadoutVersion: 7 }),
+      )
+      // El DTO publico (lo que ve Web) NO expone heroLoadoutVersion: es un
+      // detalle interno de TOCTOU (HU-16.3, integracion Web, esta fuera de
+      // alcance de HU-16.2).
+      const allDtoParticipants = [...dto.teams[0].participants, ...dto.teams[1].participants]
+      for (const participant of allDtoParticipants) {
+        expect(participant).not.toHaveProperty('heroLoadoutVersion')
+      }
+    })
   })
 })
 

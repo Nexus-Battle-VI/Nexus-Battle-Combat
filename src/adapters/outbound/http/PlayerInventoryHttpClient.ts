@@ -1,6 +1,7 @@
 import { UpstreamServiceError } from '../../../application/errors/UpstreamErrors'
 import type {
   EquippedHero,
+  EquippedHeroBlocker,
   EquippedHeroEffect,
   EquippedHeroMagnitude,
   EquippedHeroStats,
@@ -31,10 +32,13 @@ const SERVICE = 'player-inventory'
  * blanca; nunca se hace `body as EquippedHero`. Cualquier estructura que no
  * cumpla el contrato lanza `UpstreamServiceError(player-inventory,
  * respuesta_invalida)` (503): Combat no inventa estadisticas, efectos ni un
- * `[]` por defecto. En particular `activeEffects` es OBLIGATORIO: sustituirlo
- * por `[]` cuando falta haria que Combat usara la tabla base ignorando el
- * equipamiento real de un Player-Inventory anterior al contrato. Por eso el
- * productor se despliega primero (ver `docs/hu-25-effect-control-table.md`).
+ * `[]` por defecto. En particular `activeEffects`, `blockers` y
+ * `loadoutVersion` son OBLIGATORIOS: sustituir `blockers` por `[]` cuando
+ * falta haria que `PrecombatEligibilityPolicy` (HU-16.2) viera un heroe con
+ * `ready=false` como si no tuviera ningun motivo declarado, y sustituir
+ * `loadoutVersion` por `0` inventaria una version que Player-Inventory nunca
+ * confirmo. Por eso el productor se despliega primero (ver
+ * `docs/hu-25-effect-control-table.md` y `docs/hu-16-precombat-eligibility.md`).
  *
  * VALIDA LA FORMA, NO EL VOCABULARIO. `kind`, `target`, `statistic`,
  * `operation` y `subtype` deben ser texto no vacio, pero no se comparan con una
@@ -199,6 +203,42 @@ const parseActiveEffects = (value: unknown): readonly EquippedHeroEffect[] => {
   return value.map(parseEffect)
 }
 
+const nullableNonEmptyString = (value: unknown): string | null =>
+  value === null ? null : nonEmptyString(value)
+
+/**
+ * Motivo de bloqueo de readiness (HU-16.1/HU-16.2, DP-1/DP-7). `code` es
+ * texto abierto, igual que `kind`/`target` de un efecto: el vocabulario lo
+ * posee Player-Inventory (`HeroReadinessPolicy`) y puede crecer sin que este
+ * parser deba reconocerlo para reenviarlo tal cual.
+ */
+const parseBlocker = (value: unknown): EquippedHeroBlocker => {
+  const record = asRecord(value)
+
+  return {
+    code: nonEmptyString(record.code),
+    slot: nullableNonEmptyString(record.slot),
+    reference: nonEmptyString(record.reference),
+    detail: nonEmptyString(record.detail),
+  }
+}
+
+/**
+ * OBLIGATORIO, igual que `activeEffects`: no se sustituye por `[]` cuando
+ * falta. Un `blockers` ausente en un `ready=false` haria que
+ * `PrecombatEligibilityPolicy` viera "no listo, sin motivo" -- exactamente
+ * el caso que esa politica ya cubre con su propio blocker generico
+ * (`HERO_NOT_READY`), pero solo debe ocurrir por un contrato real que aun no
+ * declara motivos, nunca porque este parser lo trato como opcional.
+ */
+const parseBlockers = (value: unknown): readonly EquippedHeroBlocker[] => {
+  if (!Array.isArray(value)) {
+    throw invalidResponse()
+  }
+
+  return value.map(parseBlocker)
+}
+
 const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHero => {
   const record = asRecord(body)
 
@@ -221,6 +261,8 @@ const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHer
     maxPower: effectiveStats.power,
     activeEffects: parseActiveEffects(record.activeEffects),
     ready: requiredBoolean(record.ready),
+    blockers: parseBlockers(record.blockers),
+    loadoutVersion: nonNegativeInteger(record.loadoutVersion),
     selectedAt: isoInstant(record.selectedAt),
   }
 }

@@ -28,7 +28,25 @@
  * en el parser: hacerlo rechazaria (503) el INGRESO A SALA de un jugador con un
  * heroe de un subtipo nuevo, cuando el ingreso ni siquiera usa la tabla de
  * efectos. Se valida (`parseHeroSubtype`) cuando de verdad se necesita, al
- * construir la tabla (`BuildHeroEffectTable`).
+ * construir la tabla (`BuildHeroEffectTable`). Por el MISMO motivo,
+ * `PrecombatEligibilityPolicy` (HU-16.2) tampoco lo valida contra el
+ * registro: compara el texto crudo contra los DOS codigos restringidos
+ * (`CHAMAN`, `MEDICO`), sin rechazar un subtipo nuevo que no este en ninguna
+ * lista.
+ *
+ * AMPLIACION ADITIVA (HU-16.1/HU-16.2, Management#401/#402): se incorporan
+ * `blockers` y `loadoutVersion`, ya reales en el contrato de Player-Inventory
+ * (`docs/equipped-hero-contract.md` alli) pero no consumidos hasta ahora.
+ *
+ *  - `blockers`: la MISMA lista de motivos de `HeroReadinessPolicy` que ya
+ *    explica un `ready=false`. Antes de esta ampliacion Combat sabia QUE el
+ *    heroe no estaba listo, pero no POR QUE -- y no podia comunicarlo a quien
+ *    pide unirse. Se reenvian tal cual (`PrecombatEligibilityPolicy`, HU-16):
+ *    no se crea una segunda taxonomia de motivos de equipamiento.
+ *  - `loadoutVersion`: version real de bloqueo optimista de `HeroLoadout`.
+ *    Permite capturar, al unirse, una referencia verificable de la
+ *    configuracion aprobada (DP-6 de la auditoria HU-16.1) sin copiar el
+ *    inventario del jugador.
  */
 export interface EquippedHero {
   readonly playerId: string
@@ -53,8 +71,37 @@ export interface EquippedHero {
    */
   readonly activeEffects: readonly EquippedHeroEffect[]
   readonly ready: boolean
+  /**
+   * Motivos por los que `ready` es `false` (HU-16.1/HU-16.2). Vacio cuando
+   * `ready` es `true`. Mismos codigos que `HeroReadiness.blockers[].code` de
+   * Player-Inventory (`HERO_NOT_ACTIVE`, `EQUIPPED_PRODUCT_NOT_OWNED`,
+   * `EQUIPPED_PRODUCT_NOT_ACTIVE`, y los que ese servicio agregue despues):
+   * texto abierto, no una union cerrada -- el vocabulario lo posee
+   * Player-Inventory.
+   */
+  readonly blockers: readonly EquippedHeroBlocker[]
+  /**
+   * Version de bloqueo optimista de `HeroLoadout` (HU-16.1/HU-16.2, DP-6).
+   * `0` cuando el heroe nunca tuvo loadout persistido. Entero no negativo.
+   */
+  readonly loadoutVersion: number
   /** Instante ISO-8601 en que el jugador preparo el heroe. */
   readonly selectedAt: string
+}
+
+/**
+ * Motivo de bloqueo de readiness, tal como lo publica `HeroReadinessPolicy`
+ * de Player-Inventory. `code` viaja como texto abierto por el mismo motivo
+ * que `kind`/`target`/`statistic` de `EquippedHeroEffect`: el vocabulario lo
+ * posee Player-Inventory y puede crecer sin que Combat deba reconocerlo para
+ * reenviarlo.
+ */
+export interface EquippedHeroBlocker {
+  readonly code: string
+  /** Ranura afectada, o `null` cuando el impedimento es del propio heroe. */
+  readonly slot: string | null
+  readonly reference: string
+  readonly detail: string
 }
 
 /**

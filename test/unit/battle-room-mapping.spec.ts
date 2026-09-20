@@ -52,6 +52,43 @@ describe('battle-room-mapping (HU-15.2, migracion 003, retrocompatibilidad)', ()
     })
   })
 
+  it('un documento sin heroLoadoutVersion (pre-004, HU-16.2) se traduce a heroLoadoutVersion: null, sin lanzar', () => {
+    const snapshot = toSnapshot(BASE_DOCUMENT)
+
+    expect(snapshot.teams[0].participants[0]).toMatchObject({
+      playerId: 'jugador-1',
+      heroLoadoutVersion: null,
+    })
+  })
+
+  it('toDocument()/toSnapshot() redondean heroLoadoutVersion cuando esta presente (HU-16.2, DP-6)', () => {
+    const snapshotWithVersion: BattleRoomSnapshot = {
+      ...toSnapshot(BASE_DOCUMENT),
+      teams: [
+        {
+          label: 'A',
+          capacity: 1,
+          participants: [
+            {
+              kind: 'HUMAN',
+              playerId: 'jugador-1',
+              heroId: 'heroe-1',
+              heroLoadoutVersion: 3,
+              displayName: 'Nombre Visible',
+              joinedAt: new Date('2026-09-19T00:00:00.000Z'),
+            },
+          ],
+        },
+        { label: 'B', capacity: 1, participants: [] },
+      ],
+    }
+
+    const document = toDocument(snapshotWithVersion)
+    const roundTripped = toSnapshot(document)
+
+    expect(roundTripped.teams[0].participants[0]).toMatchObject({ heroLoadoutVersion: 3 })
+  })
+
   it('toDocument()/toSnapshot() redondean displayName cuando esta presente', () => {
     const snapshotWithDisplayName: BattleRoomSnapshot = {
       ...toSnapshot(BASE_DOCUMENT),

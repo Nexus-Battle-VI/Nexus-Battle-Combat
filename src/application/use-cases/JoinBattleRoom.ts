@@ -1,4 +1,9 @@
+import {
+  assessPrecombatEligibility,
+  isIndividualFormat,
+} from '../../domain/policies/PrecombatEligibilityPolicy'
 import { RoomNotFoundError } from '../errors/ApplicationError'
+import { PrecombatEligibilityBlockedError } from '../errors/PrecombatEligibilityError'
 import { PlayerWithoutEquippedHeroError } from '../errors/UpstreamErrors'
 import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
 import type { AccountBattleProfilePort } from '../ports/AccountBattleProfilePort'
@@ -26,15 +31,29 @@ import type { PlayerInventoryEquippedHeroPort } from '../ports/PlayerInventoryEq
  *     `PlayerWithoutEquippedHeroError` (422), no se deja pasar un
  *     `Participant` sin `heroId`.
  *  4. Carga de la sala (`RoomNotFoundError` si no existe).
- *  5. `BattleRoom.join()` (dominio) valida, EN ORDEN: estado
+ *  5. `PrecombatEligibilityPolicy.assessPrecombatEligibility()` (HU-16, RF-16,
+ *     Management#25/#401/#402): con la sala YA cargada (para derivar el
+ *     formato de sus equipos, DP-5) y el `EquippedHero` YA resuelto
+ *     (`ready`, `blockers`, `subtype`), decide si ESTE heroe puede unirse a
+ *     ESTA sala. No elegible -> `PrecombatEligibilityBlockedError` (422),
+ *     CON los `blockers` completos (Player-Inventory reenviados tal cual,
+ *     mas los propios de formato/clase). Esta politica NO evalua nivel de
+ *     heroe, nivel minimo de sala ni mision activa: ninguno de los tres
+ *     tiene hoy una fuente autoritativa real (auditoria HU-16.1, DP-2/DP-3/
+ *     DP-4) y esta TASK no los inventa.
+ *  6. `BattleRoom.join()` (dominio) valida, EN ORDEN: estado
  *     (`RoomNotJoinableError`), jugador duplicado
  *     (`PlayerAlreadyJoinedError`), nombre duplicado
  *     (`DuplicateDisplayNameError`, DP-2) y cupo del equipo
- *     (`RoomFullError`); agrega el participante y decide `PREPARING` si
+ *     (`RoomFullError`); agrega el participante -- capturando
+ *     `EquippedHero.loadoutVersion` en `Participant.heroLoadoutVersion`
+ *     (HU-16.2, DP-6: referencia verificable de la configuracion aprobada,
+ *     sin revalidacion todavia porque no existe un punto futuro de
+ *     "inicio de combate" en el dominio actual) -- y decide `PREPARING` si
  *     corresponde.
- *  6. `repository.save()` con el bloqueo optimista de la version leida.
+ *  7. `repository.save()` con el bloqueo optimista de la version leida.
  *
- * Si CUALQUIER paso 2-5 lanza, `repository.save()` NUNCA se invoca: no hay
+ * Si CUALQUIER paso 2-6 lanza, `repository.save()` NUNCA se invoca: no hay
  * persistencia parcial de un estado invalido, mismo criterio que la version
  * anterior de este caso de uso.
  *
@@ -66,12 +85,24 @@ export class JoinBattleRoom {
       throw new RoomNotFoundError(roomId)
     }
 
+    const eligibility = assessPrecombatEligibility({
+      heroSubtype: equippedHero.subtype,
+      individualFormat: isIndividualFormat(room.teams),
+      heroReady: equippedHero.ready,
+      heroBlockers: equippedHero.blockers,
+    })
+
+    if (!eligibility.eligible) {
+      throw new PrecombatEligibilityBlockedError(playerId, eligibility.blockers)
+    }
+
     const joined = room.join(
       playerId,
       team,
       this.clock.now(),
       profile.displayName,
       equippedHero.heroId,
+      equippedHero.loadoutVersion,
     )
     const saved = await this.rooms.save(joined, room.version)
 

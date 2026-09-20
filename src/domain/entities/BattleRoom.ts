@@ -249,6 +249,13 @@ export class BattleRoom {
    * argumentos -- todas las pruebas de `HU-15.2` anteriores a esta ampliacion
    * siguen compilando y pasando sin modificarse.
    *
+   * `heroLoadoutVersion` (HU-16.2, DP-6 de la auditoria HU-16.1): MISMO
+   * criterio, parametro opcional adicional al final, `null` por defecto.
+   * `JoinBattleRoom` lo resuelve SIEMPRE de `EquippedHero.loadoutVersion`
+   * (Player-Inventory) antes de llamar, nunca del cliente. Captura la
+   * version de equipamiento aprobada en el momento de unirse; no la
+   * revalida (ver `Participant.heroLoadoutVersion`).
+   *
    * Precondiciones, en orden: 1) `status === WAITING_FOR_PLAYERS`
    * (`RoomNotJoinableError`); 2) el jugador no es ya participante HUMAN de la
    * sala (`PlayerAlreadyJoinedError`, reutilizando la misma deteccion de
@@ -267,13 +274,14 @@ export class BattleRoom {
     at: Date,
     displayName: string | null = null,
     heroId: string | null = null,
+    heroLoadoutVersion: number | null = null,
   ): BattleRoom {
     if (this.status !== BattleRoomStatus.WaitingForPlayers) {
       throw new RoomNotJoinableError(this.id, this.status)
     }
 
     const participant = createParticipant(
-      { kind: ParticipantKind.Human, playerId, heroId, displayName },
+      { kind: ParticipantKind.Human, playerId, heroId, heroLoadoutVersion, displayName },
       at,
     )
     const allParticipants = [...this.teams[0].participants, ...this.teams[1].participants]

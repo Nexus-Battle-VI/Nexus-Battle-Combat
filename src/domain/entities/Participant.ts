@@ -20,7 +20,12 @@ export type ParticipantKind = (typeof ParticipantKind)[keyof typeof ParticipantK
  * `playerId` y `heroId` son referencias opacas (string), NUNCA objetos
  * copiados del perfil o del equipamiento real — mismo criterio que
  * `HeroSelection.ts` de Player-Inventory: "ES UNA SELECCION, NO UNA COPIA".
- * Combat no consulta Player-Inventory ni valida equipamiento (HU-16).
+ *
+ * ACTUALIZADO EN HU-16 (RF-16, Management#25/#401/#402): Combat SI consulta
+ * ahora Player-Inventory para decidir elegibilidad precombate
+ * (`PrecombatEligibilityPolicy`) antes de aceptar la union, aunque sigue sin
+ * VALIDAR EQUIPAMIENTO por su cuenta (esa autoridad permanece en
+ * Player-Inventory, DP-1 de la auditoria HU-16.1).
  */
 export interface Participant {
   readonly kind: ParticipantKind
@@ -28,6 +33,26 @@ export interface Participant {
   readonly playerId: string | null
   /** Opcional para ambos tipos. No se modela `difficulty`/`archetype` para `AI`. */
   readonly heroId: string | null
+  /**
+   * Version de `HeroLoadout` (Player-Inventory) EN EL MOMENTO de unirse
+   * (HU-16.2, DP-6 de la auditoria HU-16.1). `null` para `AI` y para
+   * `HUMAN` sin `heroId` resuelto (no deberia ocurrir en el flujo real de
+   * `JoinBattleRoom`, que siempre resuelve un heroe equipado antes de
+   * llamar `join()`, pero el campo es opcional en la firma por el MISMO
+   * criterio de retrocompatibilidad que `displayName`).
+   *
+   * PROPOSITO: referencia VERIFICABLE de la configuracion de equipamiento
+   * aprobada al unirse, sin copiar el inventario (mismo criterio que
+   * `heroId`: una referencia, no una copia). Permite detectar mas tarde que
+   * el jugador cambio su equipamiento DESPUES de validarse (TOCTOU) si se
+   * revalida contra `HeroLoadout.version` en un punto futuro del ciclo de
+   * vida de la sala -- HOY no existe ese punto de revalidacion (no hay
+   * transicion de "inicio de combate" mas alla de WAITING_FOR_PLAYERS ->
+   * PREPARING, que es automatica por cupo): este campo CAPTURA la
+   * configuracion aprobada, la revalidacion queda para cuando exista un
+   * motor de combate real (ver `docs/hu-16-precombat-eligibility.md`).
+   */
+  readonly heroLoadoutVersion: number | null
   /**
    * Snapshot del nombre visible en el momento de unirse (HU-15.2, RF-15,
    * DP-2). Resuelto SIEMPRE por `JoinBattleRoom` desde el contrato interno
@@ -45,6 +70,7 @@ export interface ParticipantInput {
   readonly kind: string
   readonly playerId?: string | null
   readonly heroId?: string | null
+  readonly heroLoadoutVersion?: number | null
   readonly displayName?: string | null
   /** Cuando se restaura desde persistencia, la fecha guardada. */
   readonly joinedAt?: Date
@@ -66,6 +92,7 @@ export const createParticipant = (input: ParticipantInput, at: Date): Participan
   }
 
   const heroId = normalizeOptional(input.heroId)
+  const heroLoadoutVersion = normalizeVersion(input.heroLoadoutVersion)
   const displayName = normalizeOptional(input.displayName)
   const joinedAt = input.joinedAt ?? at
 
@@ -80,14 +107,28 @@ export const createParticipant = (input: ParticipantInput, at: Date): Participan
       throw new DomainError('Un participante HUMAN necesita un jugador.')
     }
 
-    return { kind: ParticipantKind.Human, playerId, heroId, displayName, joinedAt }
+    return {
+      kind: ParticipantKind.Human,
+      playerId,
+      heroId,
+      heroLoadoutVersion,
+      displayName,
+      joinedAt,
+    }
   }
 
   if (normalizeOptional(input.playerId) !== null) {
     throw new DomainError('Un participante AI no lleva jugador.')
   }
 
-  return { kind: ParticipantKind.Ai, playerId: null, heroId, displayName, joinedAt }
+  return {
+    kind: ParticipantKind.Ai,
+    playerId: null,
+    heroId,
+    heroLoadoutVersion,
+    displayName,
+    joinedAt,
+  }
 }
 
 const normalizeOptional = (value: string | null | undefined): string | null => {
@@ -98,4 +139,23 @@ const normalizeOptional = (value: string | null | undefined): string | null => {
   const trimmed = value.trim()
 
   return trimmed.length === 0 ? null : trimmed
+}
+
+/**
+ * Estructural (`DomainError`), no una regla de negocio: la version del
+ * loadout ya fue validada como entero no negativo por
+ * `PlayerInventoryHttpClient` al leerla de Player-Inventory; esta
+ * comprobacion es defensa en profundidad contra datos malformados que
+ * lleguen por otra via (p. ej. restaurar un documento corrupto).
+ */
+const normalizeVersion = (value: number | null | undefined): number | null => {
+  if (value === undefined || value === null) {
+    return null
+  }
+
+  if (!Number.isInteger(value) || value < 0) {
+    throw new DomainError('La version del loadout del heroe debe ser un entero no negativo.')
+  }
+
+  return value
 }
