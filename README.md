@@ -50,16 +50,19 @@ Ningún otro servicio accede a este almacén, ni directamente ni con claves for�
 | HU-17 | [Determinar orden de turnos](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/26)                                 |
 | HU-20 | [Calcular resultado de un ataque (Ataque vs. Defensa)](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/64)       |
 | HU-18 | [Ejecutar ataque básico](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/62)                                     |
-| HU-11 | [Gestión del recurso Poder](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/20)                                  |
 | HU-19 | [Ejecutar habilidad épica](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/63)                                   |
 | HU-12 | [Prevención de daño entre aliados](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/21)                           |
 | HU-21 | [Determinar condición de finalización de la batalla](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/65)         |
 | HU-23 | [Uso de créditos como apuesta en batalla](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/70)                    |
 | HU-22 | [Entrega de cofre de recompensa por acumulación de créditos](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/69) |
 
+**HU-11 ([Gestión del recurso Poder](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/20)) ya está cerrada, pero se entregó en Player/Inventory**, no aquí. La regla vive allí como política de dominio (`HeroPowerPolicy`) y su especificación está en [`docs/hu-11-power.md`](https://github.com/Nexus-Battle-VI/Nexus-Battle-Player-Inventory/blob/develop/docs/hu-11-power.md).
+
+A Combat le queda **aplicarla al Poder de cada participante** de la batalla: consultar antes de elegir la acción, descontar solo si se ejecutó, sumar 2 por turno y restaurar al terminar el combate. Cómo obtiene la regla, sin poder importar código de otro repositorio (ADR-001), está por decidir. Mostrar el Poder actualizado al jugador tampoco está hecho: depende del tiempo real (ADR-020).
+
 ## Integraciones previstas
 
-- **Player/Inventory** (síncrono, `operationId`): perfil de combate del héroe y compromiso `BATTLE`.
+- **Player/Inventory** (síncrono, `operationId`): perfil de combate del héroe y compromiso `BATTLE`. El Poder máximo del héroe es `effectiveStats.power` del contrato `equipped-hero`; hoy Combat solo modela `playerId` y `heroId`.
 - **Wallet** (síncrono, `operationId`): reservar apuestas, transferir al ganador, liberar al cancelar.
 - **Entrada interna** (`/api/internal/v1/combat/simulations`, HMAC): Missions ejecuta simulaciones.
 - **Tiempo real** (ADR-020): WebSocket en `/api/v1/combat/realtime` a través de Caddy, con ticket de un solo uso.
