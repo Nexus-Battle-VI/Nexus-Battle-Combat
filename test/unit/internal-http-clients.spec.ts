@@ -186,10 +186,14 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
     logger: silentLogger,
   }
 
-  it('resuelve heroId desde el contrato interno, sin modelar level (DP-3 no existe en el dominio)', async () => {
+  it('firma la peticion con el mismo esquema HMAC que InternalServiceGuard verifica, contra la ruta REAL montada por Player-Inventory', async () => {
     let capturedUrl: string | undefined
-    const fetchImpl = ((url: string): Promise<Response> => {
+    let capturedHeaders: Record<string, string> | undefined
+
+    const fetchImpl = ((url: string, init?: RequestInit): Promise<Response> => {
       capturedUrl = url
+      capturedHeaders = init?.headers as Record<string, string>
+
       return Promise.resolve(
         jsonResponse(200, {
           playerId: 'jugador-1',
@@ -208,9 +212,38 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
     const client = new PlayerInventoryHttpClient({ ...baseOptions, fetchImpl })
     const equipped = await client.getEquippedHero('jugador-1')
 
+    // Player-Inventory monta TODAS sus rutas -incluidas las internas
+    // `@InternalOnly()`- bajo su prefijo global (`app.setGlobalPrefix(config.globalPrefix)`
+    // en `Nexus-Battle-Player-Inventory/src/main.ts`, `GLOBAL_PREFIX=api` por
+    // defecto, sin excepcion para el contrato interno -- confirmado tanto
+    // por el codigo fuente de ese repo como por su propia suite
+    // (`test/integration/equipped-hero-http.spec.ts`, que golpea
+    // `/api/internal/v1/players/:playerId/equipped-hero`). Es EXACTAMENTE el
+    // mismo patron que ya se corrigio para `AccountHttpClient` (ver el test
+    // de arriba): sin el prefijo, la peticion no encuentra ninguna ruta y
+    // Player-Inventory responde 404 de framework -no el 404 de negocio
+    // "sin heroe equipado"- antes de que el guard interno o el caso de uso
+    // lleguen a intervenir. Ese 404 de framework se interpretaba
+    // indistinguiblemente del 404 de negocio (ver comentario en
+    // `PlayerInventoryHttpClient.getEquippedHero`), por lo que el defecto se
+    // enmascaraba como "el jugador no tiene heroe equipado" para TODOS los
+    // jugadores, tuvieran o no heroe equipado (hallazgo BLOQUEANTE-01 de la
+    // auditoria HU-15.4).
     expect(capturedUrl).toBe(
-      'https://player-inventory.internal/internal/v1/players/jugador-1/equipped-hero',
+      'https://player-inventory.internal/api/internal/v1/players/jugador-1/equipped-hero',
     )
+    expect(capturedHeaders?.[INTERNAL_SERVICE_HEADER]).toBe('combat')
+    expect(capturedHeaders?.[INTERNAL_TIMESTAMP_HEADER]).toBe(String(NOW.getTime()))
+
+    const expectedSignature = signInternalRequest(SECRET, {
+      service: 'combat',
+      method: 'GET',
+      path: '/api/internal/v1/players/jugador-1/equipped-hero',
+      timestamp: String(NOW.getTime()),
+      body: {},
+    })
+    expect(capturedHeaders?.[INTERNAL_SIGNATURE_HEADER]).toBe(expectedSignature)
+
     expect(equipped).toEqual({ playerId: 'jugador-1', heroId: 'heroe-1' })
   })
 

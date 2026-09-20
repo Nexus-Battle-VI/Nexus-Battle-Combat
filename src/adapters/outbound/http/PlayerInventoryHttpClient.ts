@@ -9,9 +9,21 @@ const SERVICE = 'player-inventory'
 
 /**
  * Cliente del contrato interno de Player-Inventory (HU-15.2, RF-15, DP-4):
- * `GET /internal/v1/players/:playerId/equipped-hero`, protegido con
+ * `GET /api/internal/v1/players/:playerId/equipped-hero`, protegido con
  * `@InternalOnly()` + `InternalServiceGuard` HMAC (rama
  * `feat/hu-15-equipped-hero-internal-contract`).
+ *
+ * Player-Inventory monta TODAS sus rutas -incluidas las internas
+ * `@InternalOnly()`- bajo su prefijo global (`app.setGlobalPrefix(config.globalPrefix)`
+ * en `Nexus-Battle-Player-Inventory/src/main.ts`, `GLOBAL_PREFIX=api` por
+ * defecto, sin excepcion para el contrato interno): `/api` es, por tanto,
+ * parte del contrato, igual que ya lo trata `AccountHttpClient` para Account
+ * (mismo defecto, ya corregido alli en Combat PR#12). Corregido en la
+ * auditoria HU-15.4 (hallazgo BLOQUEANTE-01): sin el prefijo, la peticion no
+ * encontraba ninguna ruta y Player-Inventory respondia 404 de framework, que
+ * este cliente interpretaba indistinguiblemente del 404 de negocio "sin
+ * heroe equipado" (ver mas abajo) -- todo JOIN fallaba con
+ * `PlayerWithoutEquippedHeroError`, tuviera o no el jugador un heroe real.
  *
  * SOLO EXTRAE `playerId`/`heroId` del cuerpo -- ver
  * `PlayerInventoryEquippedHeroPort.ts` para por que el resto del contrato
@@ -25,7 +37,7 @@ export class PlayerInventoryHttpClient implements PlayerInventoryEquippedHeroPor
   async getEquippedHero(playerId: string): Promise<EquippedHero | null> {
     const result = await getInternalJson(
       SERVICE,
-      `/internal/v1/players/${encodeURIComponent(playerId)}/equipped-hero`,
+      `/api/internal/v1/players/${encodeURIComponent(playerId)}/equipped-hero`,
       this.options,
     )
 
