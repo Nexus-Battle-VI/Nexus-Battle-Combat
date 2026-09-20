@@ -8,10 +8,12 @@ import {
   InvalidRoomCapacityError,
   InvalidTeamCapacityError,
   PlayerAlreadyJoinedError,
+  PlayerNotInRoomError,
   RoomCancellationForbiddenError,
   RoomFullError,
   RoomNotCancellableError,
   RoomNotJoinableError,
+  RoomNotLeavableError,
 } from '../../src/domain/errors/BattleRoomErrors'
 
 /**
@@ -627,6 +629,116 @@ describe('BattleRoom', () => {
           AT,
         ),
       ).toThrow(InvalidModeCompositionError)
+    })
+  })
+
+  describe('leave() (HU-15.2, ciclo de vida del lobby)', () => {
+    const JOINER = 'jugador-que-se-une'
+
+    it('un participante HUMAN que abandona libera su cupo, la sala permanece WAITING_FOR_PLAYERS', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+        AT,
+      )
+      const joined = room.join(JOINER, 'A', AT)
+      expect(joined.totalParticipants()).toBe(1)
+
+      const left = joined.leave(JOINER)
+
+      expect(left.totalParticipants()).toBe(0)
+      expect(left.status).toBe('WAITING_FOR_PLAYERS')
+      const allParticipants = [...left.teams[0].participants, ...left.teams[1].participants]
+      expect(allParticipants).not.toContainEqual(expect.objectContaining({ playerId: JOINER }))
+    })
+
+    it('abandonar el ultimo cupo libre hace transicionar PREPARING -> WAITING_FOR_PLAYERS', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 1 },
+          ],
+        }),
+        AT,
+      )
+      const preparing = room.join(JOINER, null, AT)
+      expect(preparing.status).toBe('PREPARING')
+
+      const left = preparing.leave(JOINER)
+
+      expect(left.status).toBe('WAITING_FOR_PLAYERS')
+      expect(left.totalParticipants()).toBe(1)
+    })
+
+    it('el propietario tambien puede abandonar como participante (distinto de cancelar)', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 1 },
+          ],
+        }),
+        AT,
+      )
+
+      const left = room.leave(CREATOR)
+
+      expect(left.totalParticipants()).toBe(0)
+      expect(left.status).toBe('WAITING_FOR_PLAYERS')
+      // El campo `createdBy` (autoridad para cancelar) no cambia solo porque
+      // el creador ya no ocupe un puesto como participante.
+      expect(left.createdBy).toBe(CREATOR)
+    })
+
+    it('quien no es participante de la sala no puede abandonarla -> PlayerNotInRoomError', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+        AT,
+      )
+
+      expect(() => room.leave('nunca-se-unio')).toThrow(PlayerNotInRoomError)
+    })
+
+    it('una sala ya CANCELLED no se puede abandonar -> RoomNotLeavableError', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 1 },
+          ],
+        }),
+        AT,
+      )
+      const cancelled = room.cancel(CREATOR)
+
+      expect(() => cancelled.leave(CREATOR)).toThrow(RoomNotLeavableError)
+    })
+
+    it('abandonar no afecta al otro equipo ni a otros participantes', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+        AT,
+      )
+      const withCreatorAndJoiner = room.join(JOINER, 'B', AT)
+      const withThird = withCreatorAndJoiner.join('tercer-jugador', 'A', AT)
+
+      const left = withThird.leave(JOINER)
+
+      expect(left.totalParticipants()).toBe(1)
+      const remaining = [...left.teams[0].participants, ...left.teams[1].participants]
+      expect(remaining).toContainEqual(expect.objectContaining({ playerId: 'tercer-jugador' }))
     })
   })
 })

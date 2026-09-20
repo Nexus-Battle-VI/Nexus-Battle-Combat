@@ -150,3 +150,30 @@ export class DuplicateDisplayNameError extends DomainError {
     this.name = 'DuplicateDisplayNameError'
   }
 }
+
+/**
+ * HU-15.2 (ciclo de vida del lobby). Quien pide abandonar no es participante
+ * `HUMAN` de la sala (nunca se unio, o ya abandono antes). 409: la peticion
+ * es valida, pero el estado actual del agregado no contiene a ese jugador --
+ * mismo criterio de "conflicto con el estado del agregado" que
+ * `PlayerAlreadyJoinedError`.
+ */
+export class PlayerNotInRoomError extends DomainError {
+  constructor(roomId: string, playerId: string) {
+    super(`El jugador "${playerId}" no es participante de la sala "${roomId}".`)
+    this.name = 'PlayerNotInRoomError'
+  }
+}
+
+/**
+ * HU-15.2 (ciclo de vida del lobby). La sala ya esta `CANCELLED`: no tiene
+ * sentido abandonar una sala que ya dejo de existir para efectos practicos.
+ * 409, mismo criterio que `RoomNotCancellableError`/`RoomNotJoinableError`
+ * (conflicto con el estado del agregado, no de autorizacion).
+ */
+export class RoomNotLeavableError extends DomainError {
+  constructor(roomId: string, status: string) {
+    super(`La sala "${roomId}" no se puede abandonar porque su estado es ${status}.`)
+    this.name = 'RoomNotLeavableError'
+  }
+}

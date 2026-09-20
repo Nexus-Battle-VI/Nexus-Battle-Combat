@@ -596,4 +596,118 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       expect(statuses).toEqual([200, 409])
     })
   })
+
+  describe('POST /rooms/:roomId/leave (ciclo de vida del lobby)', () => {
+    it('400 si roomId no es un UUID v4 valido', async () => {
+      const response = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms/no-es-un-uuid/leave'),
+      )
+
+      expect(response.status).toBe(400)
+    })
+
+    it('401 sin testimonio', async () => {
+      const response = await request(app.getHttpServer()).post(
+        `/api/v1/combat/rooms/${NONEXISTENT_ROOM_ID}/leave`,
+      )
+
+      expect(response.status).toBe(401)
+    })
+
+    it('404 si la sala no existe', async () => {
+      const response = await authed('token-creador')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${NONEXISTENT_ROOM_ID}/leave`),
+      )
+
+      expect(response.status).toBe(404)
+    })
+
+    it('un participante abandona: 200, cupo liberado, status vuelve a WAITING_FOR_PLAYERS', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+      const roomId = String(created.body.id)
+      await authed('token-otro')(
+        request(app.getHttpServer())
+          .post(`/api/v1/combat/rooms/${roomId}/join`)
+          .send({ team: 'A' }),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/leave`),
+      )
+
+      expect(response.status).toBe(200)
+      expect(response.body).toMatchObject({ status: 'WAITING_FOR_PLAYERS' })
+      const teams = response.body.teams as { participants: unknown[] }[]
+      expect(teams.some((team) => team.participants.length > 0)).toBe(false)
+    })
+
+    it('abandonar libera el ultimo cupo -> PREPARING vuelve a WAITING_FOR_PLAYERS', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithOneSlotLeft()),
+      )
+      const roomId = String(created.body.id)
+      const joined = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/join`),
+      )
+      expect(joined.body.status).toBe('PREPARING')
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/leave`),
+      )
+
+      expect(response.status).toBe(200)
+      expect(response.body).toMatchObject({ status: 'WAITING_FOR_PLAYERS' })
+    })
+
+    it('el propietario tambien puede abandonar como participante', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithOneSlotLeft()),
+      )
+      const roomId = String(created.body.id)
+
+      const response = await authed('token-creador')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/leave`),
+      )
+
+      expect(response.status).toBe(200)
+      const teams = response.body.teams as { participants: unknown[] }[]
+      expect(teams.some((team) => team.participants.length > 0)).toBe(false)
+    })
+
+    it('409 si quien pide no es participante de la sala', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(validRoom()),
+      )
+      const roomId = String(created.body.id)
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/leave`),
+      )
+
+      expect(response.status).toBe(409)
+    })
+
+    it('409 si la sala ya esta CANCELLED', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+      const roomId = String(created.body.id)
+      await authed('token-otro')(
+        request(app.getHttpServer())
+          .post(`/api/v1/combat/rooms/${roomId}/join`)
+          .send({ team: 'A' }),
+      )
+      await authed('token-creador')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/cancel`),
+      )
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/leave`),
+      )
+
+      expect(response.status).toBe(409)
+    })
+  })
 })
