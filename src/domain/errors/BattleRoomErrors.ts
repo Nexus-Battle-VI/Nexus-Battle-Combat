@@ -133,3 +133,20 @@ export class PlayerAlreadyJoinedError extends DomainError {
     this.name = 'PlayerAlreadyJoinedError'
   }
 }
+
+/**
+ * HU-15.2 (RF-15, DP-2). El `displayName` resuelto de Account ya lo usa OTRO
+ * participante `HUMAN` de la sala (comparacion insensible a mayusculas y
+ * espacios extremos). 409: mismo criterio que `PlayerAlreadyJoinedError` --
+ * es un conflicto de estado del agregado en el momento de unirse, no una
+ * regla de composicion evaluada al crear. Los participantes con
+ * `displayName === null` (creados por HU-14 antes de esta version, o `AI`)
+ * NUNCA participan de esta comprobacion: `null` no es un nombre "vacio" que
+ * choque consigo mismo.
+ */
+export class DuplicateDisplayNameError extends DomainError {
+  constructor(roomId: string, displayName: string) {
+    super(`El nombre "${displayName}" ya lo usa otro jugador de la sala "${roomId}".`)
+    this.name = 'DuplicateDisplayNameError'
+  }
+}

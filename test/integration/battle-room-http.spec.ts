@@ -5,6 +5,14 @@ import { Test } from '@nestjs/testing'
 import request from 'supertest'
 
 import {
+  ACCOUNT_BATTLE_PROFILE,
+  type AccountBattleProfilePort,
+} from '../../src/application/ports/AccountBattleProfilePort'
+import {
+  PLAYER_INVENTORY_EQUIPPED_HERO,
+  type PlayerInventoryEquippedHeroPort,
+} from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
+import {
   Role,
   TOKEN_VERIFIER,
   TokenVerificationError,
@@ -33,6 +41,26 @@ const stubVerifier: TokenVerifierPort = {
       ? Promise.reject(new TokenVerificationError())
       : Promise.resolve(identity)
   },
+}
+
+/**
+ * HU-15.2 (fase de integracion cross-service): `JoinBattleRoom` ahora
+ * depende de Account y Player-Inventory. Esta suite ejercita el contrato
+ * HTTP de Combat, no la integracion HTTP saliente en si (que tiene su propia
+ * suite dedicada con `fetchImpl` inyectado, ver
+ * `test/unit/internal-http-clients.spec.ts`), asi que se reemplazan los dos
+ * puertos con dobles deterministas -- mismo criterio que `stubVerifier`
+ * arriba con `TOKEN_VERIFIER`. El nombre se deriva del `subject` para que
+ * cada identidad de `IDENTITIES` tenga un `displayName` distinto y no choque
+ * con la nueva unicidad de nombre del dominio.
+ */
+const stubAccountProfiles: AccountBattleProfilePort = {
+  getBattleProfile: (subject) =>
+    Promise.resolve({ subject, displayName: `nombre-de-${subject}`, avatarUrl: null }),
+}
+
+const stubEquippedHeroes: PlayerInventoryEquippedHeroPort = {
+  getEquippedHero: (playerId) => Promise.resolve({ playerId, heroId: `heroe-de-${playerId}` }),
 }
 
 const withEnv = (values: Record<string, string>): (() => void) => {
@@ -97,6 +125,10 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(TOKEN_VERIFIER)
       .useValue(stubVerifier)
+      .overrideProvider(ACCOUNT_BATTLE_PROFILE)
+      .useValue(stubAccountProfiles)
+      .overrideProvider(PLAYER_INVENTORY_EQUIPPED_HERO)
+      .useValue(stubEquippedHeroes)
       .compile()
 
     app = moduleRef.createNestApplication()

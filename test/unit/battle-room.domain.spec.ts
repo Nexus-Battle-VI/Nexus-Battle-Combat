@@ -2,6 +2,7 @@ import { BattleRoom, type CreateBattleRoomInput } from '../../src/domain/entitie
 import { DomainError } from '../../src/domain/errors/DomainError'
 import { parseBattleRoomStatus } from '../../src/domain/value-objects/BattleRoomStatus'
 import {
+  DuplicateDisplayNameError,
   InvalidModeCompositionError,
   InvalidRewardError,
   InvalidRoomCapacityError,
@@ -496,6 +497,104 @@ describe('BattleRoom', () => {
       ].find((participant) => participant.playerId === JOINER)
 
       expect(newParticipant?.joinedAt).toEqual(joinAt)
+    })
+
+    it('sin displayName/heroId (retrocompatibilidad de firma): ambos quedan null, mismo comportamiento que antes de esta ampliacion', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT)
+      const newParticipant = [
+        ...joined.teams[0].participants,
+        ...joined.teams[1].participants,
+      ].find((participant) => participant.playerId === JOINER)
+
+      expect(newParticipant).toMatchObject({ displayName: null, heroId: null })
+    })
+
+    it('con displayName/heroId (HU-15.2, fase de integracion): ambos se persisten como snapshot del participante', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT, 'Nombre Visible', 'heroe-123')
+      const newParticipant = [
+        ...joined.teams[0].participants,
+        ...joined.teams[1].participants,
+      ].find((participant) => participant.playerId === JOINER)
+
+      expect(newParticipant).toMatchObject({ displayName: 'Nombre Visible', heroId: 'heroe-123' })
+    })
+
+    it('displayName ya usado por otro HUMAN de la sala -> DuplicateDisplayNameError (DP-2)', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 2 }] }),
+        AT,
+      )
+      const withCreatorNamed = room.join(CREATOR, 'A', AT, 'Mismo Nombre', 'heroe-creador')
+
+      expect(() => withCreatorNamed.join(JOINER, 'B', AT, 'Mismo Nombre', 'heroe-joiner')).toThrow(
+        DuplicateDisplayNameError,
+      )
+    })
+
+    it('displayName duplicado se detecta insensible a mayusculas y espacios extremos', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 2 }] }),
+        AT,
+      )
+      const withCreatorNamed = room.join(CREATOR, 'A', AT, 'Ana', 'heroe-creador')
+
+      expect(() => withCreatorNamed.join(JOINER, 'B', AT, '  ANA  ', 'heroe-joiner')).toThrow(
+        DuplicateDisplayNameError,
+      )
+    })
+
+    it('displayName distinto no colisiona: dos jugadores con nombres distintos se unen sin problema', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({ teamConfigs: [{ capacity: 1 }, { capacity: 2 }] }),
+        AT,
+      )
+      const withCreatorNamed = room.join(CREATOR, 'A', AT, 'Ana', 'heroe-creador')
+
+      const joined = withCreatorNamed.join(JOINER, 'B', AT, 'Beto', 'heroe-joiner')
+
+      expect(joined.totalParticipants()).toBe(2)
+    })
+
+    it('un participante HUMAN con displayName null (creado por HU-14, initialParticipants) nunca colisiona por nombre', () => {
+      const room = BattleRoom.create(
+        ROOM_ID,
+        CREATOR,
+        baseInput({
+          // El creador se declara HUMAN via initialParticipants (HU-14, sin
+          // displayName: esa ruta no resuelve Account) y el joiner llega con
+          // displayName resuelto (HU-15.2): no deben chocar solo por
+          // coincidir ambos en null vs un valor real.
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN', playerId: CREATOR }] },
+            { capacity: 1 },
+          ],
+        }),
+        AT,
+      )
+
+      const joined = room.join(JOINER, null, AT, 'Cualquier Nombre', 'heroe-joiner')
+
+      expect(joined.totalParticipants()).toBe(2)
     })
   })
 

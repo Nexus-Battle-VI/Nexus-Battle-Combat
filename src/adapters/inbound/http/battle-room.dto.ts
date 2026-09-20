@@ -132,6 +132,15 @@ class ParticipantResponse {
   @ApiProperty({ nullable: true, type: 'string' })
   readonly heroId!: string | null
 
+  @ApiProperty({
+    nullable: true,
+    type: 'string',
+    description:
+      'Snapshot del nombre visible resuelto de Account al unirse (HU-15.2, DP-2). null para ' +
+      'AI y para HUMAN incorporados antes de esta version.',
+  })
+  readonly displayName!: string | null
+
   @ApiProperty({ format: 'date-time' })
   readonly joinedAt!: string
 }

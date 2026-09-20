@@ -1,6 +1,11 @@
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { RoomConflictError, RoomNotFoundError } from '../../src/application/errors/ApplicationError'
 import {
+  PlayerWithoutEquippedHeroError,
+  UpstreamServiceError,
+} from '../../src/application/errors/UpstreamErrors'
+import {
+  DuplicateDisplayNameError,
   PlayerAlreadyJoinedError,
   RoomCancellationForbiddenError,
   RoomFullError,
@@ -8,9 +13,11 @@ import {
   RoomNotJoinableError,
 } from '../../src/domain/errors/BattleRoomErrors'
 import { BattleRoom, type CreateBattleRoomInput } from '../../src/domain/entities/BattleRoom'
+import type { AccountBattleProfilePort } from '../../src/application/ports/AccountBattleProfilePort'
 import type { BattleRoomRepositoryPort } from '../../src/application/ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../../src/application/ports/ClockPort'
 import type { IdGeneratorPort } from '../../src/application/ports/IdGeneratorPort'
+import type { PlayerInventoryEquippedHeroPort } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
 import { CancelBattleRoom } from '../../src/application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../src/application/use-cases/CreateBattleRoom'
 import { JoinBattleRoom } from '../../src/application/use-cases/JoinBattleRoom'
@@ -20,6 +27,24 @@ const AT = new Date('2026-09-17T12:00:00.000Z')
 const CREATOR = 'jugador-creador'
 
 const fixedClock = (): ClockPort => ({ now: () => AT })
+
+// HU-15.2 (fase de integracion cross-service): `JoinBattleRoom` ahora
+// resuelve `displayName`/`heroId` de Account/Player-Inventory antes de
+// delegar en `BattleRoom.join()`. Estos dobles siempre resuelven con exito
+// un `displayName` DERIVADO DE `playerId` (unico por jugador, salvo que una
+// prueba concreta lo pise a proposito): las pruebas de esta seccion cubren
+// orquestacion/persistencia de `JoinBattleRoom`, no la integracion en si
+// (que tiene su propia suite, `join-battle-room-integrations.spec.ts`), y
+// necesitan que cada jugador distinto tenga un nombre distinto para no
+// chocar con la nueva unicidad de nombre del dominio.
+const fakeAccountProfiles = (): AccountBattleProfilePort => ({
+  getBattleProfile: (subject) =>
+    Promise.resolve({ subject, displayName: `nombre-de-${subject}`, avatarUrl: null }),
+})
+
+const fakeEquippedHeroes = (): PlayerInventoryEquippedHeroPort => ({
+  getEquippedHero: (playerId) => Promise.resolve({ playerId, heroId: `heroe-de-${playerId}` }),
+})
 
 const sequentialIds = (): IdGeneratorPort => {
   let counter = 0
@@ -168,7 +193,7 @@ describe('JoinBattleRoom', () => {
 
   it('sala inexistente -> RoomNotFoundError', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const join = new JoinBattleRoom(repo, fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
 
     await expect(join.execute('sala-que-no-existe', JOINER, null)).rejects.toBeInstanceOf(
       RoomNotFoundError,
@@ -178,7 +203,7 @@ describe('JoinBattleRoom', () => {
   it('camino feliz: orquesta findById -> room.join() -> save(room, expectedVersion) y devuelve el DTO', async () => {
     const repo = new InMemoryBattleRoomRepository()
     const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
 
     const created = await create.execute(
       CREATOR,
@@ -195,7 +220,7 @@ describe('JoinBattleRoom', () => {
   it('el join que ocupa el ultimo cupo persiste PREPARING', async () => {
     const repo = new InMemoryBattleRoomRepository()
     const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
 
     const created = await create.execute(
       CREATOR,
@@ -230,7 +255,12 @@ describe('JoinBattleRoom', () => {
       findWaitingForPlayers: () => repo.findWaitingForPlayers(),
       save: () => Promise.reject(new RoomConflictError(created.id)),
     }
-    const join = new JoinBattleRoom(conflictingRepo, fixedClock())
+    const join = new JoinBattleRoom(
+      conflictingRepo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+    )
 
     await expect(join.execute(created.id, JOINER, null)).rejects.toBeInstanceOf(RoomConflictError)
   })
@@ -239,7 +269,7 @@ describe('JoinBattleRoom', () => {
     const repo = new InMemoryBattleRoomRepository()
     const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
     const cancel = new CancelBattleRoom(repo)
-    const join = new JoinBattleRoom(repo, fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
 
     const created = await create.execute(CREATOR, basicInput())
     await cancel.execute(created.id, CREATOR)
@@ -255,7 +285,7 @@ describe('JoinBattleRoom', () => {
   it('ausencia de persistencia parcial: RoomFullError nunca invoca repository.save()', async () => {
     const repo = new InMemoryBattleRoomRepository()
     const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
 
     const created = await create.execute(
       CREATOR,
@@ -273,7 +303,7 @@ describe('JoinBattleRoom', () => {
   it('ausencia de persistencia parcial: PlayerAlreadyJoinedError nunca invoca repository.save()', async () => {
     const repo = new InMemoryBattleRoomRepository()
     const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
 
     const created = await create.execute(
       CREATOR,
@@ -299,10 +329,122 @@ describe('JoinBattleRoom', () => {
     )
 
     const saveSpy = jest.spyOn(repo, 'save')
-    const join = new JoinBattleRoom(repo, fixedClock())
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
 
     await join.execute(created.id, JOINER, null)
 
     expect(saveSpy).toHaveBeenCalledWith(expect.any(BattleRoom), 1)
+  })
+
+  it('resuelve displayName/heroId de Account/Player-Inventory y los persiste en el participante', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const created = await create.execute(
+      CREATOR,
+      basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+    )
+
+    const accountProfiles: AccountBattleProfilePort = {
+      getBattleProfile: (subject) =>
+        Promise.resolve({ subject, displayName: 'Nombre De Cuenta', avatarUrl: 'https://a/x.png' }),
+    }
+    const equippedHeroes: PlayerInventoryEquippedHeroPort = {
+      getEquippedHero: (playerId) => Promise.resolve({ playerId, heroId: 'heroe-equipado' }),
+    }
+    const join = new JoinBattleRoom(repo, fixedClock(), accountProfiles, equippedHeroes)
+
+    const dto = await join.execute(created.id, JOINER, null)
+
+    const allParticipants = [...dto.teams[0].participants, ...dto.teams[1].participants]
+    expect(allParticipants).toContainEqual(
+      expect.objectContaining({
+        playerId: JOINER,
+        displayName: 'Nombre De Cuenta',
+        heroId: 'heroe-equipado',
+      }),
+    )
+  })
+
+  it('jugador sin heroe equipado (Player-Inventory devuelve null) -> PlayerWithoutEquippedHeroError, nunca invoca repository.save()', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const created = await create.execute(
+      CREATOR,
+      basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+    )
+
+    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
+      getEquippedHero: () => Promise.resolve(null),
+    })
+    const saveSpy = jest.spyOn(repo, 'save')
+
+    await expect(join.execute(created.id, JOINER, null)).rejects.toBeInstanceOf(
+      PlayerWithoutEquippedHeroError,
+    )
+    expect(saveSpy).not.toHaveBeenCalled()
+  })
+
+  it('Account no responde -> propaga UpstreamServiceError, nunca invoca repository.save() ni consulta Player-Inventory', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const created = await create.execute(
+      CREATOR,
+      basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+    )
+
+    const equippedHeroesSpy = jest.fn<
+      Promise<{ playerId: string; heroId: string } | null>,
+      [string]
+    >()
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      {
+        getBattleProfile: () =>
+          Promise.reject(new UpstreamServiceError('account', 'no_alcanzable')),
+      },
+      { getEquippedHero: equippedHeroesSpy },
+    )
+    const saveSpy = jest.spyOn(repo, 'save')
+
+    await expect(join.execute(created.id, JOINER, null)).rejects.toBeInstanceOf(
+      UpstreamServiceError,
+    )
+    expect(saveSpy).not.toHaveBeenCalled()
+    expect(equippedHeroesSpy).not.toHaveBeenCalled()
+  })
+
+  it('displayName resuelto ya lo usa otro participante de la sala -> DuplicateDisplayNameError, nunca invoca repository.save()', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const created = await create.execute(
+      CREATOR,
+      basicInput({ teamConfigs: [{ capacity: 1 }, { capacity: 2 }] }),
+    )
+
+    const sameNameForEveryone: AccountBattleProfilePort = {
+      getBattleProfile: (subject) =>
+        Promise.resolve({ subject, displayName: 'Nombre Compartido', avatarUrl: null }),
+    }
+    const firstJoin = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      sameNameForEveryone,
+      fakeEquippedHeroes(),
+    )
+    await firstJoin.execute(created.id, CREATOR, 'A')
+
+    const secondJoin = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      sameNameForEveryone,
+      fakeEquippedHeroes(),
+    )
+    const saveSpy = jest.spyOn(repo, 'save')
+
+    await expect(secondJoin.execute(created.id, JOINER, 'B')).rejects.toBeInstanceOf(
+      DuplicateDisplayNameError,
+    )
+    expect(saveSpy).not.toHaveBeenCalled()
   })
 })

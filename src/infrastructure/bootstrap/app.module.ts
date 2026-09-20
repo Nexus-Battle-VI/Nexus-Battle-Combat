@@ -15,22 +15,35 @@ import { AnonymousIdentityGuard } from '../../adapters/inbound/http/auth/anonymo
 import { InternalServiceGuard } from '../../adapters/inbound/http/auth/internal-service.guard'
 import { JwtAuthGuard } from '../../adapters/inbound/http/auth/jwt-auth.guard'
 import { RolesGuard } from '../../adapters/inbound/http/auth/roles.guard'
+import { BattleRoomRealtimeGateway } from '../../adapters/inbound/ws/BattleRoomRealtimeGateway'
 import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTokenVerifier'
+import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClient'
+import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
 import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
 import { UuidGenerator } from '../../adapters/outbound/system/UuidGenerator'
+import {
+  ACCOUNT_BATTLE_PROFILE,
+  type AccountBattleProfilePort,
+} from '../../application/ports/AccountBattleProfilePort'
 import {
   BATTLE_ROOM_REPOSITORY,
   type BattleRoomRepositoryPort,
 } from '../../application/ports/BattleRoomRepositoryPort'
 import { CLOCK, type ClockPort } from '../../application/ports/ClockPort'
 import { ID_GENERATOR, type IdGeneratorPort } from '../../application/ports/IdGeneratorPort'
+import {
+  PLAYER_INVENTORY_EQUIPPED_HERO,
+  type PlayerInventoryEquippedHeroPort,
+} from '../../application/ports/PlayerInventoryEquippedHeroPort'
+import { REALTIME_NOTIFIER } from '../../application/ports/RealtimeNotifierPort'
 import { TOKEN_VERIFIER, type TokenVerifierPort } from '../../application/ports/TokenVerifierPort'
 import { CancelBattleRoom } from '../../application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../application/use-cases/CreateBattleRoom'
 import { JoinBattleRoom } from '../../application/use-cases/JoinBattleRoom'
 import { ListAvailableBattleRooms } from '../../application/use-cases/ListAvailableBattleRooms'
+import { UpstreamServiceError } from '../../application/errors/UpstreamErrors'
 import { AuthMode, loadConfig, PersistenceDriver, type AppConfig } from '../config/env'
 import type { ReadinessCheck, VersionReport } from '../health/health'
 import { createLogger, type Logger } from '../observability/logger'
@@ -49,6 +62,14 @@ export const DATABASE_LIFECYCLE = Symbol('DatabaseLifecycle')
  * cambiarla exige un Pull Request revisado.
  */
 export const INTERNAL_CALLERS: readonly string[] = ['missions']
+
+/**
+ * Identidad de Combat al llamar a las rutas `@InternalOnly()` de OTROS
+ * servicios (HU-15.2, RF-15): el valor que Account y Player-Inventory
+ * esperan encontrar en `X-Internal-Service` y en su propia lista de
+ * llamadores permitidos.
+ */
+export const OUTBOUND_SERVICE_NAME = 'combat'
 
 /**
  * Raiz de composicion.
@@ -180,6 +201,73 @@ export const INTERNAL_CALLERS: readonly string[] = ['missions']
       provide: ID_GENERATOR,
       useFactory: (): IdGeneratorPort => new UuidGenerator(),
     },
+    // HU-15.2 (RF-15): clientes HTTP internos hacia Account y
+    // Player-Inventory. Sin INTERNAL_SERVICE_AUTH_SECRET configurado, se
+    // registra un puerto que rechaza toda llamada con UpstreamServiceError
+    // en vez de firmar peticiones con un secreto vacio -- mismo criterio que
+    // TOKEN_VERIFIER arriba con AUTH_MODE=disabled.
+    {
+      provide: ACCOUNT_BATTLE_PROFILE,
+      useFactory: (
+        config: AppConfig,
+        clock: ClockPort,
+        logger: Logger,
+      ): AccountBattleProfilePort => {
+        if (config.internalServiceAuthSecret === null || config.accountServiceBaseUrl === null) {
+          logger.warn('account_client_sin_configurar', {
+            detail: 'ACCOUNT_SERVICE_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET no configurados.',
+          })
+
+          return {
+            getBattleProfile: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('account', 'no_configurado')),
+          }
+        }
+
+        return new AccountHttpClient({
+          baseUrl: config.accountServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
+    {
+      provide: PLAYER_INVENTORY_EQUIPPED_HERO,
+      useFactory: (
+        config: AppConfig,
+        clock: ClockPort,
+        logger: Logger,
+      ): PlayerInventoryEquippedHeroPort => {
+        if (
+          config.internalServiceAuthSecret === null ||
+          config.playerInventoryServiceBaseUrl === null
+        ) {
+          logger.warn('player_inventory_client_sin_configurar', {
+            detail:
+              'PLAYER_INVENTORY_SERVICE_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET no configurados.',
+          })
+
+          return {
+            getEquippedHero: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('player-inventory', 'no_configurado')),
+          }
+        }
+
+        return new PlayerInventoryHttpClient({
+          baseUrl: config.playerInventoryServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
     // HU-14: salas de batalla. `PERSISTENCE_DRIVER=memory` respalda pruebas
     // de integracion sin motor real, igual que el resto de repositorios del
     // proyecto cuando adoptan ese patron.
@@ -212,9 +300,34 @@ export const INTERNAL_CALLERS: readonly string[] = ['missions']
     },
     {
       provide: JOIN_BATTLE_ROOM,
-      useFactory: (rooms: BattleRoomRepositoryPort, clock: ClockPort): JoinBattleRoom =>
-        new JoinBattleRoom(rooms, clock),
-      inject: [BATTLE_ROOM_REPOSITORY, CLOCK],
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        clock: ClockPort,
+        accountProfiles: AccountBattleProfilePort,
+        equippedHeroes: PlayerInventoryEquippedHeroPort,
+      ): JoinBattleRoom => new JoinBattleRoom(rooms, clock, accountProfiles, equippedHeroes),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        CLOCK,
+        ACCOUNT_BATTLE_PROFILE,
+        PLAYER_INVENTORY_EQUIPPED_HERO,
+      ],
+    },
+    // HU-15.2 (RF-15, ADR-020): gateway WebSocket nativo. Provider normal de
+    // Nest (no un controlador): `BattleRoomController` lo consume a traves
+    // del puerto `REALTIME_NOTIFIER`, nunca de la clase concreta.
+    {
+      provide: BattleRoomRealtimeGateway,
+      useFactory: (
+        verifier: TokenVerifierPort,
+        rooms: BattleRoomRepositoryPort,
+        logger: Logger,
+      ): BattleRoomRealtimeGateway => new BattleRoomRealtimeGateway(verifier, rooms, logger),
+      inject: [TOKEN_VERIFIER, BATTLE_ROOM_REPOSITORY, LOGGER],
+    },
+    {
+      provide: REALTIME_NOTIFIER,
+      useExisting: BattleRoomRealtimeGateway,
     },
     {
       provide: READINESS_CHECKS,

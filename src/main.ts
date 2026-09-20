@@ -2,6 +2,7 @@ import 'reflect-metadata'
 
 import { NestFactory } from '@nestjs/core'
 import { ValidationPipe } from '@nestjs/common'
+import { WsAdapter } from '@nestjs/platform-ws'
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger'
 
 import { AppModule } from './infrastructure/bootstrap/app.module'
@@ -17,6 +18,9 @@ const bootstrap = async (): Promise<void> => {
   })
 
   const app = await NestFactory.create(AppModule, { logger: false })
+
+  // HU-15.2 (RF-15), ADR-020: WebSocket nativo (`ws`), nunca Socket.IO.
+  app.useWebSocketAdapter(new WsAdapter(app))
 
   app.setGlobalPrefix(config.globalPrefix)
 

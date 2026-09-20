@@ -1,5 +1,6 @@
 import { DomainError } from '../errors/DomainError'
 import {
+  DuplicateDisplayNameError,
   InvalidModeCompositionError,
   InvalidRoomCapacityError,
   InvalidTeamCapacityError,
@@ -237,25 +238,42 @@ export class BattleRoom {
    * tener cupo, o se rechaza (nunca se asigna en silencio a otro equipo).
    * `at` viene de `ClockPort` resuelto por el caso de uso: nunca del cliente.
    *
-   * NO acepta ni modela `heroId`/`nickname`: bloqueados por HU-15.2 (DP-2,
-   * DP-3, DP-4 — ver `HU-15.2-Auditoria-Entrada.md`), no se implementan aqui
-   * ni de forma parcial no verificable.
+   * `heroId`/`displayName` (HU-15.2, RF-15, DP-2/DP-4): PARAMETROS OPCIONALES
+   * con valor por defecto `null`, resueltos SIEMPRE por `JoinBattleRoom` desde
+   * los contratos internos de Player-Inventory y Account respectivamente
+   * (nunca del cliente, mismo criterio que `playerId`/`at`). Son opcionales
+   * en la FIRMA (no en el flujo real de `JoinBattleRoom`) para no romper
+   * retrocompatibilidad binaria con quien ya invoca `join()` con 3
+   * argumentos -- todas las pruebas de `HU-15.2` anteriores a esta ampliacion
+   * siguen compilando y pasando sin modificarse.
    *
    * Precondiciones, en orden: 1) `status === WAITING_FOR_PLAYERS`
    * (`RoomNotJoinableError`); 2) el jugador no es ya participante HUMAN de la
    * sala (`PlayerAlreadyJoinedError`, reutilizando la misma deteccion de
-   * duplicado que `validateUniqueHumanPlayers` usa en `create()`); 3) el
-   * equipo objetivo (explicito o resuelto automaticamente) tiene cupo
-   * (`RoomFullError`). Tras aplicar el ingreso, EN LA MISMA MUTACION: si
-   * `totalParticipants() === totalCapacity()`, el estado pasa a `PREPARING`;
-   * si no, permanece `WAITING_FOR_PLAYERS`.
+   * duplicado que `validateUniqueHumanPlayers` usa en `create()`); 3)
+   * `displayName` (si no es `null`) no lo usa ya otro `HUMAN` de la sala,
+   * comparacion insensible a mayusculas/espacios extremos
+   * (`DuplicateDisplayNameError` -- DP-2); 4) el equipo objetivo (explicito o
+   * resuelto automaticamente) tiene cupo (`RoomFullError`). Tras aplicar el
+   * ingreso, EN LA MISMA MUTACION: si `totalParticipants() ===
+   * totalCapacity()`, el estado pasa a `PREPARING`; si no, permanece
+   * `WAITING_FOR_PLAYERS`.
    */
-  join(playerId: string, requestedTeam: string | null, at: Date): BattleRoom {
+  join(
+    playerId: string,
+    requestedTeam: string | null,
+    at: Date,
+    displayName: string | null = null,
+    heroId: string | null = null,
+  ): BattleRoom {
     if (this.status !== BattleRoomStatus.WaitingForPlayers) {
       throw new RoomNotJoinableError(this.id, this.status)
     }
 
-    const participant = createParticipant({ kind: ParticipantKind.Human, playerId }, at)
+    const participant = createParticipant(
+      { kind: ParticipantKind.Human, playerId, heroId, displayName },
+      at,
+    )
     const allParticipants = [...this.teams[0].participants, ...this.teams[1].participants]
 
     if (
@@ -268,6 +286,18 @@ export class BattleRoom {
       // `DomainError` antes de llegar aqui), asi que esta rama siempre se
       // cumple en la practica; permite narrowing sin asercion de tipos.
       throw new PlayerAlreadyJoinedError(this.id, participant.playerId)
+    }
+
+    if (participant.displayName !== null) {
+      const normalized = participant.displayName.trim().toLowerCase()
+      const collides = allParticipants.some(
+        (existing) =>
+          existing.displayName !== null && existing.displayName.trim().toLowerCase() === normalized,
+      )
+
+      if (collides) {
+        throw new DuplicateDisplayNameError(this.id, participant.displayName)
+      }
     }
 
     const targetIndex = BattleRoom.resolveTargetTeamIndex(this.teams, requestedTeam, this.id)

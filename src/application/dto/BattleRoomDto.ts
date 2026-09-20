@@ -4,6 +4,9 @@ export interface ParticipantDto {
   readonly kind: string
   readonly playerId: string | null
   readonly heroId: string | null
+  /** Snapshot resuelto de Account al unirse (HU-15.2, DP-2). `null` para `AI`
+   * y para `HUMAN` incorporados antes de esta version. */
+  readonly displayName: string | null
   readonly joinedAt: string
 }
 
@@ -50,6 +53,7 @@ const toTeamDto = (team: {
     readonly kind: string
     readonly playerId?: string | null
     readonly heroId?: string | null
+    readonly displayName?: string | null
     readonly joinedAt?: Date
   }[]
 }): TeamDto => ({
@@ -59,6 +63,7 @@ const toTeamDto = (team: {
     kind: participant.kind,
     playerId: participant.playerId ?? null,
     heroId: participant.heroId ?? null,
+    displayName: participant.displayName ?? null,
     joinedAt: (participant.joinedAt ?? new Date(0)).toISOString(),
   })),
 })

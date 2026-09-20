@@ -12,12 +12,14 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common'
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger'
 
 import { DomainError } from '../../../domain/errors/DomainError'
 import {
+  DuplicateDisplayNameError,
   InvalidModeCompositionError,
   InvalidRewardError,
   InvalidRoomCapacityError,
@@ -29,11 +31,19 @@ import {
   RoomNotJoinableError,
 } from '../../../domain/errors/BattleRoomErrors'
 import { RoomConflictError, RoomNotFoundError } from '../../../application/errors/ApplicationError'
+import {
+  PlayerWithoutEquippedHeroError,
+  UpstreamServiceError,
+} from '../../../application/errors/UpstreamErrors'
 import type { BattleRoomDto } from '../../../application/dto/BattleRoomDto'
 import type { CancelBattleRoom } from '../../../application/use-cases/CancelBattleRoom'
 import type { CreateBattleRoom } from '../../../application/use-cases/CreateBattleRoom'
 import type { JoinBattleRoom } from '../../../application/use-cases/JoinBattleRoom'
 import type { ListAvailableBattleRooms } from '../../../application/use-cases/ListAvailableBattleRooms'
+import {
+  REALTIME_NOTIFIER,
+  type RealtimeNotifierPort,
+} from '../../../application/ports/RealtimeNotifierPort'
 import type { VerifiedIdentity } from '../../../application/ports/TokenVerifierPort'
 import { CurrentIdentity } from './auth/decorators'
 import {
@@ -69,6 +79,7 @@ export class BattleRoomController {
     private readonly listAvailableBattleRooms: ListAvailableBattleRooms,
     @Inject(CANCEL_BATTLE_ROOM) private readonly cancelBattleRoom: CancelBattleRoom,
     @Inject(JOIN_BATTLE_ROOM) private readonly joinBattleRoom: JoinBattleRoom,
+    @Inject(REALTIME_NOTIFIER) private readonly realtime: RealtimeNotifierPort,
   ) {}
 
   @Post()
@@ -123,7 +134,11 @@ export class BattleRoomController {
     @CurrentIdentity() identity: VerifiedIdentity,
   ): Promise<BattleRoomDto> {
     try {
-      return await this.cancelBattleRoom.execute(roomId, identity.subject)
+      const dto = await this.cancelBattleRoom.execute(roomId, identity.subject)
+
+      this.notifyRoomUpdated(dto)
+
+      return dto
     } catch (error: unknown) {
       throw BattleRoomController.translate(error)
     }
@@ -134,18 +149,15 @@ export class BattleRoomController {
   @ApiOperation({
     summary: 'Une al jugador autenticado a una sala en WAITING_FOR_PLAYERS (HU-15.2, RF-15)',
     description:
-      'Implementa el subconjunto de RF-15 confirmado como implementable hoy solo con Combat ' +
-      '(HU-15.2-Auditoria-Entrada.md, dictamen APTO CON BLOQUEOS): ingreso de jugador ' +
-      'autenticado, seleccion/asignacion de equipo, cupo, jugador duplicado, transicion ' +
+      'Fase de integracion cross-service de RF-15 (repo 3/4, Account y Player-Inventory ya ' +
+      'publicaron su contrato interno): ingreso de jugador autenticado, resolucion autoritativa ' +
+      'de `displayName` (Account, DP-2) y `heroId` (Player-Inventory, DP-4) via HTTP interno ' +
+      'firmado HMAC -- nunca del cuerpo de la peticion -- unicidad de nombre dentro de la sala, ' +
+      'seleccion/asignacion de equipo, cupo, jugador duplicado, transicion ' +
       'WAITING_FOR_PLAYERS -> PREPARING, persistencia con bloqueo optimista. ' +
-      'LIMITACIONES CONOCIDAS de esta version, documentadas explicitamente (no errores ocultos): ' +
-      'NO valida apodo/nickname unico (DP-2, requiere endpoint @InternalOnly() nuevo en ' +
-      'Nexus-Battle-Account, hoy inexistente); NO valida heroe equipado ni nivel de heroe ' +
-      '(DP-3/DP-4, requieren endpoint @InternalOnly() nuevo en Nexus-Battle-Player-Inventory y ' +
-      'un dato de nivel que hoy no existe en ningun servicio); NO notifica en tiempo real ' +
-      '(DP-5, ADR-020 de Nexus-Battle-Infrastructure esta Accepted pero sin implementar) -- la ' +
-      'visibilidad para otros jugadores es por refresco de consulta, GET /v1/combat/rooms, ' +
-      'mismo patron ya usado por HU-14.',
+      'LIMITACION CONOCIDA que persiste, documentada explicitamente (no un error oculto): DP-3 ' +
+      '(nivel de heroe) sigue sin implementarse porque Player-Inventory confirmo que ese dato ' +
+      'no existe en su dominio -- no se inventa aqui; trazado hacia HU-15.4.',
   })
   @ApiResponse({ status: 200, type: BattleRoomResponse })
   @ApiResponse({
@@ -158,8 +170,16 @@ export class BattleRoomController {
     status: 409,
     description:
       'La sala no esta en WAITING_FOR_PLAYERS (CANCELLED o PREPARING), el equipo objetivo no ' +
-      'tiene cupo, el jugador ya es participante de la sala, o conflicto de version (bloqueo ' +
-      'optimista)',
+      'tiene cupo, el jugador ya es participante de la sala, el nombre resuelto de Account ya lo ' +
+      'usa otro participante de la sala, o conflicto de version (bloqueo optimista)',
+  })
+  @ApiResponse({
+    status: 422,
+    description: 'El jugador no tiene un heroe equipado en Player-Inventory (DP-4)',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'Account o Player-Inventory no respondieron (no alcanzable, tiempo agotado, etc.)',
   })
   async join(
     @Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string,
@@ -167,9 +187,36 @@ export class BattleRoomController {
     @CurrentIdentity() identity: VerifiedIdentity,
   ): Promise<BattleRoomDto> {
     try {
-      return await this.joinBattleRoom.execute(roomId, identity.subject, body.team ?? null)
+      const dto = await this.joinBattleRoom.execute(roomId, identity.subject, body.team ?? null)
+
+      // Un solo evento cubre tanto "ingreso valido" como "transicion a
+      // PREPARING": ambos son el MISMO resultado de la MISMA mutacion
+      // (BattleRoom.join() decide PREPARING en la misma escritura), asi que
+      // el payload que ya trae `dto.status` es suficiente -- no hace falta
+      // un segundo evento distinto para la transicion de estado.
+      this.notifyRoomUpdated(dto)
+
+      return dto
     } catch (error: unknown) {
       throw BattleRoomController.translate(error)
+    }
+  }
+
+  /**
+   * Notifica `battle-room.updated` (HU-15.2, ADR-020) DESPUES de que
+   * `repository.save()` ya persistio -- nunca antes: el controlador no
+   * conoce reglas de negocio, solo reenvia el resultado ya confirmado del
+   * caso de uso. Un fallo al notificar (p. ej. el gateway aun no acepta
+   * conexiones) NO REVIENTA LA PETICION HTTP: la mutacion ya esta
+   * persistida y es el resultado que importa; la notificacion es una
+   * mejora de experiencia, no la fuente de verdad (esa es
+   * `GET /v1/combat/rooms`, igual que antes de esta ampliacion).
+   */
+  private notifyRoomUpdated(dto: BattleRoomDto): void {
+    try {
+      this.realtime.notifyRoomUpdated({ roomId: dto.id, status: dto.status, version: dto.version })
+    } catch {
+      // No se traduce ni se propaga: ver el comentario del metodo.
     }
   }
 
@@ -187,7 +234,8 @@ export class BattleRoomController {
       error instanceof RoomConflictError ||
       error instanceof RoomNotJoinableError ||
       error instanceof RoomFullError ||
-      error instanceof PlayerAlreadyJoinedError
+      error instanceof PlayerAlreadyJoinedError ||
+      error instanceof DuplicateDisplayNameError
     ) {
       return new ConflictException(error.message)
     }
@@ -196,9 +244,20 @@ export class BattleRoomController {
       error instanceof InvalidTeamCapacityError ||
       error instanceof InvalidRoomCapacityError ||
       error instanceof InvalidModeCompositionError ||
-      error instanceof InvalidRewardError
+      error instanceof InvalidRewardError ||
+      error instanceof PlayerWithoutEquippedHeroError
     ) {
       return new UnprocessableEntityException(error.message)
+    }
+
+    // HU-15.2 (RF-15): las llamadas internas a Account/Player-Inventory
+    // fallaron (no alcanzable, tiempo agotado, 401, 5xx, forma invalida).
+    // 503, no 500: Combat identifica la causa como una dependencia externa,
+    // no un fallo propio no clasificado.
+    if (error instanceof UpstreamServiceError) {
+      return new ServiceUnavailableException(
+        'El servicio no pudo completar el ingreso porque una dependencia interna no respondio.',
+      )
     }
 
     if (error instanceof DomainError) {

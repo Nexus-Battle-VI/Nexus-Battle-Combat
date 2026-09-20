@@ -20,6 +20,13 @@ export interface ParticipantDocument {
   readonly kind: string
   readonly playerId: string | null
   readonly heroId: string | null
+  /**
+   * Aditivo (HU-15.2, migracion 003): documentos escritos antes de esta
+   * version no lo tienen. `toSnapshot` lo trata como `undefined ->
+   * null`, igual que ya hace con `heroId`/`playerId` ausentes -- ningun
+   * documento existente necesita reescribirse.
+   */
+  readonly displayName?: string | null
   readonly joinedAt: Date
 }
 
@@ -68,6 +75,7 @@ const toTeamSnapshot = (team: TeamDocument, roomId: string): TeamSnapshot => ({
     kind: participant.kind,
     playerId: participant.playerId,
     heroId: participant.heroId,
+    displayName: participant.displayName ?? null,
     joinedAt: participant.joinedAt,
   })),
 })
@@ -101,6 +109,7 @@ const toTeamDocument = (team: TeamSnapshot): TeamDocument => ({
     kind: participant.kind,
     playerId: participant.playerId ?? null,
     heroId: participant.heroId ?? null,
+    displayName: participant.displayName ?? null,
     joinedAt: participant.joinedAt ?? new Date(0),
   })),
 })
