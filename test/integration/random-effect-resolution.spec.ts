@@ -1,12 +1,15 @@
 import { CdfUniformIndexMapper } from '../../src/adapters/outbound/system/CdfUniformIndexMapper'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../src/adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
+import { buildHeroEffectTable } from '../../src/application/use-cases/BuildHeroEffectTable'
 import { ResolveRandomEffect } from '../../src/application/use-cases/ResolveRandomEffect'
 import { baseEffectTableFor } from '../../src/domain/random-effects/BaseEffectProfiles'
 import { type EffectControlTable } from '../../src/domain/random-effects/EffectControlTable'
 import { ProbabilityModifier } from '../../src/domain/random-effects/ProbabilityModifier'
 import { RandomEffectType } from '../../src/domain/random-effects/RandomEffectType'
 import { HeroSubtype } from '../../src/domain/value-objects/HeroSubtype'
+import { RandomIndex } from '../../src/domain/value-objects/RandomIndex'
 import { RandomSeed } from '../../src/domain/value-objects/RandomSeed'
+import { equippedHeroFixture } from '../fixtures/equipped-hero'
 
 /**
  * Integracion HU-24 -> HU-25 (Application / composicion).
@@ -116,6 +119,40 @@ describe('Integracion HU-24 -> HU-25', () => {
       // Con la normal usada directamente como indice, "causar dano" (filas
       // 1-4800) recibiria ~72,6 %. Con el indice uniforme recibe ~60 %.
       expect(observed[D] ?? 0).toBeLessThan(0.65)
+    })
+  })
+
+  describe('equipamiento real (CRITICAL_CHANCE +300 pb de Player-Inventory) -> tabla -> efecto', () => {
+    const sinEquipo = (): EffectControlTable =>
+      buildHeroEffectTable(equippedHeroFixture({ activeEffects: [] })).table
+    const conEspada = (): EffectControlTable => buildHeroEffectTable(equippedHeroFixture()).table
+    const resolveAt = (table: EffectControlTable, row: number): RandomEffectType =>
+      resolveRandomEffect.execute({
+        sequence: { nextIndex: () => RandomIndex.create(row) },
+        table,
+      }).effect
+
+    it('el mismo indice controlado (5300) da EVADE sin equipo y CRITICAL_DAMAGE con la espada', () => {
+      expect(resolveAt(sinEquipo(), 5300)).toBe(E)
+      expect(resolveAt(conEspada(), 5300)).toBe(C)
+    })
+
+    it('la tabla equipada es la del +3 (critico 640 / sin dano 2160), sin otra fuente aleatoria', () => {
+      expect(conEspada().rowsOf(C)).toBe(640)
+      expect(conEspada().rowsOf(N)).toBe(2160)
+    })
+
+    it('con el generador real (HU-24) los mismos indices dan efectos distintos segun el equipamiento', () => {
+      const base = draw(sinEquipo(), 2_000)
+      const equipado = draw(conEspada(), 2_000)
+
+      expect(equipado).not.toEqual(base)
+      expect(equipado.filter((effect) => effect === C).length).toBeGreaterThan(
+        base.filter((effect) => effect === C).length,
+      )
+      // Los cinco primeros indices (2648, 3529, 3542, 7654, 7019) caen fuera de
+      // 4801-5840, el tramo que cambia: resuelven igual en ambas tablas.
+      expect(draw(conEspada(), 5)).toEqual(draw(sinEquipo(), 5))
     })
   })
 

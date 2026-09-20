@@ -21,7 +21,10 @@ import {
 } from '../../src/application/use-cases/BuildHeroEffectTable'
 import { ResolveRandomEffect } from '../../src/application/use-cases/ResolveRandomEffect'
 import { DomainError } from '../../src/domain/errors/DomainError'
-import { UnsupportedHeroEffectProfileError } from '../../src/domain/errors/RandomEffectErrors'
+import {
+  InsufficientNoDamageProbabilityError,
+  UnsupportedHeroEffectProfileError,
+} from '../../src/domain/errors/RandomEffectErrors'
 import {
   BASE_EFFECT_PERCENTAGES,
   ROWS_PER_PERCENT,
@@ -47,16 +50,18 @@ import {
 
 /**
  * HU-25, integracion con Player-Inventory: del heroe equipado real a la tabla
- * vigente. `playerId -> heroe -> subtype -> tabla base`, y que se hace con cada
- * efecto de equipamiento.
+ * vigente. `playerId -> heroe -> subtype -> tabla base -> activeEffects ->
+ * modificadores -> tabla vigente`.
  *
- * LO QUE ESTAS PRUEBAS FIJAN, y lo que NO:
+ * LO QUE ESTAS PRUEBAS FIJAN:
  *  - La tabla se elige por el subtipo REAL del heroe (Tablas 21/22).
- *  - Los efectos de equipamiento se RECIBEN y se CLASIFICAN, pero ninguno se
- *    traduce a un `ProbabilityModifier`: el requisito no define como. En
- *    especial `CRITICAL_CHANCE PERCENTAGE 300 pb` (+3 puntos absolutos o +3 %
- *    relativo) NO se resuelve aqui. Las pruebas demuestran que Combat no elige
- *    ninguna de las dos lecturas.
+ *  - `CRITICAL_CHANCE INCREASE PERCENTAGE` incondicional, permanente y sobre
+ *    SELF modifica la tabla: los puntos basicos son PUNTOS PORCENTUALES
+ *    ABSOLUTOS (100 pb = +1 pp = +80 filas; Tabla 23: 5 % + 6 % = 11 %). Regla
+ *    LOCAL a la tabla de HU-25: no redefine `PERCENTAGE` para otras
+ *    estadisticas.
+ *  - Todo otro efecto (DECREASE, SET, FIXED, DICE, condicionado, temporal,
+ *    hacia otro objetivo...) se CLASIFICA y queda declarado, sin tocar la tabla.
  */
 
 const rowsOfTable = (table: EffectControlTable): Record<string, number> =>
@@ -190,112 +195,258 @@ describe('buildHeroEffectTable — subtype real -> tabla base (HU-25)', () => {
   })
 })
 
-describe('buildHeroEffectTable — CRITICAL_CHANCE PERCENTAGE: la semantica NO se inventa (HU-25)', () => {
+describe('buildHeroEffectTable — CRITICAL_CHANCE INCREASE PERCENTAGE modifica la tabla (HU-25)', () => {
   const base = baseEffectTableFor(HeroSubtype.GuerreroArmas)
+  const critico = (basisPoints: number, change: Partial<EquippedHeroEffect> = {}) =>
+    effect({ magnitude: { mode: 'PERCENTAGE', basisPoints }, ...change })
+  const build = (...activeEffects: EquippedHeroEffect[]) =>
+    buildHeroEffectTable(equippedHeroFixture({ activeEffects }))
 
-  it('con la espada de dos manos (CRITICAL_CHANCE PERCENTAGE 300 pb) la tabla vigente ES la base', () => {
-    const { table } = buildHeroEffectTable(
-      equippedHeroFixture({ activeEffects: [criticalChancePercentageEffect] }),
-    )
+  it('sin activeEffects la tabla vigente es la base', () => {
+    const { table, appliedEffects, pendingEffects } = build()
 
     expect(table.ranges).toEqual(base.ranges)
-    expect(rowsOfTable(table)).toEqual(rowsOfTable(base))
+    expect(appliedEffects).toEqual([])
+    expect(pendingEffects).toEqual([])
   })
 
-  it('NO elige la lectura ABSOLUTA (+3 puntos = +240 filas: critico 640, sin dano 2160)', () => {
-    const { table } = buildHeroEffectTable(
-      equippedHeroFixture({ activeEffects: [criticalChancePercentageEffect] }),
-    )
-    const lecturaAbsoluta = base.withModifiers([
+  it('la espada de dos manos (300 pb) suma +3 puntos: critico 400 -> 640 filas', () => {
+    const { table } = build(criticalChancePercentageEffect)
+
+    expect(base.rowsOf(RandomEffectType.CriticalDamage)).toBe(400)
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(640)
+  })
+
+  it('300 pb restan 240 filas de NO_DAMAGE: 2400 -> 2160', () => {
+    const { table } = build(criticalChancePercentageEffect)
+
+    expect(base.rowsOf(RandomEffectType.NoDamage)).toBe(2400)
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(2160)
+  })
+
+  it('el resto de efectos conserva sus filas y el total sigue siendo 8000', () => {
+    const { table } = build(criticalChancePercentageEffect)
+
+    expect(rowsOfTable(table)).toEqual({
+      DAMAGE: 4800,
+      CRITICAL_DAMAGE: 640,
+      EVADE: 240,
+      RESIST: 0,
+      ESCAPE: 160,
+      NO_DAMAGE: 2160,
+    })
+    expect(Object.values(rowsOfTable(table)).reduce((a, b) => a + b, 0)).toBe(8000)
+  })
+
+  it('rangos exactos del caso +300 pb (critico 8 %, sin dano 27 %)', () => {
+    const { table } = build(criticalChancePercentageEffect)
+
+    expect(table.ranges).toEqual([
+      { effect: RandomEffectType.Damage, firstRow: 1, lastRow: 4800 },
+      { effect: RandomEffectType.CriticalDamage, firstRow: 4801, lastRow: 5440 },
+      { effect: RandomEffectType.Evade, firstRow: 5441, lastRow: 5680 },
+      { effect: RandomEffectType.Escape, firstRow: 5681, lastRow: 5840 },
+      { effect: RandomEffectType.NoDamage, firstRow: 5841, lastRow: 8000 },
+    ])
+  })
+
+  it.each([
+    [4800, RandomEffectType.Damage],
+    [4801, RandomEffectType.CriticalDamage],
+    [5440, RandomEffectType.CriticalDamage],
+    [5441, RandomEffectType.Evade],
+    [5680, RandomEffectType.Evade],
+    [5681, RandomEffectType.Escape],
+    [5840, RandomEffectType.Escape],
+    [5841, RandomEffectType.NoDamage],
+    [8000, RandomEffectType.NoDamage],
+  ])('fronteras +300 pb: la fila %i resuelve %s', (row, expected) => {
+    const { table } = build(criticalChancePercentageEffect)
+
+    expect(table.resolve(RandomIndex.create(row)).effect).toBe(expected)
+  })
+
+  it('600 pb (el +6 % de la Tabla 23) reproduce la Tabla 23 EXACTA: critico 11 %, sin dano 24 %', () => {
+    const { table } = build(critico(600))
+
+    expect(table.ranges).toEqual([
+      { effect: RandomEffectType.Damage, firstRow: 1, lastRow: 4800 },
+      { effect: RandomEffectType.CriticalDamage, firstRow: 4801, lastRow: 5680 },
+      { effect: RandomEffectType.Evade, firstRow: 5681, lastRow: 5920 },
+      { effect: RandomEffectType.Escape, firstRow: 5921, lastRow: 6080 },
+      { effect: RandomEffectType.NoDamage, firstRow: 6081, lastRow: 8000 },
+    ])
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(880)
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(1920)
+    expect(table.rowsOf(RandomEffectType.Resist)).toBe(0)
+  })
+
+  it('el resultado por el heroe coincide con el ProbabilityModifier del dominio (fuente unica de la conversion)', () => {
+    const esperada = base.withModifiers([
       ProbabilityModifier.ofBasisPoints(RandomEffectType.CriticalDamage, 300),
     ])
 
-    // Control: la lectura absoluta SI produce otra tabla (+240 filas), asi que
-    // esta comparacion detectaria que Combat la hubiera adoptado.
-    expect(lecturaAbsoluta.rowsOf(RandomEffectType.CriticalDamage)).toBe(640)
-    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(400)
-    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(2400)
-    expect(table.ranges).not.toEqual(lecturaAbsoluta.ranges)
-  })
-
-  it('NO elige la lectura RELATIVA (+3 % sobre el 5 % base = 412 filas)', () => {
-    const { table } = buildHeroEffectTable(
-      equippedHeroFixture({ activeEffects: [criticalChancePercentageEffect] }),
-    )
-
-    // 5 % = 400 filas; +3 % relativo = 400 x 1,03 = 412 filas.
-    expect(table.rowsOf(RandomEffectType.CriticalDamage)).not.toBe(412)
-    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(400)
+    expect(build(criticalChancePercentageEffect).table.ranges).toEqual(esperada.ranges)
   })
 
   it.each([
-    ['100 pb', 100],
-    ['300 pb', 300],
-    ['600 pb (el +6 % de la Tabla 23)', 600],
-    ['10000 pb', 10_000],
-  ])('%s de CRITICAL_CHANCE tampoco modifica la tabla', (_label, basisPoints) => {
-    const { table, pendingEffects } = buildHeroEffectTable(
-      equippedHeroFixture({
-        activeEffects: [effect({ magnitude: { mode: 'PERCENTAGE', basisPoints } })],
-      }),
-    )
+    ['100 pb', 100, 80],
+    ['300 pb', 300, 240],
+    ['600 pb', 600, 480],
+    ['5 pb (el minimo exacto)', 5, 4],
+  ])('%s = +%i filas de critico', (_label, basisPoints, rows) => {
+    const { table } = build(critico(basisPoints))
 
-    expect(table.ranges).toEqual(base.ranges)
-    expect(pendingEffects).toHaveLength(1)
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(400 + rows)
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(2400 - rows)
   })
 
-  it.each([
-    ['FIXED', { mode: 'FIXED', amount: 3 } as const],
-    ['DICE', { mode: 'DICE', count: 1, sides: 6 } as const],
-  ])('CRITICAL_CHANCE con magnitud %s: mismo pendiente, la tabla no cambia', (_mode, magnitude) => {
-    const { table, pendingEffects } = buildHeroEffectTable(
-      equippedHeroFixture({ activeEffects: [effect({ magnitude })] }),
-    )
+  it('varios bonos validos se suman (+300 +200 = +5 puntos = 800 filas) y salen de NO_DAMAGE', () => {
+    const { table, appliedEffects } = build(critico(300), critico(200))
 
-    expect(table.ranges).toEqual(base.ranges)
-    expect(pendingEffects[0]?.reasons).toContain(PendingReason.CriticalChanceUnitUndefined)
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(800)
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(2000)
+    expect(appliedEffects).toHaveLength(2)
   })
 
-  it('el efecto queda DECLARADO como pendiente, con su motivo: no se finge que se aplico', () => {
-    const { pendingEffects, assessments } = buildHeroEffectTable(
-      equippedHeroFixture({ activeEffects: [criticalChancePercentageEffect] }),
-    )
+  it('el orden no importa: +200 +300 da la misma tabla que +300 +200', () => {
+    const uno = build(critico(300), critico(200)).table
+    const otro = build(critico(200), critico(300)).table
 
+    expect(otro.ranges).toEqual(uno.ranges)
+  })
+
+  it('un bono de 0 pb se aplica sin cambiar la tabla', () => {
+    const { table, appliedEffects, pendingEffects } = build(critico(0))
+
+    expect(table.ranges).toEqual(base.ranges)
+    expect(appliedEffects).toHaveLength(1)
+    expect(pendingEffects).toEqual([])
+  })
+
+  it('un bono que consume EXACTAMENTE el NO_DAMAGE disponible es valido (queda en 0)', () => {
+    // 2400 filas de NO_DAMAGE = 30 % = 3000 pb.
+    const { table } = build(critico(3000))
+
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(0)
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(2800)
+    expect(table.resolve(RandomIndex.create(8000)).effect).toBe(RandomEffectType.Escape)
+  })
+
+  it('un bono mayor que el NO_DAMAGE disponible falla: no se recorta ni se redistribuye', () => {
+    expect(() => build(critico(3005))).toThrow(InsufficientNoDamageProbabilityError)
+    expect(() => build(critico(2000), critico(1500))).toThrow(InsufficientNoDamageProbabilityError)
+    expect(() => build(critico(10_000))).toThrow(InsufficientNoDamageProbabilityError)
+  })
+
+  it('el efecto aplicado NO es pendiente: sale como APPLIED_TO_TABLE con su modificador', () => {
+    const { assessments, appliedEffects, pendingEffects } = build(criticalChancePercentageEffect)
+
+    expect(pendingEffects).toEqual([])
     expect(assessments).toHaveLength(1)
-    expect(pendingEffects).toEqual([
-      {
-        effect: criticalChancePercentageEffect,
-        outcome: EquipmentEffectOutcome.PendingDefinition,
-        reasons: [PendingReason.CriticalChanceUnitUndefined],
-      },
-    ])
+    expect(appliedEffects).toHaveLength(1)
+    expect(appliedEffects[0]?.outcome).toBe(EquipmentEffectOutcome.AppliedToTable)
+    expect(appliedEffects[0]?.reasons).toEqual([])
+    expect(appliedEffects[0]?.effect).toBe(criticalChancePercentageEffect)
+    expect(appliedEffects[0]?.modifier).toEqual(
+      ProbabilityModifier.ofBasisPoints(RandomEffectType.CriticalDamage, 300),
+    )
   })
 
-  it('varias piezas con critico (se apilan?): NO se suman ni se escoge una; TODAS quedan pendientes', () => {
-    const anillo = effect({
-      sourceProductId: 'p-anillo',
-      sourceProductReference: 'anillo',
-      magnitude: { mode: 'PERCENTAGE', basisPoints: 100 },
-    })
-    const { table, pendingEffects } = buildHeroEffectTable(
-      equippedHeroFixture({ activeEffects: [criticalChancePercentageEffect, anillo] }),
+  it('un efecto se aplica UNA sola vez: con dos bonos de 300 pb el critico gana 480 filas, no 720', () => {
+    const { table } = build(critico(300), critico(300, { sourceProductReference: 'anillo' }))
+
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(400 + 480)
+  })
+
+  it('no toca la tabla base compartida, BASE_EFFECT_PERCENTAGES ni activeEffects, y es determinista', () => {
+    const antes = JSON.stringify(BASE_EFFECT_PERCENTAGES)
+    const efectos = deepFreeze([critico(300), critico(200)])
+    const hero = deepFreeze(equippedHeroFixture({ activeEffects: efectos }))
+
+    const primera = buildHeroEffectTable(hero)
+    const segunda = buildHeroEffectTable(hero)
+
+    expect(primera.table.ranges).toEqual(segunda.table.ranges)
+    expect(primera.table).not.toBe(base)
+    expect(baseEffectTableFor(HeroSubtype.GuerreroArmas).ranges).toEqual(base.ranges)
+    expect(base.rowsOf(RandomEffectType.CriticalDamage)).toBe(400)
+    expect(JSON.stringify(BASE_EFFECT_PERCENTAGES)).toBe(antes)
+  })
+
+  it.each([
+    ['con condicion de activacion', { hasActivationCondition: true }],
+    ['dirigido a otro objetivo', { target: 'OPPONENT' }],
+    ['temporal (durationTurns)', { durationTurns: 3 }],
+    ['operacion DECREASE', { operation: 'DECREASE' }],
+    ['operacion SET', { operation: 'SET' }],
+    ['operacion MULTIPLY', { operation: 'MULTIPLY' }],
+    ['operacion BLOCK', { operation: 'BLOCK' }],
+    ['magnitud FIXED', { magnitude: { mode: 'FIXED', amount: 3 } as const }],
+    ['magnitud DICE', { magnitude: { mode: 'DICE', count: 1, sides: 6 } as const }],
+    [
+      'appliedToStats=true (contradice el contrato: effectiveStats no tiene critico)',
+      { appliedToStats: true },
+    ],
+  ] satisfies readonly (readonly [string, Partial<EquippedHeroEffect>])[])(
+    'CRITICAL_CHANCE %s: PENDING_DEFINITION y la tabla NO cambia',
+    (_label, change) => {
+      const { table, pendingEffects, appliedEffects } = build(effect(change))
+
+      expect(table.ranges).toEqual(base.ranges)
+      expect(appliedEffects).toEqual([])
+      expect(pendingEffects).toHaveLength(1)
+      expect(pendingEffects[0]?.outcome).toBe(EquipmentEffectOutcome.PendingDefinition)
+      expect(pendingEffects[0]?.reasons.length).toBeGreaterThan(0)
+      expect(pendingEffects[0]?.modifier).toBeUndefined()
+    },
+  )
+
+  it('un efecto pendiente no impide aplicar los validos: solo los validos suman', () => {
+    const { table, appliedEffects, pendingEffects } = build(
+      critico(300),
+      critico(300, { hasActivationCondition: true }),
+      critico(200, { target: 'OPPONENT' }),
     )
+
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(640)
+    expect(appliedEffects).toHaveLength(1)
+    expect(pendingEffects).toHaveLength(2)
+  })
+
+  it.each([
+    ['sin multiplo de 5 pb (303)', 303],
+    ['no entero (2.5)', 2.5],
+    ['negativo (-300)', -300],
+  ])(
+    'PERCENTAGE %s no equivale a filas exactas: pendiente, no se redondea',
+    (_label, basisPoints) => {
+      const { table, pendingEffects } = build(critico(basisPoints))
+
+      expect(table.ranges).toEqual(base.ranges)
+      expect(pendingEffects[0]?.reasons).toEqual([PendingReason.CriticalChanceNotRowAligned])
+    },
+  )
+
+  it('MAGO_FUEGO (sin Evade ni Escape): el critico sigue saliendo de NO_DAMAGE', () => {
+    const { table } = buildHeroEffectTable(
+      equippedHeroFixture({ subtype: 'MAGO_FUEGO', activeEffects: [critico(300)] }),
+    )
+
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(400 + 240)
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(1600 - 240)
+  })
+
+  it('una estadistica que NO es critico con PERCENTAGE sigue sin ser una probabilidad de la tabla (regla local)', () => {
+    const ataque = effect({
+      statistic: 'ATTACK',
+      magnitude: { mode: 'PERCENTAGE', basisPoints: 300 },
+    })
+    const { table, appliedEffects, nonTableEffects } = build(ataque)
 
     expect(table.ranges).toEqual(base.ranges)
-    expect(pendingEffects.map((p) => p.effect.sourceProductReference)).toEqual([
-      'espada-de-dos-manos',
-      'anillo',
-    ])
-  })
-
-  it('un CRITICAL_CHANCE marcado appliedToStats=true NO se da por consolidado (effectiveStats no tiene critico)', () => {
-    const contradictorio = effect({ appliedToStats: true })
-    const { pendingEffects } = buildHeroEffectTable(
-      equippedHeroFixture({ activeEffects: [contradictorio] }),
-    )
-
-    expect(pendingEffects).toHaveLength(1)
-    expect(pendingEffects[0]?.outcome).toBe(EquipmentEffectOutcome.PendingDefinition)
+    expect(appliedEffects).toEqual([])
+    expect(nonTableEffects).toHaveLength(1)
   })
 })
 
@@ -374,24 +525,30 @@ describe('assessEquipmentEffect — que se hace con cada efecto (HU-25)', () => 
     },
   )
 
-  describe('CRITICAL_CHANCE: cada motivo adicional se declara, en orden estable', () => {
+  describe('CRITICAL_CHANCE: cada motivo pendiente se declara, en orden estable', () => {
+    it('el efecto soportado (INCREASE PERCENTAGE, SELF, permanente) se aplica y no tiene motivos', () => {
+      expect(assessEquipmentEffect(criticalChancePercentageEffect)).toEqual({
+        effect: criticalChancePercentageEffect,
+        outcome: EquipmentEffectOutcome.AppliedToTable,
+        reasons: [],
+        modifier: ProbabilityModifier.ofBasisPoints(RandomEffectType.CriticalDamage, 300),
+      })
+    })
+
     it('con condicion de activacion: NO se trata como permanente', () => {
       expect(assessEquipmentEffect(effect({ hasActivationCondition: true })).reasons).toEqual([
-        PendingReason.CriticalChanceUnitUndefined,
         PendingReason.ActivationConditionUnevaluated,
       ])
     })
 
     it('temporal', () => {
       expect(assessEquipmentEffect(effect({ durationTurns: 3 })).reasons).toEqual([
-        PendingReason.CriticalChanceUnitUndefined,
         PendingReason.TemporaryEffectUndefined,
       ])
     })
 
     it('dirigido a otro objetivo', () => {
       expect(assessEquipmentEffect(effect({ target: 'OPPONENT' })).reasons).toEqual([
-        PendingReason.CriticalChanceUnitUndefined,
         PendingReason.NonSelfTargetUndefined,
       ])
     })
@@ -400,20 +557,44 @@ describe('assessEquipmentEffect — que se hace con cada efecto (HU-25)', () => 
       'operacion %s: HU-25 solo define incrementos',
       (operation) => {
         expect(assessEquipmentEffect(effect({ operation })).reasons).toEqual([
-          PendingReason.CriticalChanceUnitUndefined,
           PendingReason.OperationUndefined,
         ])
       },
     )
 
     it('sin operation: tampoco es un incremento definido', () => {
-      expect(assessEquipmentEffect(withoutKeys(effect({}), 'operation')).reasons).toContain(
+      expect(assessEquipmentEffect(withoutKeys(effect({}), 'operation')).reasons).toEqual([
         PendingReason.OperationUndefined,
-      )
+      ])
+    })
+
+    it.each([
+      ['FIXED', { mode: 'FIXED', amount: 3 } as const],
+      ['DICE', { mode: 'DICE', count: 1, sides: 6 } as const],
+    ])('magnitud %s: la unidad de probabilidad no esta definida', (_mode, magnitude) => {
+      expect(assessEquipmentEffect(effect({ magnitude })).reasons).toEqual([
+        PendingReason.CriticalChanceUnitUndefined,
+      ])
+    })
+
+    it('sin magnitud: unidad indefinida', () => {
+      expect(assessEquipmentEffect(withoutKeys(effect({}), 'magnitude')).reasons).toEqual([
+        PendingReason.CriticalChanceUnitUndefined,
+      ])
+    })
+
+    it('appliedToStats=true: contradiccion del contrato, ni consolidado ni aplicado', () => {
+      expect(assessEquipmentEffect(effect({ appliedToStats: true }))).toEqual({
+        effect: effect({ appliedToStats: true }),
+        outcome: EquipmentEffectOutcome.PendingDefinition,
+        reasons: [PendingReason.CriticalChanceAlreadyInStatsInconsistent],
+      })
     })
 
     it('todos a la vez', () => {
       const todo = effect({
+        magnitude: { mode: 'FIXED', amount: 3 },
+        appliedToStats: true,
         hasActivationCondition: true,
         durationTurns: 2,
         target: 'ENEMY_GROUP',
@@ -422,6 +603,7 @@ describe('assessEquipmentEffect — que se hace con cada efecto (HU-25)', () => 
 
       expect(assessEquipmentEffect(todo).reasons).toEqual([
         PendingReason.CriticalChanceUnitUndefined,
+        PendingReason.CriticalChanceAlreadyInStatsInconsistent,
         PendingReason.ActivationConditionUnevaluated,
         PendingReason.TemporaryEffectUndefined,
         PendingReason.NonSelfTargetUndefined,
@@ -432,17 +614,32 @@ describe('assessEquipmentEffect — que se hace con cada efecto (HU-25)', () => 
 })
 
 describe('buildHeroEffectTable — efectos del contrato completo (HU-25)', () => {
-  it('con los cuatro efectos del contrato: uno consolidado, uno pendiente y dos ajenos a la tabla', () => {
-    const { assessments, pendingEffects, table } = buildHeroEffectTable(equippedHeroFixture())
+  it('con los cuatro efectos del contrato: uno consolidado, uno aplicado a la tabla y dos ajenos a ella', () => {
+    const {
+      assessments,
+      appliedEffects,
+      reflectedInStatsEffects,
+      nonTableEffects,
+      pendingEffects,
+    } = buildHeroEffectTable(equippedHeroFixture())
 
     expect(assessments.map((a) => a.outcome)).toEqual([
       EquipmentEffectOutcome.ReflectedInStats,
-      EquipmentEffectOutcome.PendingDefinition,
+      EquipmentEffectOutcome.AppliedToTable,
       EquipmentEffectOutcome.NotATableModifier,
       EquipmentEffectOutcome.NotATableModifier,
     ])
-    expect(pendingEffects.map((a) => a.effect.statistic)).toEqual(['CRITICAL_CHANCE'])
-    expect(table.ranges).toEqual(baseEffectTableFor(HeroSubtype.GuerreroArmas).ranges)
+    expect(appliedEffects.map((a) => a.effect.statistic)).toEqual(['CRITICAL_CHANCE'])
+    expect(reflectedInStatsEffects.map((a) => a.effect.statistic)).toEqual(['ATTACK'])
+    expect(nonTableEffects).toHaveLength(2)
+    expect(pendingEffects).toEqual([])
+  })
+
+  it('con los cuatro efectos del contrato la tabla es la del critico +300 pb', () => {
+    const { table } = buildHeroEffectTable(equippedHeroFixture())
+
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(640)
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(2160)
   })
 
   it('una entrada por efecto recibido y en el mismo orden: ninguno se pierde', () => {
@@ -458,12 +655,13 @@ describe('buildHeroEffectTable — efectos del contrato completo (HU-25)', () =>
   })
 
   it('un heroe sin efectos: sin evaluaciones ni pendientes', () => {
-    const { assessments, pendingEffects } = buildHeroEffectTable(
+    const { assessments, pendingEffects, appliedEffects } = buildHeroEffectTable(
       equippedHeroFixture({ activeEffects: [] }),
     )
 
     expect(assessments).toEqual([])
     expect(pendingEffects).toEqual([])
+    expect(appliedEffects).toEqual([])
   })
 
   it('no muta el heroe recibido', () => {
@@ -559,21 +757,35 @@ describe('Cadena contractual completa: JSON de Player-Inventory -> tabla -> efec
       table,
     }).effect
 
-  it('el contrato real (GUERRERO_ARMAS con espada critica) resuelve por la Tabla 22, sin aplicar el critico pendiente', async () => {
-    const { table, pendingEffects } = await chainFor(equippedHeroContractBody()).execute(
-      'jugador-1',
-    )
+  it('el contrato real (GUERRERO_ARMAS con espada critica +300 pb) resuelve por la tabla MODIFICADA', async () => {
+    const { table, pendingEffects, appliedEffects } = await chainFor(
+      equippedHeroContractBody(),
+    ).execute('jugador-1')
 
+    expect(table.rowsOf(RandomEffectType.CriticalDamage)).toBe(640)
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(2160)
     expect(resolveAt(table, 1)).toBe(RandomEffectType.Damage)
     expect(resolveAt(table, 4800)).toBe(RandomEffectType.Damage)
     expect(resolveAt(table, 4801)).toBe(RandomEffectType.CriticalDamage)
-    expect(resolveAt(table, 5200)).toBe(RandomEffectType.CriticalDamage)
-    // Con +3 puntos absolutos el critico llegaria a la fila 5440 y esto seria
-    // CRITICAL_DAMAGE: que sea EVADE prueba que la lectura absoluta NO se aplico.
-    expect(resolveAt(table, 5201)).toBe(RandomEffectType.Evade)
-    expect(resolveAt(table, 5601)).toBe(RandomEffectType.NoDamage)
+    // Con la base el critico terminaba en 5200 y 5201 era EVADE; con +3 puntos
+    // absolutos llega a 5440.
+    expect(resolveAt(table, 5201)).toBe(RandomEffectType.CriticalDamage)
+    expect(resolveAt(table, 5440)).toBe(RandomEffectType.CriticalDamage)
+    expect(resolveAt(table, 5441)).toBe(RandomEffectType.Evade)
+    expect(resolveAt(table, 5841)).toBe(RandomEffectType.NoDamage)
     expect(resolveAt(table, 8000)).toBe(RandomEffectType.NoDamage)
-    expect(pendingEffects).toHaveLength(1)
+    expect(pendingEffects).toEqual([])
+    expect(appliedEffects).toHaveLength(1)
+  })
+
+  it('el mismo indice (5300) da EVADE con la tabla base y CRITICAL_DAMAGE con el equipamiento', async () => {
+    const { table } = await chainFor(equippedHeroContractBody()).execute('jugador-1')
+    const sinEquipo = await chainFor(equippedHeroContractBody({ activeEffects: [] })).execute(
+      'jugador-1',
+    )
+
+    expect(resolveAt(sinEquipo.table, 5300)).toBe(RandomEffectType.Evade)
+    expect(resolveAt(table, 5300)).toBe(RandomEffectType.CriticalDamage)
   })
 
   it('el subtipo del JSON decide la tabla: el mismo cuerpo con GUERRERO_TANQUE resuelve distinto', async () => {
