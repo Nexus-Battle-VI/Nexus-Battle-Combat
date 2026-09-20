@@ -44,6 +44,10 @@ Implementado como puerto `RandomSequenceFactoryPort` (`application/ports/RandomS
 
 Dominio puro en `domain/random-effects` (`EffectControlTable`, `ProbabilityModifier`, `BaseEffectProfiles`) y el caso de uso `ResolveRandomEffect`, que consume **solo** `RandomSequencePort.nextIndex()` (HU-24) y resuelve el efecto y su magnitud relativa. Combat sigue siendo la única autoridad: el cliente no selecciona fila ni efecto y no hay endpoint. Todavía **no lo invoca ningún flujo de batalla** (HU-20) y **nadie construye la tabla a partir del héroe equipado real** (Player-Inventory aún no entrega los modificadores). Detalle y pendientes en [hu-25-effect-control-table.md](hu-25-effect-control-table.md).
 
+## Validación estadística de la semilla (HU-26)
+
+Estudio **offline** (`tools/hu-26/`, evidencia en `docs/evidence/hu-26/`): genera muestras con `createNormalSequence(seed).nextNormal()` del código productivo y las analiza con Python (KS, Ljung-Box, Q-Q, momentos). No forma parte del runtime ni de la imagen, no añade endpoints ni persistencia y no se ejecuta en el hot path. Resultado y limitaciones en [hu-26-seed-validation.md](hu-26-seed-validation.md). **No existe todavía una política de semilla por batalla**: la semilla seleccionada es una referencia validada, no una configuración global.
+
 ## Contrato previsto
 
 - `POST /api/v1/combat/rooms` y `GET /api/v1/combat/rooms` — crear y listar salas (HU-14, implementado).

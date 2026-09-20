@@ -259,6 +259,9 @@ Kolmogorov-Smirnov, Ljung-Box, Q-Q). **HU-26 no está implementada.** Esta rama 
 automatizadas deterministas de humo estadístico (ver [Reproducibilidad](#reproducibilidad)), no el
 estudio científico. La política de qué semilla recibe cada batalla o simulación **no se decide aquí**.
 
+> **Actualización:** el estudio de HU-26 ya se ejecutó sobre este generador (`createNormalSequence`); ver
+> [hu-26-seed-validation.md](hu-26-seed-validation.md). Sigue sin definirse una política de semilla por batalla.
+
 ## Integración futura con Missions
 
 ADR-019 fija que Missions **no** implementa su propio generador: pide la simulación a Combat

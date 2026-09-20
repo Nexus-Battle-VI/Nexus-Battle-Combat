@@ -27,6 +27,10 @@ Este repositorio contiene código y Pull Requests. No contiene Issues ni Product
 
 **Implementada la resolución `RandomIndex` (HU-24) → fila → efecto y magnitud**: tabla de 8000 filas por tipo de héroe (Tabla 21 del documento oficial: Guerrero Tanque/Armas, Mago Fuego/Hielo, Pícaro Veneno/Machete), mecánica de modificadores (+6 % de crítico compensado desde «no causar daño», Tabla 23) y caso de uso `ResolveRandomEffect`. **Aún no la invoca ningún flujo** (HU-20 deberá hacerlo cuando Ataque > Defensa), **nadie construye todavía la tabla a partir del héroe equipado real**, no calcula daño numérico y **no hay endpoint público**. Pendientes: Chamán/Médico sin tabla válida en el documento, selección concreta del crítico 120–180 % y contrato de modificadores desde Player-Inventory. Ver [docs/hu-25-effect-control-table.md](docs/hu-25-effect-control-table.md).
 
+### Validación estadística de la semilla (HU-26)
+
+**Estudio ejecutado sobre la implementación productiva** (`createNormalSequence`, la variable normal cruda `Z` de HU-24) con 11 candidatas, N = 100.000, α = 0,05, KS, Ljung-Box y Q-Q, con evidencia reproducible en `docs/evidence/hu-26/` y herramientas offline en `tools/hu-26/` (fuera del runtime y de la imagen). La regla, fijada antes de ejecutar, seleccionó la semilla **777**. **Eso no configura ninguna semilla para las batallas**: no existe política de semilla ni agregado de batalla, no hay endpoint y MT19937 sigue sin ser criptográficamente seguro. Ver [docs/hu-26-seed-validation.md](docs/hu-26-seed-validation.md); reproducir con `npm run study:hu-26`.
+
 ## Qué posee este contexto
 
 - Salas y lobby: modalidad, cupo, composición humana/IA, recompensa, estado.
