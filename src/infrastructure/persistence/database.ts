@@ -6,6 +6,7 @@ import * as battleRoomsDisplayNameMigration from '../../adapters/outbound/persis
 import * as battleRoomsHeroLoadoutVersionMigration from '../../adapters/outbound/persistence/migrations/004-battle-rooms-participant-hero-loadout-version'
 import * as battleRoomsBattleStateMigration from '../../adapters/outbound/persistence/migrations/005-battle-rooms-battle-state'
 import * as chatMessagesMigration from '../../adapters/outbound/persistence/migrations/006-chat-messages'
+import * as battleRoomsCombatSnapshotMigration from '../../adapters/outbound/persistence/migrations/007-battle-rooms-combat-snapshot'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -63,6 +64,7 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   },
   { name: '005-battle-rooms-battle-state', up: battleRoomsBattleStateMigration.up },
   { name: '006-chat-messages', up: chatMessagesMigration.up },
+  { name: '007-battle-rooms-combat-snapshot', up: battleRoomsCombatSnapshotMigration.up },
 ]
 
 const REGISTRY = '_migrations'

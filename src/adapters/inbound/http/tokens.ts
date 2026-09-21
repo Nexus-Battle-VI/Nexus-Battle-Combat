@@ -13,3 +13,8 @@ export const CONSUME_REALTIME_TICKET = Symbol('ConsumeRealtimeTicket')
 export const RESUME_BATTLE = Symbol('ResumeBattle')
 export const COMPLETE_BATTLE_TURN = Symbol('CompleteBattleTurn')
 export const BATTLE_RANDOM = Symbol('BoundedRandom')
+/** HU-18: la MISMA secuencia HU-24 de proceso que alimenta `BATTLE_RANDOM` (una sola fuente). */
+export const BATTLE_RANDOM_SEQUENCE = Symbol('BattleRandomSequence')
+export const EXECUTE_BASIC_ATTACK = Symbol('ExecuteBasicAttack')
+/** HU-18: serializa los comandos de una misma sala (una replica, ADR-020). */
+export const ROOM_COMMAND_LOCK = Symbol('RoomCommandLock')

@@ -4,6 +4,9 @@
 > inmutable, el avance de turno del lado del servidor, `battleStarted`/`turnAdvanced` con `seq`, el ticket de un
 > solo uso, `resume`/`snapshot` y el latido, según [ADR-020](https://github.com/Nexus-Battle-VI/Nexus-Battle-Infrastructure/blob/develop/docs/adr/ADR-020-realtime-combat.md).
 > **No implementa** ataque, daño, habilidades, Poder, fin de batalla ni abandono (HU-18, HU-19, HU-21).
+> _Actualización:_ el ataque básico ya existe en [HU-18](hu-18-basic-attack.md) y usa el avance de turno de este
+> documento; `BattleView` ganó de forma **aditiva** `combatants[]` (Vida) y `battle.combatants` se guarda con la
+> migración `007`. Nada de lo descrito aquí cambió de significado._
 > Contrato: [hu-17-battle-turn-order-v1.md](https://github.com/Nexus-Battle-VI/Nexus-Battle-Infrastructure/blob/develop/docs/contracts/hu-17-battle-turn-order-v1.md).
 
 ## Trazabilidad
@@ -153,7 +156,9 @@ número de sorteos, el inventario, el JWT ni los tickets.
 ## Avance de turno (server-side)
 
 `CompleteBattleTurn` (`COMPLETE_BATTLE_TURN` en la raíz de composición) **no tiene ruta pública ni mensaje de
-WebSocket**: lo invocarán las acciones válidas de HU-18/HU-19 al terminar. Web nunca decide `turno + 1`. Es
+WebSocket**: lo invocan las acciones válidas al terminar. El ataque básico de HU-18 **no** lo llama como segundo
+guardado: reutiliza `BattleState.completeTurn` dentro de la misma transición atómica que baja la Vida (una sola
+escritura). Web nunca decide `turno + 1`. Es
 idempotente por `commandId`, reintenta ante un conflicto de versión (máx. 3) y persiste antes de difundir
 `turnAdvanced`. Dos cierres concurrentes con distinto `commandId` del participante activo → solo uno avanza.
 
@@ -191,4 +196,5 @@ al estado hace que «persistir la batalla» y «persistir el evento» sean la mi
   separada (ADR-021); no es requisito de HU-17.
 - Orden de turnos con equipos de distinto tamaño: sin regla ratificada, HU-17 lo rechaza. Prohibir esas salas al
   crearlas (HU-14) requiere una aclaración formal.
-- `CompleteBattleTurn` no tiene consumidor de producción todavía (lo tendrán HU-18/HU-19).
+- `CompleteBattleTurn` (caso de uso) sigue sin consumidor de producción: HU-18 avanza el turno dentro de su
+  propia transición atómica (`BattleState.completeTurn`), y lo usarán las habilidades de HU-19 si conviene.

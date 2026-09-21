@@ -23,9 +23,10 @@ export class IssueRealtimeTicket {
 
   execute(subject: string): IssuedRealtimeTicket {
     const ticket = this.codec.generate()
-    const expiresAt = new Date(this.clock.now().getTime() + TICKET_TTL_SECONDS * 1000)
+    const now = this.clock.now()
+    const expiresAt = new Date(now.getTime() + TICKET_TTL_SECONDS * 1000)
 
-    this.store.issue(this.codec.hash(ticket), subject, expiresAt)
+    this.store.issue(this.codec.hash(ticket), subject, expiresAt, now)
 
     return { ticket, expiresInSeconds: TICKET_TTL_SECONDS }
   }

@@ -3,6 +3,7 @@ import { Int32 } from 'mongodb'
 import type { BattleRoomSnapshot } from '../../../domain/entities/BattleRoom'
 import type { BattleEvent, HandledCommand } from '../../../domain/entities/BattleEvent'
 import type { BattleStateSnapshot } from '../../../domain/entities/BattleState'
+import type { CombatantSnapshot } from '../../../domain/entities/Combatant'
 import type { TeamSnapshot } from '../../../domain/entities/Team'
 import type { TurnOrderEntry } from '../../../domain/entities/TurnOrder'
 
@@ -59,6 +60,12 @@ export interface BattleDocument {
   readonly startedAt: Date
   readonly turnOrder: readonly TurnOrderEntry[]
   readonly turnsCompleted: Int32 | number
+  /**
+   * HU-18 (migracion 007): snapshot de combate y Vida actual por participante.
+   * Aditivo y opcional: una batalla anterior a HU-18 no lo tiene y se restaura sin
+   * Vida (no admite ataque); no hay backfill ni consulta a Player-Inventory.
+   */
+  readonly combatants?: readonly CombatantSnapshot[] | null
 }
 
 export interface BattleEventDocument {
@@ -157,6 +164,7 @@ const toBattleSnapshot = (document: BattleRoomDocument): BattleStateSnapshot | n
           'battle.turnsCompleted',
           document._id,
         ),
+        combatants: document.battle.combatants ?? null,
       }
 
 const toEvent = (event: BattleEventDocument, roomId: string): BattleEvent => ({
@@ -195,6 +203,10 @@ export const toDocument = (snapshot: BattleRoomSnapshot): BattleRoomDocument => 
           startedAt: snapshot.battle.startedAt,
           turnOrder: snapshot.battle.turnOrder.map((entry) => ({ ...entry })),
           turnsCompleted: snapshot.battle.turnsCompleted,
+          // Solo se escribe cuando existe: una batalla anterior a HU-18 no se rellena.
+          ...(snapshot.battle.combatants === undefined || snapshot.battle.combatants === null
+            ? {}
+            : { combatants: snapshot.battle.combatants }),
         },
   events: snapshot.events.map((event): BattleEventDocument => ({
     seq: event.seq,

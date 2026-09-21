@@ -418,8 +418,12 @@ describe('Tickets del WebSocket — un solo uso, 30 s, solo hash (ADR-020)', () 
   it('el almacen purga los tickets caducados al emitir uno nuevo (no crece sin limite)', () => {
     const store = new InMemoryRealtimeTicketStore()
 
-    store.issue('h1', 's', new Date(Date.now() - 1000))
-    store.issue('h2', 's', new Date(Date.now() + 60_000))
+    // Reloj FIJO e inyectado: la prueba no depende de la fecha real (antes, emitir purgaba
+    // con `Date.now()` y una fecha fija de prueba en el pasado rompia el orden de las purgas).
+    const now = new Date('2030-01-01T00:00:00.000Z')
+
+    store.issue('h1', 's', new Date(now.getTime() - 1000), now)
+    store.issue('h2', 's', new Date(now.getTime() + 60_000), now)
 
     expect((store as unknown as { tickets: Map<string, unknown> }).tickets.has('h1')).toBe(false)
     expect((store as unknown as { tickets: Map<string, unknown> }).tickets.has('h2')).toBe(true)

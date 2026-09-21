@@ -364,7 +364,14 @@ export interface HeroEffectTable {
  * (HU-24). No invoca `ResolveRandomEffect`: eso lo hace `ResolveAttack` (HU-20)
  * tras un golpe efectivo.
  */
-export const buildHeroEffectTable = (hero: EquippedHero): HeroEffectTable => {
+/**
+ * Lo que la tabla de efectos necesita de un heroe. `EquippedHero` (Player-Inventory)
+ * y el perfil de combate congelado de HU-18 lo cumplen por estructura: HU-20 no se
+ * duplica, solo deja de exigir el DTO completo del otro servicio.
+ */
+export type EffectTableSource = Pick<EquippedHero, 'heroId' | 'subtype' | 'activeEffects'>
+
+export const buildHeroEffectTable = (hero: EffectTableSource): HeroEffectTable => {
   const subtype = parseHeroSubtype(hero.subtype)
   const assessments = hero.activeEffects.map(assessEquipmentEffect)
   const withOutcome = (outcome: EquipmentEffectOutcome): readonly EquipmentEffectAssessment[] =>

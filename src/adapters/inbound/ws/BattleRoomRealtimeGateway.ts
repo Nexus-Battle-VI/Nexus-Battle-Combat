@@ -26,6 +26,7 @@ import type { BattleEvent } from '../../../domain/entities/BattleEvent'
 import type { Logger } from '../../../infrastructure/observability/logger'
 import { LOGGER } from '../../../infrastructure/observability/logger-token'
 import { CONSUME_REALTIME_TICKET, RESUME_BATTLE } from '../http/tokens'
+import { BASIC_ATTACK_COMMAND, BasicAttackRealtimeHandler } from './BasicAttackRealtimeHandler'
 import { CHAT_MESSAGE_TYPES, ChatRealtimeHandler } from './ChatRealtimeHandler'
 import type { RealtimeSocket, RealtimeSocketData } from './RealtimeSocket'
 import { SerialQueue } from './SerialQueue'
@@ -91,6 +92,8 @@ const CLOSE_POLICY_VIOLATION = 1008
  * remitente y canal).
  */
 const MAX_PENDING_CHAT_COMMANDS = 64
+/** Comandos de combate en espera por conexion: un cliente que inunda el socket no acumula memoria sin limite. */
+const MAX_PENDING_COMBAT_COMMANDS = 16
 
 const OPEN_STATE = 1
 
@@ -124,6 +127,8 @@ interface ConnectionState {
   resumeChain: Promise<void>
   /** Comandos de chat de esta conexion, atendidos de uno en uno y en orden de llegada (HU-13). */
   readonly chatQueue: SerialQueue
+  /** Comandos de combate (`attack`, HU-18) de esta conexion, de uno en uno y en orden de llegada. */
+  readonly commandQueue: SerialQueue
   authTimer: ReturnType<typeof setTimeout> | null
   heartbeat: ReturnType<typeof setInterval> | null
   alive: boolean
@@ -157,6 +162,7 @@ export class BattleRoomRealtimeGateway
     @Inject(RESUME_BATTLE) private readonly resumeBattle: ResumeBattle,
     @Inject(LOGGER) private readonly logger: Logger,
     @Inject(ChatRealtimeHandler) private readonly chat: ChatRealtimeHandler,
+    @Inject(BasicAttackRealtimeHandler) private readonly basicAttack: BasicAttackRealtimeHandler,
     @Optional() @Inject(REALTIME_GATEWAY_OPTIONS) options: RealtimeGatewayOptions = {},
   ) {
     this.authTimeoutMs = options.authTimeoutMs ?? AUTH_TIMEOUT_MS
@@ -172,6 +178,11 @@ export class BattleRoomRealtimeGateway
       resumeChain: Promise.resolve(),
       chatQueue: new SerialQueue(MAX_PENDING_CHAT_COMMANDS, (error: unknown) => {
         this.logger.error('realtime_chat_fallo', {
+          reason: error instanceof Error ? error.name : 'desconocido',
+        })
+      }),
+      commandQueue: new SerialQueue(MAX_PENDING_COMBAT_COMMANDS, (error: unknown) => {
+        this.logger.error('realtime_command_fallo', {
           reason: error instanceof Error ? error.name : 'desconocido',
         })
       }),
@@ -332,9 +343,42 @@ export class BattleRoomRealtimeGateway
       return
     }
 
-    // Tipo de mensaje no reconocido en este protocolo (los comandos de combate
-    // -- `attack`/`useSkill` -- son HU-18/HU-19).
+    if (message.type === BASIC_ATTACK_COMMAND) {
+      this.handleAttack(client, state, message)
+      return
+    }
+
+    // Tipo de mensaje no reconocido en este protocolo (`useSkill` es HU-19).
     client.close(CLOSE_BAD_MESSAGE, 'tipo_no_reconocido')
+  }
+
+  /**
+   * Ataque basico (HU-18). Los comandos de combate de una conexion se atienden de uno
+   * en uno y en el orden en que llegaron. El atacante es el `sub` de la conexion
+   * (fijado por el ticket) y el turno vigente; el cliente solo aporta el objetivo.
+   */
+  private handleAttack(
+    client: RealtimeSocket,
+    state: ConnectionState,
+    message: Record<string, unknown>,
+  ): void {
+    const subject = state.subject
+
+    if (subject === null) {
+      // Igual que `subscribe`, `resume` y el chat: nunca se atiende sin autenticar antes.
+      client.close(CLOSE_UNAUTHENTICATED, 'no_autenticado')
+      return
+    }
+
+    const accepted = state.commandQueue.push(() =>
+      this.basicAttack.handle(client, subject, message, (roomId, events) => {
+        this.publish(roomId, events)
+      }),
+    )
+
+    if (!accepted) {
+      client.close(CLOSE_POLICY_VIOLATION, 'demasiados_mensajes')
+    }
   }
 
   /**

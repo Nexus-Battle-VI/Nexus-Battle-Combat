@@ -1,5 +1,11 @@
 import { DomainError } from '../errors/DomainError'
 import { InvalidBattleRosterError } from '../errors/BattleErrors'
+import {
+  Combatant,
+  type CombatantKey,
+  type CombatantSnapshot,
+  type CombatantView,
+} from './Combatant'
 import { ParticipantKind } from './Participant'
 import { memberKey, type TurnOrderEntry } from './TurnOrder'
 
@@ -7,6 +13,12 @@ export interface BattleStateSnapshot {
   readonly startedAt: Date
   readonly turnOrder: readonly TurnOrderEntry[]
   readonly turnsCompleted: number
+  /**
+   * HU-18: snapshot de combate (perfil congelado y Vida actual por participante).
+   * Ausente o `null` en las batallas anteriores a HU-18: se restauran sin Vida y
+   * no admiten ataque, sin consultar a Player-Inventory ni rellenar valores.
+   */
+  readonly combatants?: readonly CombatantSnapshot[] | null
 }
 
 /** Entrada de la cola tal como la ve un cliente: la entrada mas su posicion. */
@@ -28,6 +40,13 @@ export interface BattleView {
   readonly turnsCompleted: number
   readonly round: number
   readonly currentTurn: TurnOrderEntryView
+  /**
+   * HU-18 (aditivo): la Vida de cada participante, en el MISMO orden que la cola y
+   * con la misma identidad `(teamLabel, seat)`. Es el UNICO sitio donde viaja la
+   * Vida. Vacio en una batalla anterior a HU-18. Nunca lleva Ataque, Defensa, Dano
+   * ni efectos.
+   */
+  readonly combatants: readonly CombatantView[]
 }
 
 const MIN_PARTICIPANTS = 2
@@ -46,20 +65,37 @@ export class BattleState {
   readonly startedAt: Date
   readonly turnOrder: readonly TurnOrderEntry[]
   readonly turnsCompleted: number
+  /** Snapshot de combate por participante (HU-18); `null` en una batalla anterior a HU-18. */
+  readonly combatants: readonly Combatant[] | null
 
   private constructor(
     startedAt: Date,
     turnOrder: readonly TurnOrderEntry[],
     turnsCompleted: number,
+    combatants: readonly Combatant[] | null,
   ) {
     this.startedAt = startedAt
     this.turnOrder = turnOrder
     this.turnsCompleted = turnsCompleted
+    this.combatants = combatants
   }
 
-  /** Inicia una batalla con la cola YA generada. `turnsCompleted = 0`. */
-  static start(turnOrder: readonly TurnOrderEntry[], startedAt: Date): BattleState {
-    return BattleState.restore({ startedAt, turnOrder, turnsCompleted: 0 })
+  /**
+   * Inicia una batalla con la cola YA generada. `turnsCompleted = 0`. `combatants`
+   * es el snapshot de combate (HU-18); sin el, la batalla no admite ataque.
+   */
+  static start(
+    turnOrder: readonly TurnOrderEntry[],
+    startedAt: Date,
+    combatants: readonly Combatant[] | null = null,
+  ): BattleState {
+    return BattleState.restore({
+      startedAt,
+      turnOrder,
+      turnsCompleted: 0,
+      combatants:
+        combatants === null ? null : combatants.map((combatant) => combatant.toSnapshot()),
+    })
   }
 
   /** Reconstruye desde persistencia, con las comprobaciones estructurales de la cola. */
@@ -109,7 +145,36 @@ export class BattleState {
       snapshot.startedAt,
       Object.freeze(order.map((entry) => Object.freeze({ ...entry }))),
       snapshot.turnsCompleted,
+      BattleState.restoreCombatants(snapshot.combatants ?? null, keys),
     )
+  }
+
+  /**
+   * El snapshot de combate debe corresponder EXACTAMENTE a la cola: mismos
+   * participantes, ni uno mas ni uno menos, y cada uno una sola vez.
+   */
+  private static restoreCombatants(
+    snapshots: readonly CombatantSnapshot[] | null,
+    queueKeys: ReadonlySet<string>,
+  ): readonly Combatant[] | null {
+    if (snapshots === null) {
+      return null
+    }
+
+    const combatants = snapshots.map((snapshot) => Combatant.restore(snapshot))
+    const seen = new Set(combatants.map((combatant) => memberKey(combatant)))
+
+    if (
+      combatants.length !== queueKeys.size ||
+      seen.size !== combatants.length ||
+      [...queueKeys].some((key) => !seen.has(key))
+    ) {
+      throw new InvalidBattleRosterError(
+        'El snapshot de combate no corresponde exactamente a los participantes de la cola.',
+      )
+    }
+
+    return Object.freeze(combatants)
   }
 
   get size(): number {
@@ -141,7 +206,40 @@ export class BattleState {
    * un estado NUEVO con la MISMA cola (misma referencia, mismo orden).
    */
   completeTurn(): BattleState {
-    return new BattleState(this.startedAt, this.turnOrder, this.turnsCompleted + 1)
+    return new BattleState(this.startedAt, this.turnOrder, this.turnsCompleted + 1, this.combatants)
+  }
+
+  /** El combatiente de una identidad `(teamLabel, seat)`, o `undefined` si no participa. */
+  combatantFor(key: CombatantKey): Combatant | undefined {
+    return this.combatants?.find(
+      (combatant) => combatant.teamLabel === key.teamLabel && combatant.seat === key.seat,
+    )
+  }
+
+  /** Otro estado con UN combatiente reemplazado; los demas y la cola no se tocan. */
+  withCombatant(updated: Combatant): BattleState {
+    if (this.combatants === null) {
+      throw new DomainError(
+        'Una batalla sin snapshot de combate no tiene combatientes que cambiar.',
+      )
+    }
+
+    if (this.combatantFor(updated) === undefined) {
+      throw new DomainError('El combatiente no participa en la batalla.')
+    }
+
+    return new BattleState(
+      this.startedAt,
+      this.turnOrder,
+      this.turnsCompleted,
+      Object.freeze(
+        this.combatants.map((combatant) =>
+          combatant.teamLabel === updated.teamLabel && combatant.seat === updated.seat
+            ? updated
+            : combatant,
+        ),
+      ),
+    )
   }
 
   toSnapshot(): BattleStateSnapshot {
@@ -149,6 +247,10 @@ export class BattleState {
       startedAt: this.startedAt,
       turnOrder: this.turnOrder.map((entry) => ({ ...entry })),
       turnsCompleted: this.turnsCompleted,
+      combatants:
+        this.combatants === null
+          ? null
+          : this.combatants.map((combatant) => combatant.toSnapshot()),
     }
   }
 
@@ -165,6 +267,12 @@ export class BattleState {
       turnsCompleted: this.turnsCompleted,
       round: this.round,
       currentTurn: withPosition(this.currentEntry, this.currentPosition),
+      // Mismo orden que la cola: cada participante con su Vida. Vacio sin snapshot.
+      combatants: this.turnOrder.flatMap((entry) => {
+        const combatant = this.combatantFor(entry)
+
+        return combatant === undefined ? [] : [combatant.toView()]
+      }),
     }
   }
 }
