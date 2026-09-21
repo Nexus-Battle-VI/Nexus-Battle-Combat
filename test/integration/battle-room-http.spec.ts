@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
+import { WsAdapter } from '@nestjs/platform-ws'
 import { Test } from '@nestjs/testing'
 import request from 'supertest'
 
@@ -208,6 +209,8 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       .compile()
 
     app = moduleRef.createNestApplication()
+
+    app.useWebSocketAdapter(new WsAdapter(app))
     app.setGlobalPrefix('api')
     app.useGlobalPipes(
       new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
