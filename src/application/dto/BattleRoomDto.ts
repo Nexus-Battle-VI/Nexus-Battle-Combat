@@ -1,4 +1,5 @@
 import type { BattleRoom } from '../../domain/entities/BattleRoom'
+import type { BattleView } from '../../domain/entities/BattleState'
 
 export interface ParticipantDto {
   readonly kind: string
@@ -29,6 +30,10 @@ export interface BattleRoomDto {
   readonly createdBy: string
   readonly createdAt: string
   readonly version: number
+  /** `seq` del ultimo evento de batalla (HU-17); 0 mientras no haya batalla. */
+  readonly lastSeq: number
+  /** Batalla en curso (HU-17); `null` mientras la sala no este `IN_BATTLE`. */
+  readonly battle: BattleView | null
 }
 
 export const toBattleRoomDto = (room: BattleRoom): BattleRoomDto => {
@@ -43,6 +48,8 @@ export const toBattleRoomDto = (room: BattleRoom): BattleRoomDto => {
     createdBy: snapshot.createdBy,
     createdAt: snapshot.createdAt.toISOString(),
     version: snapshot.version,
+    lastSeq: room.lastSeq,
+    battle: room.battleView(),
   }
 }
 

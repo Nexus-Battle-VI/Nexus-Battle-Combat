@@ -48,7 +48,17 @@ export interface AppConfig {
   readonly playerInventoryServiceBaseUrl: string | null
   /** Tiempo de espera de las llamadas HTTP internas salientes (Account, Player-Inventory). */
   readonly internalHttpTimeoutMs: number
+  /**
+   * Semilla con la que se inicializa la secuencia pseudoaleatoria de Combat al
+   * arrancar (HU-17). Entero sin signo de 32 bits. Por defecto la semilla
+   * validada por HU-26 (3.000.000). NO es una politica de semilla por batalla:
+   * ver `docs/hu-17-turn-order.md`.
+   */
+  readonly randomSeed: number
 }
+
+/** Semilla de referencia validada por HU-26 (Management #362-#364). */
+export const DEFAULT_RANDOM_SEED = 3_000_000
 
 type RawEnv = Readonly<Record<string, string | undefined>>
 
@@ -220,5 +230,6 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     playerInventoryServiceBaseUrl:
       playerInventoryServiceBaseUrl === '' ? null : playerInventoryServiceBaseUrl,
     internalHttpTimeoutMs: readInteger(env, 'INTERNAL_HTTP_TIMEOUT_MS', 3_000, 100, 30_000),
+    randomSeed: readInteger(env, 'COMBAT_RANDOM_SEED', DEFAULT_RANDOM_SEED, 0, 4_294_967_295),
   }
 }

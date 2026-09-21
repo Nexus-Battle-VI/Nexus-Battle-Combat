@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 
 import { type INestApplication, ValidationPipe } from '@nestjs/common'
+import { WsAdapter } from '@nestjs/platform-ws'
 import { Test } from '@nestjs/testing'
 import request from 'supertest'
 
@@ -40,6 +41,7 @@ describe('Cableado del motor pseudoaleatorio (HU-24)', () => {
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile()
     app = moduleRef.createNestApplication()
+    app.useWebSocketAdapter(new WsAdapter(app))
     app.setGlobalPrefix('api')
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
     await app.init()

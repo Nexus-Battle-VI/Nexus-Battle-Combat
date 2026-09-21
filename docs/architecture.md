@@ -53,7 +53,8 @@ Dominio puro en `domain/random-effects` (`EffectControlTable`, `ProbabilityModif
 - `POST /api/v1/combat/rooms` y `GET /api/v1/combat/rooms` — crear y listar salas (HU-14, implementado).
 - `POST /api/v1/combat/rooms/{roomId}/cancel` — el creador cancela una sala propia en `WAITING_FOR_PLAYERS` (HU-14, implementado; ver `HU-14.1-Contrato-Creacion-Sala.md`, sección 3, para la justificación del verbo/ruta).
 - `POST /api/v1/combat/rooms/{roomId}/participants` — unirse (HU-15, no implementado).
-- `POST /api/v1/combat/realtime/tickets` — ticket para el WebSocket.
+- `POST /api/v1/combat/realtime/tickets` — ticket para el WebSocket (HU-17, implementado).
+- `GET /api/v1/combat/rooms/{roomId}` y `POST /api/v1/combat/rooms/{roomId}/start` — leer una sala y iniciar su batalla, solo participantes (HU-17, implementado).
 - `POST /api/internal/v1/combat/simulations` — simulación para Missions.
 
 ## Temporizadores
@@ -62,6 +63,6 @@ Los vencimientos usan un intervalo dentro del proceso, apagado por defecto, con 
 
 ## Decisiones abiertas
 
-- HU-17 está en M2 pero depende de HU-14, HU-15 y HU-16, que no tienen milestone.
+- HU-17 (orden de turnos) está implementada; ver `docs/hu-17-turn-order.md`. Los equipos de distinto tamaño se rechazan (no hay regla ratificada) y el ciclo de vida de la secuencia aleatoria es una decisión técnica separada (la semilla es la validada por HU-26).
 - Retención y moderación del chat (HU-13): decisión de producto antes de persistirlo más allá de la sala.
-- ADR-020 sigue `Proposed`: no añadir WebSocket hasta su aceptación.
+- ADR-020 está `Accepted` y el WebSocket con ticket, `seq` y `resume` está implementado (HU-15.2 y HU-17).

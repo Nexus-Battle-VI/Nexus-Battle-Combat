@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 
 import { Body, Controller, Get, Post, ValidationPipe, type INestApplication } from '@nestjs/common'
+import { WsAdapter } from '@nestjs/platform-ws'
 import { Test } from '@nestjs/testing'
 import request from 'supertest'
 
@@ -98,6 +99,8 @@ const buildApp = async (): Promise<INestApplication> => {
     .compile()
 
   const app = moduleRef.createNestApplication()
+
+  app.useWebSocketAdapter(new WsAdapter(app))
   app.setGlobalPrefix('api')
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),

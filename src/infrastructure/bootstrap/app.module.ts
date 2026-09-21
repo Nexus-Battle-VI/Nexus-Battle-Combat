@@ -3,14 +3,22 @@ import { APP_GUARD, Reflector } from '@nestjs/core'
 import type { Db } from 'mongodb'
 
 import { BattleRoomController } from '../../adapters/inbound/http/battle-room.controller'
+import { RealtimeTicketController } from '../../adapters/inbound/http/realtime-ticket.controller'
 import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
 import {
+  BATTLE_RANDOM,
   CANCEL_BATTLE_ROOM,
+  COMPLETE_BATTLE_TURN,
+  CONSUME_REALTIME_TICKET,
   CREATE_BATTLE_ROOM,
+  GET_BATTLE_ROOM,
+  ISSUE_REALTIME_TICKET,
   JOIN_BATTLE_ROOM,
   LEAVE_BATTLE_ROOM,
   LIST_AVAILABLE_BATTLE_ROOMS,
+  RESUME_BATTLE,
+  START_BATTLE,
 } from '../../adapters/inbound/http/tokens'
 import { AnonymousIdentityGuard } from '../../adapters/inbound/http/auth/anonymous.guard'
 import { InternalServiceGuard } from '../../adapters/inbound/http/auth/internal-service.guard'
@@ -22,6 +30,8 @@ import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClien
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
 import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
+import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
+import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
@@ -44,7 +54,28 @@ import {
   RANDOM_SEQUENCE_FACTORY,
   type RandomSequenceFactoryPort,
 } from '../../application/ports/RandomSequencePort'
+import {
+  BATTLE_EVENT_PUBLISHER,
+  type BattleEventPublisherPort,
+} from '../../application/ports/BattleEventPublisherPort'
 import { REALTIME_NOTIFIER } from '../../application/ports/RealtimeNotifierPort'
+import {
+  REALTIME_TICKET_CODEC,
+  REALTIME_TICKET_STORE,
+  type RealtimeTicketCodecPort,
+  type RealtimeTicketStorePort,
+} from '../../application/ports/RealtimeTicketPort'
+import { createBoundedRandom } from '../../application/services/BoundedRandom'
+import { RandomSeed } from '../../domain/value-objects/RandomSeed'
+import type { BoundedRandom } from '../../domain/policies/TurnOrderPolicy'
+import { CompleteBattleTurn } from '../../application/use-cases/CompleteBattleTurn'
+import { GetBattleRoom } from '../../application/use-cases/GetBattleRoom'
+import { ResumeBattle } from '../../application/use-cases/ResumeBattle'
+import { StartBattle } from '../../application/use-cases/StartBattle'
+import {
+  ConsumeRealtimeTicket,
+  IssueRealtimeTicket,
+} from '../../application/use-cases/RealtimeTickets'
 import { TOKEN_VERIFIER, type TokenVerifierPort } from '../../application/ports/TokenVerifierPort'
 import { CancelBattleRoom } from '../../application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../application/use-cases/CreateBattleRoom'
@@ -55,10 +86,11 @@ import { UpstreamServiceError } from '../../application/errors/UpstreamErrors'
 import { AuthMode, loadConfig, PersistenceDriver, type AppConfig } from '../config/env'
 import type { ReadinessCheck, VersionReport } from '../health/health'
 import { createLogger, type Logger } from '../observability/logger'
+import { LOGGER } from '../observability/logger-token'
 import { createMongoClient, databaseOf, pingDatabase } from '../persistence/database'
 
 export const APP_CONFIG = Symbol('AppConfig')
-export const LOGGER = Symbol('Logger')
+export { LOGGER }
 export const DATABASE = Symbol('Database')
 export const DATABASE_LIFECYCLE = Symbol('DatabaseLifecycle')
 
@@ -88,7 +120,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
  * independiente del framework.
  */
 @Module({
-  controllers: [HealthController, BattleRoomController],
+  controllers: [HealthController, BattleRoomController, RealtimeTicketController],
   providers: [
     {
       provide: APP_CONFIG,
@@ -340,18 +372,104 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     // HU-15.2 (RF-15, ADR-020): gateway WebSocket nativo. Provider normal de
     // Nest (no un controlador): `BattleRoomController` lo consume a traves
     // del puerto `REALTIME_NOTIFIER`, nunca de la clase concreta.
+    // HU-17 (RF-17, ADR-020): tickets de un solo uso, lectura/recuperacion de la
+    // batalla y el gateway completo (ticket, `seq`, `resume`, latido).
     {
-      provide: BattleRoomRealtimeGateway,
-      useFactory: (
-        verifier: TokenVerifierPort,
-        rooms: BattleRoomRepositoryPort,
-        logger: Logger,
-      ): BattleRoomRealtimeGateway => new BattleRoomRealtimeGateway(verifier, rooms, logger),
-      inject: [TOKEN_VERIFIER, BATTLE_ROOM_REPOSITORY, LOGGER],
+      provide: REALTIME_TICKET_CODEC,
+      useFactory: (): RealtimeTicketCodecPort => new CryptoRealtimeTicketCodec(),
     },
+    {
+      provide: REALTIME_TICKET_STORE,
+      useFactory: (): RealtimeTicketStorePort => new InMemoryRealtimeTicketStore(),
+    },
+    {
+      provide: ISSUE_REALTIME_TICKET,
+      useFactory: (
+        codec: RealtimeTicketCodecPort,
+        store: RealtimeTicketStorePort,
+        clock: ClockPort,
+      ): IssueRealtimeTicket => new IssueRealtimeTicket(codec, store, clock),
+      inject: [REALTIME_TICKET_CODEC, REALTIME_TICKET_STORE, CLOCK],
+    },
+    {
+      provide: CONSUME_REALTIME_TICKET,
+      useFactory: (
+        codec: RealtimeTicketCodecPort,
+        store: RealtimeTicketStorePort,
+        clock: ClockPort,
+      ): ConsumeRealtimeTicket => new ConsumeRealtimeTicket(codec, store, clock),
+      inject: [REALTIME_TICKET_CODEC, REALTIME_TICKET_STORE, CLOCK],
+    },
+    {
+      provide: GET_BATTLE_ROOM,
+      useFactory: (rooms: BattleRoomRepositoryPort): GetBattleRoom => new GetBattleRoom(rooms),
+      inject: [BATTLE_ROOM_REPOSITORY],
+    },
+    {
+      provide: RESUME_BATTLE,
+      useFactory: (rooms: BattleRoomRepositoryPort): ResumeBattle => new ResumeBattle(rooms),
+      inject: [BATTLE_ROOM_REPOSITORY],
+    },
+    // HU-17: UNICA secuencia pseudoaleatoria de proceso para las decisiones de
+    // la cola de turnos. Se crea UNA vez al arrancar con la semilla validada por
+    // HU-26 (`COMBAT_RANDOM_SEED`, por defecto 3.000.000) y cada seleccion
+    // AVANZA su estado: no se reinicia por batalla (una semilla constante por
+    // batalla produciria siempre el mismo equipo inicial). No es una politica
+    // de semilla por batalla ni persiste el cursor: ver docs/hu-17-turn-order.md.
+    {
+      provide: BATTLE_RANDOM,
+      useFactory: (
+        factory: RandomSequenceFactoryPort,
+        config: AppConfig,
+        logger: Logger,
+      ): BoundedRandom => {
+        logger.info('battle_random_sequence_ready', { source: 'HU-24' })
+
+        return createBoundedRandom(factory.create(RandomSeed.create(config.randomSeed)))
+      },
+      inject: [RANDOM_SEQUENCE_FACTORY, APP_CONFIG, LOGGER],
+    },
+    // IMPORTANTE: el gateway se registra como CLASE, no con `useFactory`. Nest solo
+    // descubre y monta un `@WebSocketGateway` cuando el proveedor es la propia
+    // clase (con `useFactory` su metatype es la fabrica y el gateway no llega a
+    // escuchar: el upgrade a WebSocket responde 404). Sus dependencias se
+    // inyectan con `@Inject` en el constructor.
+    BattleRoomRealtimeGateway,
     {
       provide: REALTIME_NOTIFIER,
       useExisting: BattleRoomRealtimeGateway,
+    },
+    {
+      provide: BATTLE_EVENT_PUBLISHER,
+      useExisting: BattleRoomRealtimeGateway,
+    },
+    {
+      provide: START_BATTLE,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        clock: ClockPort,
+        equippedHeroes: PlayerInventoryEquippedHeroPort,
+        random: BoundedRandom,
+        publisher: BattleEventPublisherPort,
+      ): StartBattle => new StartBattle(rooms, clock, equippedHeroes, random, publisher),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        CLOCK,
+        PLAYER_INVENTORY_EQUIPPED_HERO,
+        BATTLE_RANDOM,
+        BATTLE_EVENT_PUBLISHER,
+      ],
+    },
+    // Sin ruta publica: lo invocaran las acciones validas de HU-18/HU-19 al
+    // terminar un turno. Web nunca decide `turno + 1`.
+    {
+      provide: COMPLETE_BATTLE_TURN,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        clock: ClockPort,
+        publisher: BattleEventPublisherPort,
+      ): CompleteBattleTurn => new CompleteBattleTurn(rooms, clock, publisher),
+      inject: [BATTLE_ROOM_REPOSITORY, CLOCK, BATTLE_EVENT_PUBLISHER],
     },
     {
       provide: READINESS_CHECKS,
