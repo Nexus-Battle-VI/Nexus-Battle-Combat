@@ -63,6 +63,6 @@ Los vencimientos usan un intervalo dentro del proceso, apagado por defecto, con 
 
 ## Decisiones abiertas
 
-- HU-17 (orden de turnos) está implementada; ver `docs/hu-17-turn-order.md`. Quedan por ratificar el disparador `start`, la alternancia con equipos desiguales y la política de semilla por batalla.
+- HU-17 (orden de turnos) está implementada; ver `docs/hu-17-turn-order.md`. Los equipos de distinto tamaño se rechazan (no hay regla ratificada) y el ciclo de vida de la secuencia aleatoria es una decisión técnica separada (la semilla es la validada por HU-26).
 - Retención y moderación del chat (HU-13): decisión de producto antes de persistirlo más allá de la sala.
 - ADR-020 está `Accepted` y el WebSocket con ticket, `seq` y `resume` está implementado (HU-15.2 y HU-17).

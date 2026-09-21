@@ -16,7 +16,10 @@ import {
   HERO_LOADOUT_CHANGED,
   StartBattle,
 } from '../../src/application/use-cases/StartBattle'
-import { RoomNotStartableError } from '../../src/domain/errors/BattleErrors'
+import {
+  RoomNotStartableError,
+  UnsupportedTeamCompositionError,
+} from '../../src/domain/errors/BattleErrors'
 import { BattleRoomStatus } from '../../src/domain/value-objects/BattleRoomStatus'
 import type { BoundedRandom } from '../../src/domain/policies/TurnOrderPolicy'
 import { equippedHeroFixture, equippedProductNotOwnedBlocker } from '../fixtures/equipped-hero'
@@ -133,6 +136,36 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
     ])
     expect(new Set(dto.battle?.turnOrder.map((entry) => entry.playerId)).size).toBe(6)
   })
+
+  it.each([
+    [1, 2],
+    [1, 3],
+    [2, 3],
+  ])(
+    'equipos desiguales %ix%i: 422 UnsupportedTeamComposition, sin revalidar a nadie, sin sorteo, sin cola ni evento',
+    async (sizeA, sizeB) => {
+      const repo = new InMemoryBattleRoomRepository()
+
+      await seed(repo, { teamSizes: [sizeA, sizeB] })
+      const random = scriptedRandom([0, 0, 0, 0, 0])
+      const { useCase, heroes, publisher } = build(repo, { random })
+
+      await expect(useCase.execute(ROOM_ID, 'a1')).rejects.toBeInstanceOf(
+        UnsupportedTeamCompositionError,
+      )
+
+      // Nada se movio: ni Player-Inventory, ni el generador, ni el agregado, ni el WebSocket.
+      expect(heroes.calls).toEqual([])
+      expect(random.bounds).toEqual([])
+      expect(publisher.published).toEqual([])
+
+      const room = await repo.findById(ROOM_ID)
+
+      expect(room?.status).toBe(BattleRoomStatus.Preparing)
+      expect(room?.battle).toBeNull()
+      expect(room?.events).toEqual([])
+    },
+  )
 
   it('PVE con AI: el AI entra en la cola sin heroe equipado que validar', async () => {
     const repo = new InMemoryBattleRoomRepository()

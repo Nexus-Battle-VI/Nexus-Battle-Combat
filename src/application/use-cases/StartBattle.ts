@@ -7,7 +7,11 @@ import {
   isIndividualFormat,
   type PrecombatEligibilityBlocker,
 } from '../../domain/policies/PrecombatEligibilityPolicy'
-import { generateTurnOrder, type BoundedRandom } from '../../domain/policies/TurnOrderPolicy'
+import {
+  assertBalancedTeams,
+  generateTurnOrder,
+  type BoundedRandom,
+} from '../../domain/policies/TurnOrderPolicy'
 import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
 import {
@@ -40,7 +44,9 @@ export const HERO_LOADOUT_CHANGED = 'HERO_LOADOUT_CHANGED'
  *     que ningun cliente elige quien inicia ni quien participa.
  *  2. IDEMPOTENTE: si la sala ya esta `IN_BATTLE` devuelve el estado vigente,
  *     sin generar otra cola ni otro `battleStarted`.
- *  3. Solo desde `PREPARING` (409 en otro caso).
+ *  3. Solo desde `PREPARING` (409 en otro caso) y con equipos del MISMO tamano
+ *     (422 `UNSUPPORTED_TEAM_COMPOSITION`: RF-17 no define el orden cuando un
+ *     equipo se agota antes y no se inventa esa regla).
  *  4. REVALIDACION PRECOMBATE (HU-16) de cada participante HUMAN con los mismos
  *     puertos y la misma politica que `JoinBattleRoom`: el heroe equipado debe
  *     existir, ser el mismo que se aprobo, seguir siendo elegible y conservar
@@ -84,6 +90,10 @@ export class StartBattle {
     if (room.status !== BattleRoomStatus.Preparing) {
       throw new RoomNotStartableError(room.id, room.status)
     }
+
+    // Antes de revalidar a nadie (llamadas a Player-Inventory) y antes de sortear:
+    // una composicion que HU-17 no sabe ordenar no puede iniciar batalla.
+    assertBalancedTeams(room.roster())
 
     const rosters = await this.revalidate(room)
     const order = generateTurnOrder(rosters, this.random)

@@ -1,5 +1,9 @@
-import { InvalidBattleRosterError } from '../../src/domain/errors/BattleErrors'
-import { generateTurnOrder } from '../../src/domain/policies/TurnOrderPolicy'
+import {
+  InvalidBattleRosterError,
+  UNSUPPORTED_TEAM_COMPOSITION,
+  UnsupportedTeamCompositionError,
+} from '../../src/domain/errors/BattleErrors'
+import { assertBalancedTeams, generateTurnOrder } from '../../src/domain/policies/TurnOrderPolicy'
 import { labels, memberOf, rosterOfSizes, scriptedRandom } from '../fixtures/battle'
 
 /**
@@ -74,6 +78,25 @@ describe('generateTurnOrder — RF-17', () => {
       expect(random.bounds).toEqual([2, 3, 2, 3, 2])
     })
 
+    it.each([1, 2, 3])('%ix%i: la alternancia no se interrumpe nunca', (size) => {
+      const order = generateTurnOrder(
+        rosterOfSizes(size, size),
+        scriptedRandom([1, ...Array.from({ length: (size - 1) * 2 }, () => 0)]),
+      )
+
+      expect(order).toHaveLength(size * 2)
+      expect(order.map((entry) => entry.teamLabel)).toEqual(
+        Array.from({ length: size * 2 }, (_, index) => (index % 2 === 0 ? 'B' : 'A')),
+      )
+    })
+  })
+
+  /**
+   * RF-17 exige alternar entre ambos equipos pero NO define que pasa cuando uno se
+   * agota antes. Esa regla no esta ratificada: HU-17 no la inventa y rechaza la
+   * composicion ANTES de consumir ningun sorteo.
+   */
+  describe('equipos de distinto tamano: no hay regla ratificada, no se fabrica una cola', () => {
     it.each([
       [1, 2],
       [2, 1],
@@ -82,23 +105,37 @@ describe('generateTurnOrder — RF-17', () => {
       [2, 3],
       [3, 2],
     ])(
-      'composicion desigual %ix%i: alterna mientras ambos tengan integrantes y luego anade los que restan',
-      (sizeA, sizeB) => {
-        const values = [1, ...Array.from({ length: sizeA - 1 + (sizeB - 1) }, () => 0)]
-        const order = generateTurnOrder(rosterOfSizes(sizeA, sizeB), scriptedRandom(values))
+      '%ix%i se rechaza con UnsupportedTeamCompositionError y NO consume ningun sorteo',
+      (a, b) => {
+        const random = scriptedRandom([0, 0, 0, 0, 0, 0])
 
-        expect(order).toHaveLength(sizeA + sizeB)
-
-        // Inicia el equipo B. Se alterna hasta que el menor se agota.
-        const shared = Math.min(sizeA, sizeB) * 2
-
-        for (let index = 0; index < shared; index += 1) {
-          expect(order[index]?.teamLabel).toBe(index % 2 === 0 ? 'B' : 'A')
-        }
-
-        expect(new Set(labels(order)).size).toBe(sizeA + sizeB)
+        expect(() => generateTurnOrder(rosterOfSizes(a, b), random)).toThrow(
+          UnsupportedTeamCompositionError,
+        )
+        expect(random.bounds).toEqual([])
       },
     )
+
+    it('el error lleva un codigo estable y los tamanos, sin datos internos', () => {
+      let caught: unknown
+
+      try {
+        assertBalancedTeams(rosterOfSizes(1, 3))
+      } catch (error: unknown) {
+        caught = error
+      }
+
+      expect(caught).toBeInstanceOf(UnsupportedTeamCompositionError)
+      expect((caught as UnsupportedTeamCompositionError).code).toBe(UNSUPPORTED_TEAM_COMPOSITION)
+      expect((caught as UnsupportedTeamCompositionError).sizes).toEqual([1, 3])
+      expect((caught as Error).message).toContain('1 contra 3')
+    })
+
+    it('equipos del mismo tamano pasan la comprobacion', () => {
+      expect(() => {
+        assertBalancedTeams(rosterOfSizes(2, 2))
+      }).not.toThrow()
+    })
   })
 
   describe('las estadisticas y el equipamiento NO influyen', () => {

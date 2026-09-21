@@ -27,6 +27,11 @@ sala PREPARING (cupo completo)
   ↓ (servidor) CompleteBattleTurn → turnAdvanced (seq n)
 ```
 
+**Quién decide.** El cliente _solicita_ el inicio; **Combat es la única autoridad** que lo autoriza, revalida a los
+participantes, sortea, persiste y publica. El cliente no elige quién inicia, ni el orden, ni los participantes (la
+petición no tiene cuerpo). Se adopta un `POST …/start` explícito e idempotente en lugar de iniciar dentro de `join`,
+que obligaría a repetir la revalidación de cada participante (llamadas a Player-Inventory) dentro de una unión.
+
 `start` es **idempotente**: iniciar otra vez (o desde el otro participante) devuelve el estado vigente sin otra
 cola, sin nuevo sorteo y sin otro `battleStarted`. Dos inicios simultáneos se resuelven con el bloqueo
 optimista: el perdedor relee la sala y devuelve la batalla ya iniciada.
@@ -54,9 +59,13 @@ Se **extiende `BattleRoom`** (ADR-019: la batalla es un único agregado) en luga
 1. Equipo inicial: entero uniforme en `{0, 1}`.
 2. Cada equipo se baraja con Fisher-Yates (decisiones aleatorias de HU-24).
 3. Se intercalan los equipos empezando por el inicial (`A B A B …` o `B A B A …`).
-4. Si un equipo se agota antes (p. ej. 1 humano contra 3 IA en PVE), los que restan del otro **se añaden a
-   continuación** — _decisión técnica pendiente de ratificar por el PO_: RF-17 solo define la alternancia para
-   equipos equilibrados.
+
+**Solo se admiten equipos con el mismo número de participantes.** RF-17 exige alternar entre ambos equipos pero no
+define qué ocurre cuando uno se agota antes (1 contra 3, 2 contra 3…), y esa regla no está ratificada: HU-17 **no la
+inventa**. Con equipos de distinto tamaño `start` responde `422` con `code: UNSUPPORTED_TEAM_COMPOSITION`, **antes de
+revalidar a nadie y sin consumir ningún sorteo**; no hay cola, no hay evento y la sala sigue `PREPARING`. Esto incluye
+composiciones PVE de un humano contra varias IA. Impedir esas salas desde su creación (HU-14) sería un cambio aparte
+que requiere una aclaración formal.
 
 En 1 contra 1 la cola tiene exactamente dos entradas y el sorteado va primero.
 
@@ -71,16 +80,21 @@ Selecciones por batalla: 1 para el equipo inicial y, por equipo de `k` integrant
 (1v1: 1; 3v3: 5). No se usa `Math.random`, `crypto` (salvo el ticket, que es un secreto de autenticación y no
 decide nada del juego), `Date.now`, otro MT19937 ni otra semilla; una prueba estática lo verifica.
 
-### Política de semilla — decisión mínima, pendiente de ratificación
+### Semilla y ciclo de vida de la secuencia — decisión técnica separada
 
-Combat no tenía política de semilla por batalla (ADR-021). HU-17 es el primer consumidor real. Se crea **una**
-secuencia con estado de proceso al arrancar, con la semilla validada por HU-26 (`3.000.000`, configurable con
-`COMBAT_RANDOM_SEED`, entero sin signo de 32 bits) y cada sorteo **avanza** su estado. No se usa una semilla
-constante por batalla porque produciría siempre el mismo equipo inicial.
+**Requisito de HU-17:** usar la semilla seleccionada y validada por HU-26 (`3.000.000`). El documento exige que la
+semilla haya sido validada antes de producción, pero **no define** si la secuencia es global por proceso o por
+batalla, si el cursor se persiste ni cómo se comporta tras un reinicio. HU-17 **no establece** ninguna de esas
+políticas como requisito funcional, y `3.000.000` es la semilla validada por HU-26, no una «semilla global de
+producción» decretada.
 
-**Limitaciones (declaradas):** la secuencia vuelve a empezar al reiniciar Combat; el cursor no se persiste; el
-resultado de una batalla no se puede reproducir por separado. Persistir el cursor o usar una semilla por batalla
-es la decisión de PO/arquitectura que ADR-021 ya dejaba pendiente.
+**Implementación provisional (detalle técnico, no ratificado):** para poder sortear, Combat crea una secuencia con
+estado de proceso al arrancar, con esa semilla (`COMBAT_RANDOM_SEED`, por defecto `3.000.000`, entero sin signo de 32
+bits), y cada sorteo avanza su estado. No se usa una semilla constante por batalla porque produciría siempre el mismo
+equipo inicial. **Limitaciones (declaradas):** la secuencia vuelve a empezar al reiniciar Combat; el cursor no se
+persiste; el resultado de una batalla no se puede reproducir por separado. Ninguna prueba de HU-17 depende de este
+ciclo de vida (usan un generador guionizado). El ciclo de vida definitivo es una **decisión técnica separada**
+(ADR-021 ya la dejaba abierta) y no bloquea ni forma parte de HU-17.
 
 ## Revalidación precombate (HU-16)
 
@@ -95,11 +109,11 @@ De cada héroe solo se copia el **subtipo canónico** (para que Web elija el mod
 
 ## HTTP
 
-| Método | Ruta                                 | Éxito                                  | Errores                                                                          |
-| ------ | ------------------------------------ | -------------------------------------- | -------------------------------------------------------------------------------- |
-| `POST` | `/api/v1/combat/rooms/:roomId/start` | `200` sala + `battle`                  | `400`, `401`, `403` (no participante), `404`, `409`, `422` (`blockers[]`), `503` |
-| `GET`  | `/api/v1/combat/rooms/:roomId`       | `200` sala + `battle`                  | `400`, `401`, `403`, `404`                                                       |
-| `POST` | `/api/v1/combat/realtime/tickets`    | `201` `{ticket, expiresInSeconds: 30}` | `401`                                                                            |
+| Método | Ruta                                 | Éxito                                  | Errores                                                                                                                 |
+| ------ | ------------------------------------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/api/v1/combat/rooms/:roomId/start` | `200` sala + `battle`                  | `400`, `401`, `403` (no participante), `404`, `409`, `422` (`blockers[]` o `code: UNSUPPORTED_TEAM_COMPOSITION`), `503` |
+| `GET`  | `/api/v1/combat/rooms/:roomId`       | `200` sala + `battle`                  | `400`, `401`, `403`, `404`                                                                                              |
+| `POST` | `/api/v1/combat/realtime/tickets`    | `201` `{ticket, expiresInSeconds: 30}` | `401`                                                                                                                   |
 
 `BattleRoomDto` se amplía de forma **aditiva** con `lastSeq` y `battle` (`null` hasta `IN_BATTLE`). Ver
 `BattleView` en `domain/entities/BattleState.ts`: `battleId` (= `roomId`), `startedAt`, `turnOrder` (con
@@ -119,6 +133,13 @@ número de sorteos, el inventario, el JWT ni los tickets.
 - **`resume`** `{roomId, lastSeq?}`: solo participantes. `lastSeq` entre 1 y el último `seq` → reenvío ordenado de
   los eventos posteriores; ausente/inválido → `snapshot`; termina con `resume.ok`. Un no participante recibe
   `command.rejected` (`NOT_A_PARTICIPANT`) y no se suscribe.
+  **Recuperación sin pérdida de eventos:** la conexión entra en modo «recuperando» **antes** de leer el estado y
+  retiene los eventos que se publiquen mientras tanto; después entrega, en un único bloque síncrono, la lectura
+  (replay o `snapshot`), lo retenido con `seq` posterior (se descarta lo que la lectura ya incluía y se corta ante un
+  hueco, que el cliente detecta por `seq` y recupera con otro `resume`) y la suscripción, y por último `resume.ok`
+  con el último `seq` **realmente entregado**. Un evento persistido y publicado entre la lectura y la suscripción
+  llega igualmente, en orden y sin duplicarse. Dos `resume` de una misma conexión se serializan. La retención supone
+  un único proceso publicador (una réplica), igual que el almacén de tickets.
 - **Eventos con `seq`** (`battleStarted` = 1, `turnAdvanced`): solo a participantes que hicieron `resume`, siempre
   **después** de persistir; el mensaje se serializa una vez, así que todos reciben los mismos bytes.
 - **Latido:** ping cada 25 s; sin pong, la conexión se corta (queda desconectada, no abandonada: HU-21).
@@ -145,15 +166,20 @@ al estado hace que «persistir la batalla» y «persistir el evento» sean la mi
 
 ## Pruebas
 
-- **Dominio:** cola 1v1/2v2/3v3/desiguales, alternancia, inmutabilidad, ronda, `commandId`, invariantes.
+- **Dominio:** cola 1v1/2v2/3v3, alternancia, equipos desiguales rechazados sin consumir sorteos, inmutabilidad,
+  ronda, `commandId`, invariantes; solo el participante activo puede cerrar el turno (`NotYourTurnError`).
 - **Aplicación:** inicio, revalidación (cada bloqueo), idempotencia, carrera, persistir antes de difundir, fallo de
   difusión, avance concurrente, `resume`/`snapshot`, tickets (un uso, 30 s, hash).
-- **Gateway:** ticket, `4401`, `resume`, difusión solo a participantes, latido.
+- **Gateway:** ticket, `4401`, `resume`, difusión solo a participantes, latido y la **carrera de `resume`**
+  (evento publicado entre la lectura y la suscripción, duplicados, hueco, no participante, serialización; 4 de 4
+  mutaciones detectadas).
 - **HTTP (memoria):** `start`/`GET`/`tickets` con guards y errores.
 - **Extremo a extremo de protocolo** (`test/db/battle-realtime.e2e.spec.ts`): **MongoDB real** (Testcontainers),
   servidor Nest real y **dos clientes `ws` reales**, cada uno con su `sub` y su ticket: `battleStarted` idéntico
   byte a byte, misma cola y mismo turno, avance del servidor, corte y `resume` con `lastSeq`, refresh con
-  `snapshot`, reuso de ticket, `resume` ajeno, límite de 16 KiB, inicios simultáneos y **reinicio de Combat**.
+  `snapshot`, reuso de ticket, `resume` ajeno, límite de 16 KiB, inicios simultáneos, **reinicio de Combat** y la
+  **carrera de `resume`** (un `resume` detenido tras leer `seq N` mientras otro request persiste y publica `N + 1`:
+  el cliente termina con `N + 1`).
 - **Guarda estática** (`hu-17-no-alternative-randomness.spec.ts`): sin `Math.random`, `crypto` (salvo el ticket),
   reloj, MT19937, Box-Müller, CDF ni semilla en el código de HU-17.
 
@@ -161,6 +187,8 @@ al estado hace que «persistir la batalla» y «persistir el evento» sean la mi
 
 - Ataque, daño, habilidades, épicas, Poder y fin de batalla: HU-18, HU-19, HU-21.
 - Abandono o desconexión durante la batalla (HU-21) y bloqueo del equipamiento (HU-29).
-- Política de semilla por batalla y persistencia del cursor (ADR-021).
-- Ratificación del PO: el disparador `start` por cualquier participante y la alternancia con equipos desiguales.
+- Ciclo de vida de la secuencia aleatoria (por proceso o por batalla, persistencia del cursor): decisión técnica
+  separada (ADR-021); no es requisito de HU-17.
+- Orden de turnos con equipos de distinto tamaño: sin regla ratificada, HU-17 lo rechaza. Prohibir esas salas al
+  crearlas (HU-14) requiere una aclaración formal.
 - `CompleteBattleTurn` no tiene consumidor de producción todavía (lo tendrán HU-18/HU-19).

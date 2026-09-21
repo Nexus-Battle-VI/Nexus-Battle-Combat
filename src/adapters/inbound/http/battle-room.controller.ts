@@ -23,6 +23,7 @@ import {
   InvalidBattleRosterError,
   NotYourTurnError,
   RoomNotStartableError,
+  UnsupportedTeamCompositionError,
 } from '../../../domain/errors/BattleErrors'
 import {
   DuplicateDisplayNameError,
@@ -394,6 +395,16 @@ export class BattleRoomController {
     // HU-16.1 (DP-7, hallazgo de la auditoria): antes caia en el 422 generico
     // de arriba, sin `code` -- indistinguible en el cuerpo de cualquier otro
     // 422. Mismo patron que `AccountProfileMissingError` de mas abajo.
+    // HU-17: equipos de distinto tamano. `code` estable para que Web lo distinga
+    // de "un participante ya no cumple los requisitos" (mismo 422).
+    if (error instanceof UnsupportedTeamCompositionError) {
+      return new UnprocessableEntityException({
+        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+        message: error.message,
+        code: error.code,
+      })
+    }
+
     if (error instanceof PlayerWithoutEquippedHeroError) {
       return new UnprocessableEntityException({
         statusCode: HttpStatus.UNPROCESSABLE_ENTITY,

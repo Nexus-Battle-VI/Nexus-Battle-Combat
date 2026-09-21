@@ -163,6 +163,52 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
   }
 
   describe('POST /rooms/:id/start', () => {
+    it('equipos de distinto tamano (1 contra 3): 422 con code UNSUPPORTED_TEAM_COMPOSITION y la sala sigue PREPARING', async () => {
+      const created = await http()
+        .post('/api/v1/combat/rooms')
+        .set('Authorization', auth('token-a'))
+        .send({
+          mode: 'PVE',
+          teamConfigs: [
+            { capacity: 1, initialParticipants: [{ kind: 'HUMAN' }] },
+            {
+              capacity: 3,
+              initialParticipants: [
+                { kind: 'AI', heroId: 'ai-0' },
+                { kind: 'AI', heroId: 'ai-1' },
+              ],
+            },
+          ],
+          reward: { amount: 0 },
+        })
+
+      expect(created.status).toBe(201)
+
+      const roomId = created.body.id as string
+      const joined = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/join`)
+        .set('Authorization', auth('token-b'))
+        .send({})
+
+      expect(joined.body.status).toBe('PREPARING')
+
+      const started = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+
+      expect(started.status).toBe(422)
+      expect(started.body.code).toBe('UNSUPPORTED_TEAM_COMPOSITION')
+      expect(started.body.message).toContain('1 contra 3')
+
+      const read = await http()
+        .get(`/api/v1/combat/rooms/${roomId}`)
+        .set('Authorization', auth('token-a'))
+
+      expect(read.body.status).toBe('PREPARING')
+      expect(read.body.battle).toBeNull()
+      expect(read.body.lastSeq).toBe(0)
+    })
+
     it('sala preparada: inicia la batalla con UNA cola de dos participantes y responde la sala en curso', async () => {
       const roomId = await preparingRoom()
 

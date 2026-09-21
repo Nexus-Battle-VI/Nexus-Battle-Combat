@@ -32,6 +32,32 @@ export class InvalidBattleRosterError extends DomainError {
   }
 }
 
+/**
+ * Codigo estable (`code` en el cuerpo del 422) de una composicion de equipos que
+ * HU-17 no sabe ordenar.
+ */
+export const UNSUPPORTED_TEAM_COMPOSITION = 'UNSUPPORTED_TEAM_COMPOSITION'
+
+/**
+ * Los dos equipos no tienen el mismo numero de participantes (p. ej. 1 contra 3).
+ * RF-17 exige alternar entre ambos equipos pero NO define que ocurre cuando uno
+ * se agota antes: esa regla no esta ratificada formalmente, asi que HU-17 NO la
+ * inventa. En lugar de fabricar una cola con una regla inventada, la batalla no
+ * comienza (la sala sigue `PREPARING`, sin cola ni evento y sin consumir ni un
+ * sorteo). 422 con `code`.
+ */
+export class UnsupportedTeamCompositionError extends DomainError {
+  readonly code = UNSUPPORTED_TEAM_COMPOSITION
+
+  constructor(readonly sizes: readonly [number, number]) {
+    super(
+      `Los equipos tienen distinto tamano (${String(sizes[0])} contra ${String(sizes[1])}) y el orden de ` +
+        'turnos solo esta definido para equipos con el mismo numero de participantes: la batalla no puede comenzar.',
+    )
+    this.name = 'UnsupportedTeamCompositionError'
+  }
+}
+
 /** La sala no esta `IN_BATTLE`: no hay turno que gestionar. 409. */
 export class BattleNotInProgressError extends DomainError {
   constructor(roomId: string, status: string) {

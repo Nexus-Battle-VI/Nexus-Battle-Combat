@@ -1,4 +1,4 @@
-import { InvalidBattleRosterError } from '../errors/BattleErrors'
+import { InvalidBattleRosterError, UnsupportedTeamCompositionError } from '../errors/BattleErrors'
 import {
   memberKey,
   type RosterMember,
@@ -35,6 +35,21 @@ const shuffle = <T>(items: readonly T[], random: BoundedRandom): T[] => {
   }
 
   return result
+}
+
+/**
+ * HU-17 solo define el orden para equipos con el MISMO numero de participantes.
+ * RF-17 exige "alternar entre ambos equipos" pero no dice que hacer cuando uno se
+ * agota antes (1 contra 3, 2 contra 3...): esa regla no esta ratificada, asi que
+ * no se inventa y la composicion se rechaza ANTES de consumir ningun sorteo.
+ */
+export const assertBalancedTeams = (rosters: readonly [TeamRoster, TeamRoster]): void => {
+  if (rosters[0].members.length !== rosters[1].members.length) {
+    throw new UnsupportedTeamCompositionError([
+      rosters[0].members.length,
+      rosters[1].members.length,
+    ])
+  }
 }
 
 const assertValidRoster = (rosters: readonly [TeamRoster, TeamRoster]): void => {
@@ -74,6 +89,8 @@ const assertValidRoster = (rosters: readonly [TeamRoster, TeamRoster]): void => 
       }
     }
   }
+
+  assertBalancedTeams(rosters)
 }
 
 /**
@@ -82,12 +99,12 @@ const assertValidRoster = (rosters: readonly [TeamRoster, TeamRoster]): void => 
  *  1. Equipo inicial: un entero uniforme en `{0, 1}` (0 = el primer equipo
  *     recibido).
  *  2. Cada equipo se baraja con Fisher-Yates (decisiones aleatorias de HU-24).
- *  3. Se intercalan los equipos empezando por el equipo inicial, alternando
- *     mientras ambos tengan participantes.
- *  4. Si un equipo se agota antes (composiciones desiguales), los que restan
- *     del otro equipo se anaden a continuacion, en su orden barajado
- *     (decision tecnica pendiente de ratificar: RF-17 solo define la
- *     alternancia para equipos equilibrados).
+ *  3. Se intercalan los equipos empezando por el equipo inicial: A B A B ...
+ *
+ * SOLO se admiten equipos con el MISMO numero de participantes. RF-17 no define
+ * el orden cuando uno se agota antes y esa regla no esta ratificada: una
+ * composicion desigual lanza `UnsupportedTeamCompositionError` antes de consumir
+ * ningun sorteo (no se inventa una regla de "los que restan").
  *
  * Las estadisticas, el nivel, el Poder, el tipo de heroe y el equipamiento NO
  * intervienen: la funcion ni siquiera recibe esos datos. Es PURA respecto a la
@@ -112,15 +129,15 @@ export const generateTurnOrder = (
   const order: TurnOrderEntry[] = []
   const queues: readonly [RosterMember[], RosterMember[]] =
     startingIndex === 0 ? [shuffled[0], shuffled[1]] : [shuffled[1], shuffled[0]]
-  const longest = Math.max(queues[0].length, queues[1].length)
 
-  for (let round = 0; round < longest; round += 1) {
-    for (const queue of queues) {
-      const member = queue[round]
+  // Mismo tamano garantizado por `assertBalancedTeams`: la alternancia nunca se interrumpe.
+  for (const [index, member] of queues[0].entries()) {
+    const counterpart = queues[1][index]
 
-      if (member !== undefined) {
-        order.push(member)
-      }
+    order.push(member)
+
+    if (counterpart !== undefined) {
+      order.push(counterpart)
     }
   }
 
