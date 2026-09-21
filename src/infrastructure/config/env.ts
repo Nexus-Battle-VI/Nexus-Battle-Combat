@@ -29,6 +29,29 @@ export const PersistenceDriver = {
 
 export type PersistenceDriver = (typeof PersistenceDriver)[keyof typeof PersistenceDriver]
 
+/**
+ * Parametros del chat de Jugar Online (HU-13, RF-13).
+ *
+ * ORIGEN DE LAS CIFRAS. ADR-020 dice que la longitud y la frecuencia las fija
+ * HU-13 y la Historia no da ninguna. Los valores por defecto son la propuesta
+ * que el PO ratifico por chat (no consta por escrito en el issue):
+ * 500 caracteres y 5 mensajes cada 10 segundos por remitente y canal.
+ * `CHAT_RETENTION_HOURS` (168 = 7 dias) es la unica cifra sin ninguna fuente:
+ * la eligio quien implemento y el PO debe fijarla. Por eso todo esto es
+ * configuracion y no constantes.
+ */
+export interface ChatConfig {
+  /** Longitud maxima del texto, en puntos de codigo Unicode. */
+  readonly maxMessageLength: number
+  /** Mensajes permitidos por remitente y canal dentro de la ventana. */
+  readonly rateLimitMessages: number
+  readonly rateLimitWindowMs: number
+  /** Cuanto tiempo se conserva un mensaje persistido. */
+  readonly retentionMs: number
+  /** Tamano maximo del historial que se entrega al suscribirse (decision tecnica). */
+  readonly historyLimit: number
+}
+
 export interface AppConfig {
   readonly nodeEnv: 'development' | 'test' | 'production'
   readonly serviceName: string
@@ -48,6 +71,7 @@ export interface AppConfig {
   readonly playerInventoryServiceBaseUrl: string | null
   /** Tiempo de espera de las llamadas HTTP internas salientes (Account, Player-Inventory). */
   readonly internalHttpTimeoutMs: number
+  readonly chat: ChatConfig
 }
 
 type RawEnv = Readonly<Record<string, string | undefined>>
@@ -220,5 +244,14 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     playerInventoryServiceBaseUrl:
       playerInventoryServiceBaseUrl === '' ? null : playerInventoryServiceBaseUrl,
     internalHttpTimeoutMs: readInteger(env, 'INTERNAL_HTTP_TIMEOUT_MS', 3_000, 100, 30_000),
+    chat: {
+      // El tope 2000 acota lo que el validador del motor admite (8000 unidades,
+      // hasta 4 bytes por punto de codigo): ver migracion 005.
+      maxMessageLength: readInteger(env, 'CHAT_MAX_MESSAGE_LENGTH', 500, 1, 2_000),
+      rateLimitMessages: readInteger(env, 'CHAT_RATE_LIMIT_MESSAGES', 5, 1, 100),
+      rateLimitWindowMs: readInteger(env, 'CHAT_RATE_LIMIT_WINDOW_MS', 10_000, 1_000, 600_000),
+      retentionMs: readInteger(env, 'CHAT_RETENTION_HOURS', 168, 1, 8_760) * 3_600_000,
+      historyLimit: readInteger(env, 'CHAT_HISTORY_LIMIT', 50, 1, 200),
+    },
   }
 }

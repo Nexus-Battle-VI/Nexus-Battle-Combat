@@ -25,7 +25,8 @@
     "test:integration": "jest --selectProjects integration",
     "test:coverage": "jest --coverage",
     "migrate": "node dist/infrastructure/persistence/migrate.js",
-    "test:db": "jest --config jest.db.config.ts --coverage"
+    "test:db": "jest --config jest.db.config.ts --coverage",
+    "test:perf": "jest --config jest.perf.config.ts"
   },
   "dependencies": {
     "@nestjs/common": "11.2.1",

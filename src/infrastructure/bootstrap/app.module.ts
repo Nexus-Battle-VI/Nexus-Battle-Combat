@@ -17,11 +17,15 @@ import { InternalServiceGuard } from '../../adapters/inbound/http/auth/internal-
 import { JwtAuthGuard } from '../../adapters/inbound/http/auth/jwt-auth.guard'
 import { RolesGuard } from '../../adapters/inbound/http/auth/roles.guard'
 import { BattleRoomRealtimeGateway } from '../../adapters/inbound/ws/BattleRoomRealtimeGateway'
+import { ChatRealtimeHandler } from '../../adapters/inbound/ws/ChatRealtimeHandler'
+import { REALTIME_LOGGER } from '../../adapters/inbound/ws/tokens'
 import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTokenVerifier'
 import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClient'
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
 import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistence/InMemoryBattleRoomRepository'
+import { InMemoryChatMessageRepository } from '../../adapters/outbound/persistence/InMemoryChatMessageRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
+import { MongoChatMessageRepository } from '../../adapters/outbound/persistence/MongoChatMessageRepository'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
@@ -34,6 +38,10 @@ import {
   BATTLE_ROOM_REPOSITORY,
   type BattleRoomRepositoryPort,
 } from '../../application/ports/BattleRoomRepositoryPort'
+import {
+  CHAT_MESSAGE_REPOSITORY,
+  type ChatMessageRepositoryPort,
+} from '../../application/ports/ChatMessageRepositoryPort'
 import { CLOCK, type ClockPort } from '../../application/ports/ClockPort'
 import { ID_GENERATOR, type IdGeneratorPort } from '../../application/ports/IdGeneratorPort'
 import {
@@ -46,11 +54,15 @@ import {
 } from '../../application/ports/RandomSequencePort'
 import { REALTIME_NOTIFIER } from '../../application/ports/RealtimeNotifierPort'
 import { TOKEN_VERIFIER, type TokenVerifierPort } from '../../application/ports/TokenVerifierPort'
+import { AuthorizeChatChannel } from '../../application/use-cases/AuthorizeChatChannel'
 import { CancelBattleRoom } from '../../application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../application/use-cases/CreateBattleRoom'
 import { JoinBattleRoom } from '../../application/use-cases/JoinBattleRoom'
 import { LeaveBattleRoom } from '../../application/use-cases/LeaveBattleRoom'
 import { ListAvailableBattleRooms } from '../../application/use-cases/ListAvailableBattleRooms'
+import { ReadChatHistory } from '../../application/use-cases/ReadChatHistory'
+import { SendChatMessage } from '../../application/use-cases/SendChatMessage'
+import { ChatRateLimiter } from '../../domain/policies/ChatRateLimiter'
 import { UpstreamServiceError } from '../../application/errors/UpstreamErrors'
 import { AuthMode, loadConfig, PersistenceDriver, type AppConfig } from '../config/env'
 import type { ReadinessCheck, VersionReport } from '../health/health'
@@ -337,18 +349,64 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       useFactory: (rooms: BattleRoomRepositoryPort): LeaveBattleRoom => new LeaveBattleRoom(rooms),
       inject: [BATTLE_ROOM_REPOSITORY],
     },
-    // HU-15.2 (RF-15, ADR-020): gateway WebSocket nativo. Provider normal de
-    // Nest (no un controlador): `BattleRoomController` lo consume a traves
-    // del puerto `REALTIME_NOTIFIER`, nunca de la clase concreta.
+    // HU-13 (RF-13): chat del lobby y de las salas. Mensajes propios de Combat
+    // (ADR-019, data-ownership). `PERSISTENCE_DRIVER=memory` respalda pruebas y
+    // desarrollo, igual que el repositorio de salas.
     {
-      provide: BattleRoomRealtimeGateway,
-      useFactory: (
-        verifier: TokenVerifierPort,
-        rooms: BattleRoomRepositoryPort,
-        logger: Logger,
-      ): BattleRoomRealtimeGateway => new BattleRoomRealtimeGateway(verifier, rooms, logger),
-      inject: [TOKEN_VERIFIER, BATTLE_ROOM_REPOSITORY, LOGGER],
+      provide: CHAT_MESSAGE_REPOSITORY,
+      useFactory: (db: Db | null): ChatMessageRepositoryPort =>
+        db === null ? new InMemoryChatMessageRepository() : new MongoChatMessageRepository(db),
+      inject: [DATABASE],
     },
+    {
+      provide: ChatRealtimeHandler,
+      useFactory: (
+        config: AppConfig,
+        rooms: BattleRoomRepositoryPort,
+        messages: ChatMessageRepositoryPort,
+        accountProfiles: AccountBattleProfilePort,
+        clock: ClockPort,
+        ids: IdGeneratorPort,
+        logger: Logger,
+      ): ChatRealtimeHandler => {
+        const authorize = new AuthorizeChatChannel(rooms)
+
+        return new ChatRealtimeHandler({
+          authorize,
+          readHistory: new ReadChatHistory(messages, clock, config.chat.historyLimit),
+          sender: new SendChatMessage(
+            authorize,
+            messages,
+            accountProfiles,
+            new ChatRateLimiter(config.chat.rateLimitMessages, config.chat.rateLimitWindowMs),
+            clock,
+            ids,
+            {
+              maxMessageLength: config.chat.maxMessageLength,
+              retentionMs: config.chat.retentionMs,
+            },
+          ),
+          logger,
+        })
+      },
+      inject: [
+        APP_CONFIG,
+        BATTLE_ROOM_REPOSITORY,
+        CHAT_MESSAGE_REPOSITORY,
+        ACCOUNT_BATTLE_PROFILE,
+        CLOCK,
+        ID_GENERATOR,
+        LOGGER,
+      ],
+    },
+    // HU-15.2 (RF-15, ADR-020): gateway WebSocket nativo, HU-13 le anade el
+    // chat. Se registra como proveedor de CLASE, NO con `useFactory`:
+    // `@nestjs/websockets` ignora los gateways de fabrica y `/api/v1/combat/
+    // realtime` respondia 404 (ver `adapters/inbound/ws/tokens.ts`).
+    // `BattleRoomController` lo consume a traves del puerto `REALTIME_NOTIFIER`,
+    // nunca de la clase concreta.
+    BattleRoomRealtimeGateway,
+    { provide: REALTIME_LOGGER, useExisting: LOGGER },
     {
       provide: REALTIME_NOTIFIER,
       useExisting: BattleRoomRealtimeGateway,

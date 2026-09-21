@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
+import { WsAdapter } from '@nestjs/platform-ws'
 import { Test } from '@nestjs/testing'
 import request from 'supertest'
 
@@ -208,6 +209,10 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       .compile()
 
     app = moduleRef.createNestApplication()
+    // HU-13: el gateway de tiempo real ya se registra de verdad (antes Nest lo ignoraba por
+    // ser un proveedor de fabrica); su adaptador es `ws`, como en `main.ts`. Sin el, Nest
+    // intenta cargar Socket.IO, que no esta instalado.
+    app.useWebSocketAdapter(new WsAdapter(app))
     app.setGlobalPrefix('api')
     app.useGlobalPipes(
       new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),

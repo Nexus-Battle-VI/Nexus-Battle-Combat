@@ -29,7 +29,8 @@
     "test/**/*.ts",
     "eslint.config.mjs",
     "jest.config.ts",
-    "jest.db.config.ts"
+    "jest.db.config.ts",
+    "jest.perf.config.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

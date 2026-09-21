@@ -11,6 +11,7 @@ import {
 } from '../../src/application/ports/TokenVerifierPort'
 import { CreateBattleRoom } from '../../src/application/use-cases/CreateBattleRoom'
 import type { Logger } from '../../src/infrastructure/observability/logger'
+import { buildChatHarness } from '../fixtures/chat-harness'
 
 /**
  * Gateway WebSocket de HU-15.2 (RF-15, ADR-020, vertical minimo -- ver el
@@ -55,12 +56,13 @@ class FakeSocket {
   private messageListener: MessageListener | null = null
   private closeListener: CloseListener | null = null
 
-  on(event: 'message' | 'close', listener: MessageListener | CloseListener): void {
+  on(event: 'message' | 'close' | 'pong', listener: MessageListener | CloseListener): void {
     if (event === 'message') {
       this.messageListener = listener
-    } else {
+    } else if (event === 'close') {
       this.closeListener = listener as CloseListener
     }
+    // 'pong': el latido (HU-13) se prueba en `chat-gateway.spec.ts`.
   }
 
   send(data: string): void {
@@ -85,6 +87,20 @@ class FakeSocket {
   }
 }
 
+/**
+ * HU-13: el gateway recibe el manejador del chat. Las pruebas de HU-15.2 no lo
+ * usan (solo ejercitan `auth`/`subscribe`/`battle-room.updated`), asi que se
+ * le pasa uno real sobre dobles en memoria y esa parte del comportamiento no
+ * cambia.
+ */
+const buildGateway = (repo: InMemoryBattleRoomRepository): BattleRoomRealtimeGateway =>
+  new BattleRoomRealtimeGateway(
+    stubVerifier,
+    repo,
+    silentLogger,
+    buildChatHarness({ rooms: repo }).handler,
+  )
+
 const buildRoom = async (
   repo: InMemoryBattleRoomRepository,
   roomId = '00000000-0000-4000-8000-000000000001',
@@ -101,7 +117,7 @@ const buildRoom = async (
 describe('BattleRoomRealtimeGateway (HU-15.2, ADR-020, vertical minimo)', () => {
   it('rechaza una conexion que no se autentica en la ventana concedida (simulada disparando el timer manualmente no es posible aqui; se verifica el cierre explicito por token invalido)', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const gateway = new BattleRoomRealtimeGateway(stubVerifier, repo, silentLogger)
+    const gateway = buildGateway(repo)
     const socket = new FakeSocket()
 
     gateway.handleConnection(socket)
@@ -116,7 +132,7 @@ describe('BattleRoomRealtimeGateway (HU-15.2, ADR-020, vertical minimo)', () => 
 
   it('conexion autenticada: token valido responde auth.ok y no cierra el socket', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const gateway = new BattleRoomRealtimeGateway(stubVerifier, repo, silentLogger)
+    const gateway = buildGateway(repo)
     const socket = new FakeSocket()
 
     gateway.handleConnection(socket)
@@ -130,7 +146,7 @@ describe('BattleRoomRealtimeGateway (HU-15.2, ADR-020, vertical minimo)', () => 
 
   it('suscripcion sin autenticar primero -> rechazada (4401)', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const gateway = new BattleRoomRealtimeGateway(stubVerifier, repo, silentLogger)
+    const gateway = buildGateway(repo)
     const socket = new FakeSocket()
 
     gateway.handleConnection(socket)
@@ -143,7 +159,7 @@ describe('BattleRoomRealtimeGateway (HU-15.2, ADR-020, vertical minimo)', () => 
   it('suscripcion valida: sala existente tras autenticarse responde subscribe.ok', async () => {
     const repo = new InMemoryBattleRoomRepository()
     const created = await buildRoom(repo)
-    const gateway = new BattleRoomRealtimeGateway(stubVerifier, repo, silentLogger)
+    const gateway = buildGateway(repo)
     const socket = new FakeSocket()
 
     gateway.handleConnection(socket)
@@ -162,7 +178,7 @@ describe('BattleRoomRealtimeGateway (HU-15.2, ADR-020, vertical minimo)', () => 
 
   it('suscripcion a una sala inexistente se rechaza (el servidor autoriza, no acepta cualquier roomId)', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const gateway = new BattleRoomRealtimeGateway(stubVerifier, repo, silentLogger)
+    const gateway = buildGateway(repo)
     const socket = new FakeSocket()
 
     gateway.handleConnection(socket)
@@ -180,7 +196,7 @@ describe('BattleRoomRealtimeGateway (HU-15.2, ADR-020, vertical minimo)', () => 
     const repo = new InMemoryBattleRoomRepository()
     const roomA = await buildRoom(repo, '00000000-0000-4000-8000-0000000000aa')
     const roomB = await buildRoom(repo, '00000000-0000-4000-8000-0000000000bb')
-    const gateway = new BattleRoomRealtimeGateway(stubVerifier, repo, silentLogger)
+    const gateway = buildGateway(repo)
 
     const socketA = new FakeSocket()
     gateway.handleConnection(socketA)
@@ -216,7 +232,7 @@ describe('BattleRoomRealtimeGateway (HU-15.2, ADR-020, vertical minimo)', () => 
   it('forma del payload: roomId, status, version -- nada mas', async () => {
     const repo = new InMemoryBattleRoomRepository()
     const created = await buildRoom(repo)
-    const gateway = new BattleRoomRealtimeGateway(stubVerifier, repo, silentLogger)
+    const gateway = buildGateway(repo)
     const socket = new FakeSocket()
 
     gateway.handleConnection(socket)
@@ -242,7 +258,7 @@ describe('BattleRoomRealtimeGateway (HU-15.2, ADR-020, vertical minimo)', () => 
   it('desconexion limpia: tras cerrar, notifyRoomUpdated ya no envia nada a ese socket', async () => {
     const repo = new InMemoryBattleRoomRepository()
     const created = await buildRoom(repo)
-    const gateway = new BattleRoomRealtimeGateway(stubVerifier, repo, silentLogger)
+    const gateway = buildGateway(repo)
     const socket = new FakeSocket()
 
     gateway.handleConnection(socket)
@@ -264,7 +280,7 @@ describe('BattleRoomRealtimeGateway (HU-15.2, ADR-020, vertical minimo)', () => 
   it('evento tras join simulado: el controlador dispara notifyRoomUpdated con el resultado ya persistido', async () => {
     const repo = new InMemoryBattleRoomRepository()
     const created = await buildRoom(repo)
-    const gateway = new BattleRoomRealtimeGateway(stubVerifier, repo, silentLogger)
+    const gateway = buildGateway(repo)
     const socket = new FakeSocket()
 
     gateway.handleConnection(socket)
