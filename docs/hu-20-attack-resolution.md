@@ -2,12 +2,12 @@
 
 > Estado: **implementados la comparación Ataque contra Defensa, el dado de Ataque de la Tabla 6, la
 > preparación de un golpe entre dos héroes equipados y la resolución con el efecto aleatorio de HU-25**, con
-> pruebas unitarias y de integración contra el motor real de HU-24. Es un **bloque de dominio y aplicación
-> sin caller de producción**: ningún flujo de batalla lo invoca todavía (HU-17 orden de turnos, HU-18 ataque
-> básico), y **no está expuesto por HTTP** a propósito. No calcula daño numérico, vida ni fin de turno (HU-18).
-> **HU-20 no está terminada de extremo a extremo** hasta que HU-18 la use en un combate real. Este documento
-> distingue en cada punto qué es requisito explícito, fuente oficial, decisión técnica, decisión de diseño o
-> pendiente.
+> pruebas unitarias y de integración contra el motor real de HU-24. Es un **bloque de dominio y aplicación**
+> **no expuesto por HTTP** a propósito. No calcula daño numérico, vida ni fin de turno: eso lo hace HU-18.
+> **Ya tiene un consumidor de producción:** el ataque básico de HU-18 (`ExecuteBasicAttack`, ver
+> [`hu-18-basic-attack.md`](hu-18-basic-attack.md)) llama a `prepareAttack` y `ResolveAttack` en una batalla real
+> sin reescribirlos. Este documento distingue en cada punto qué es requisito explícito, fuente oficial, decisión
+> técnica, decisión de diseño o pendiente.
 
 ## Trazabilidad
 
@@ -65,16 +65,21 @@ application/use-cases/ResolveAttack.ts      ResolveAttack.execute({ attack, defe
   batalla debe tomar el héroe de cada participante **una vez, al empezar el combate**, y no volver a pedirlo
   en cada golpe (HU-29, bloqueo de equipamiento en combate, sigue abierta).
 
-### Uso previsto (HU-18)
+### Uso en producción (HU-18)
 
 ```ts
-const prepared = prepareAttack(attackerSnapshot, targetSnapshot)
-const result = resolveAttack.execute({ ...prepared, sequence: battle.sequence })
+const prepared = prepareAttack(attackerProfile, targetProfile)
+const result = resolveAttack.execute({ ...prepared, sequence })
 
 if (result.effective) {
-  // HU-18: daño numérico a partir de result.effect.percent, actualizar la vida, fin de turno
+  // HU-18 (ExecuteBasicAttack): daño = floor(dañoBase × result.effect.percent / 100), Vida, turno
 }
 ```
+
+`prepareAttack` y `buildHeroEffectTable` reciben ahora una interfaz local mínima (`AttackParticipant`,
+`EffectTableSource`) que cumplen **por estructura** tanto `EquippedHero` como el perfil de combate que HU-18
+congela al iniciar la batalla (`CombatProfile`): así el ataque no consulta a Player-Inventory por golpe
+(ver la nota de HU-29 arriba). El comportamiento no cambió y las pruebas de HU-20 siguen verdes.
 
 ## Reglas
 
@@ -182,8 +187,8 @@ Defensa, condicionado, temporal) queda **pendiente y sin aplicar**, con su motiv
 cargado). Hay dos orígenes:
 
 - **Chamán y Médico:** la Tabla 6 les pone «−» en Ataque y en Daño. Un sanador **sí puede ser objetivo** de un
-  golpe (solo se usa su Defensa). Que su «ataque básico siempre disponible» (HU-18) sea una acción sin daño o
-  esté oculta lo decide HU-18.
+  golpe (solo se usa su Defensa). HU-18 **no inventa** su ataque: un sanador no puede atacar
+  (`UNSUPPORTED_COMBAT_PROFILE`) hasta que el PO defina qué es su «ataque básico siempre disponible».
 - **Un héroe ofensivo cuyo Catalog declaró el Ataque base como un dado:** Player-Inventory solo entrega el
   Ataque numérico si es un valor fijo, así que llega `null`. Es un dato mal cargado, no una regla.
 
@@ -192,7 +197,9 @@ cargado). Hay dos orígenes:
 - **Daño numérico, vida y fin de turno:** son de HU-18 (CA-06 y CA-07 de HU-18: «el estado de vida del objetivo
   debe actualizarse»; «el turno debe finalizar»). HU-20 entrega el efecto y su porcentaje.
 - **La reducción del daño por la Defensa** («una defensa superior disminuye la cantidad de daño recibido»,
-  §6.1.1): es cálculo de daño, no comparación. HU-18.
+  §6.1.1): es cálculo de daño, no comparación. HU-18 **no la aplica además** de la comparación (ninguna fuente
+  formal define una fórmula): la Defensa solo decide si el golpe es efectivo. Queda como pendiente documentado
+  en [`hu-18-basic-attack.md`](hu-18-basic-attack.md).
 - **Turnos, objetivo único, fuego amigo:** HU-17, HU-18 y HU-12 (prevención de daño entre aliados).
 - **Efectos condicionados y temporales:** necesitan el estado de la batalla (turnos, estadísticas del
   oponente). Ver [Lo que sigue abierto](#lo-que-sigue-abierto).
@@ -236,9 +243,10 @@ Por instrucción del PO/profesor de revisar el documento y resolver los pendient
    con equipos el documento no distingue entre «cualquier enemigo» y «el enemigo actual».
 4. **Crítico 120–180:** es la decisión con menor base documental; pide ratificación del PO/profesor.
 5. **Sanadores sin ataque:** HU-18 dice que el ataque básico «siempre está disponible», y el documento dice
-   que Chamán y Médico no tienen Ataque ni Daño. Lo resuelve HU-18.
-6. **Sin caller de producción:** no hay flujo de batalla (HU-17, HU-18). Mientras tanto la verificación es
-   automatizada; no hay nada que probar contra el sistema desplegado.
+   que Chamán y Médico no tienen Ataque ni Daño. HU-18 los **rechaza** (`UNSUPPORTED_COMBAT_PROFILE`) sin
+   inventar su ataque; sigue pendiente del PO.
+6. **Consumidor de producción:** el ataque básico de HU-18 ya usa este bloque en una batalla real
+   ([`hu-18-basic-attack.md`](hu-18-basic-attack.md)); aún no hay habilidades (HU-19).
 7. **Despliegue:** no cambia ningún contrato ni endpoint, y Player-Inventory no necesita cambios. El
    `main` de Combat sigue por detrás de `develop`: nada de esto está desplegado hasta que se promueva.
 
@@ -294,8 +302,8 @@ funciones 97,87 %, líneas 96,70 %; umbrales de 80 % sin tocar), `test:db` (2 su
 
 ## Limitaciones
 
-- No es el motor de combate: sin vida, turnos, ataque básico ni daño numérico.
-- Sin caller de producción ni endpoint.
+- No es el motor de combate por sí solo: la vida, los turnos y el daño numérico son de HU-18 y HU-17.
+- Sin endpoint HTTP; el único consumidor de producción es el ataque básico de HU-18 por WebSocket.
 - Valores de nivel 1.
 - Un sanador no puede iniciar un golpe.
 - Los efectos condicionados y temporales no se aplican.
