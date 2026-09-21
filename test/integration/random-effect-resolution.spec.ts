@@ -157,13 +157,13 @@ describe('Integracion HU-24 -> HU-25', () => {
   })
 
   describe('el motor no se expone', () => {
-    it('el resultado de un golpe efectivo es solo efecto y magnitud', () => {
+    it('el resultado de un golpe efectivo es solo efecto, magnitud y porcentaje', () => {
       const resolved = resolveRandomEffect.execute({
         sequence: factory.create(SEED),
         table: armasBase(),
       })
 
-      expect(Object.keys(resolved).sort()).toEqual(['effect', 'magnitude'])
+      expect(Object.keys(resolved).sort()).toEqual(['effect', 'magnitude', 'percent'])
     })
   })
 })

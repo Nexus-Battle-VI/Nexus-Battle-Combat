@@ -26,14 +26,14 @@ cliente pueda generarlos, inferirlos ni predecirlos. RF-24 exige un **único gen
 
 ## Clasificación de lo que se decidió
 
-| #   | Tipo                              | Contenido                                                                                                                                                                           |
-| --- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Requisito funcional confirmado    | Generador único y centralizado; Mersenne Twister; Box-Müller; servidor como única autoridad; valor en [1, 8000] (issue #71, CA-01…CA-08)                                            |
-| 2   | Decisión arquitectónica aprobada  | Combat es el único dueño de la aleatoriedad; Missions no la implementa, la consume vía Combat; no existe un microservicio Random; ningún cliente recibe semilla ni estado (ADR-019) |
-| 3   | Decisión técnica necesaria        | MT19937 de 32 bits con `init_genrand`; uniforme de 53 bits (`genrand_res53`); semilla uint32; CDF de Hart/West; secuencia con estado creada por fábrica (sin singleton)             |
-| 4   | Evidencia experimental            | Hallazgo 60 % vs ≈72,6 % (ver más abajo); estudio de semillas en Colab (contexto de HU-26)                                                                                          |
-| 5   | Recomendación                     | Mantener el mapper como pieza separada; no exponer nunca índices crudos a clientes; decidir el uso de un CSPRNG para futuros usos de seguridad                                      |
-| 6   | Pendiente que necesita aclaración | Interpretación final de "distribución normal" del índice (PO/profesor); rango de semilla; política de semilla por batalla; contrato para Missions                                   |
+| #   | Tipo                             | Contenido                                                                                                                                                                                                                                                                             |
+| --- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Requisito funcional confirmado   | Generador único y centralizado; Mersenne Twister; Box-Müller; servidor como única autoridad; valor en [1, 8000] (issue #71, CA-01…CA-08)                                                                                                                                              |
+| 2   | Decisión arquitectónica aprobada | Combat es el único dueño de la aleatoriedad; Missions no la implementa, la consume vía Combat; no existe un microservicio Random; ningún cliente recibe semilla ni estado (ADR-019)                                                                                                   |
+| 3   | Decisión técnica necesaria       | MT19937 de 32 bits con `init_genrand`; uniforme de 53 bits (`genrand_res53`); semilla uint32; CDF de Hart/West; secuencia con estado creada por fábrica (sin singleton)                                                                                                               |
+| 4   | Evidencia experimental           | Hallazgo 60 % vs ≈72,6 % (ver más abajo); estudio de semillas en Colab (contexto de HU-26)                                                                                                                                                                                            |
+| 5   | Recomendación                    | Mantener el mapper como pieza separada; no exponer nunca índices crudos a clientes; decidir el uso de un CSPRNG para futuros usos de seguridad                                                                                                                                        |
+| 6   | Decisión del PO (2026-09-20)     | El índice final es **uniforme** y la normal es la variable intermedia (comentario de cierre de HU-24 #71); semilla del proyecto **3.000.000** (cierre de HU-26 #73; el PR #19 quedó cerrado sin merge). Sigue abierto: la política de semilla por batalla y el contrato para Missions |
 
 ## Arquitectura
 

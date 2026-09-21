@@ -1,7 +1,6 @@
-import { UnsupportedHeroEffectProfileError } from '../errors/RandomEffectErrors'
 import { HeroSubtype } from '../value-objects/HeroSubtype'
 import { EFFECT_TABLE_ROWS, EffectControlTable } from './EffectControlTable'
-import { RANDOM_EFFECT_ORDER, RandomEffectType } from './RandomEffectType'
+import { RandomEffectType } from './RandomEffectType'
 
 /** Porcentaje entero de cada efecto (Tabla 21). */
 export type EffectPercentages = Readonly<Record<RandomEffectType, number>>
@@ -46,11 +45,19 @@ const profile = (definition: EffectProfileDefinition): EffectPercentages =>
  *   Mago Hielo               70       6        0        4        0        20
  *   Picaro Veneno            55      10        0        0        0        35
  *   Picaro Machete           60       8        0        0        2        30
- *   Chaman / Medico           0       0        0        0        0         0
+ *   Chaman / Medico           0       0        0        0        0       100   (*)
  *
- * CHAMAN Y MEDICO se transcriben tal cual (0 % en todo) y NO se completan: esa
- * fila suma 0 % y no 100 %, asi que el documento no entrega una distribucion
- * valida para ellos. `baseEffectTableFor` lo rechaza de forma explicita.
+ * (*) SANADORES: el documento imprime 0 % en TODAS las filas de Chaman y Medico
+ * (Tabla 21), que no suma 100 %, y a la vez ordena en su nota del proyecto
+ * (tras la Tabla 23) «disenar las tablas de efectos aleatorios para todos los
+ * personajes, manteniendo la logica del ejercicio [...] y evitando un
+ * desequilibrio». Decision de diseno ADOPTADA por instruccion del PO/profesor de
+ * resolver los pendientes con el documento: `no causar dano` = 100 %. Es la UNICA
+ * distribucion que respeta todo lo que el documento dice de ellos: 0 % en los
+ * cinco efectos que danan (Tabla 21), sin Ataque ni Dano (Tabla 6: «-») y con
+ * «no causar dano» como el efecto residual que absorbe lo que los demas no ocupan
+ * (Tabla 23). No introduce ningun valor de balance: un sanador no gana capacidad
+ * ofensiva que el documento le niega.
  */
 export const BASE_EFFECT_PERCENTAGES: Readonly<Record<HeroSubtype, EffectPercentages>> =
   Object.freeze({
@@ -108,7 +115,7 @@ export const BASE_EFFECT_PERCENTAGES: Readonly<Record<HeroSubtype, EffectPercent
       evade: 0,
       resist: 0,
       escape: 0,
-      noDamage: 0,
+      noDamage: 100,
     }),
     [HeroSubtype.Medico]: profile({
       damage: 0,
@@ -116,27 +123,19 @@ export const BASE_EFFECT_PERCENTAGES: Readonly<Record<HeroSubtype, EffectPercent
       evade: 0,
       resist: 0,
       escape: 0,
-      noDamage: 0,
+      noDamage: 100,
     }),
   })
 
 /**
  * Tabla de control base del tipo de heroe (filas = porcentaje x 80).
  *
- * Lanza `UnsupportedHeroEffectProfileError` si el documento no define una
- * distribucion de 100 % para ese tipo (hoy: Chaman y Medico). No construye una
- * tabla de "8000 x no causar dano", no reparte porcentajes ni copia otra clase.
+ * Cada perfil suma 100 %; si alguno dejara de hacerlo, `EffectControlTable`
+ * rechaza la distribucion (`IncompleteEffectDistributionError`) en lugar de
+ * completarla o recortarla.
  */
 export const baseEffectTableFor = (subtype: HeroSubtype): EffectControlTable => {
   const configured = BASE_EFFECT_PERCENTAGES[subtype]
-  const total = RANDOM_EFFECT_ORDER.reduce((sum, effect) => sum + configured[effect], 0)
-
-  if (total !== 100) {
-    throw new UnsupportedHeroEffectProfileError(
-      subtype,
-      `el documento oficial (Tabla 21) declara ${String(total)} % en total y no 100 %; no se inventa una distribucion.`,
-    )
-  }
 
   return EffectControlTable.fromRowCounts({
     [RandomEffectType.Damage]: configured[RandomEffectType.Damage] * ROWS_PER_PERCENT,

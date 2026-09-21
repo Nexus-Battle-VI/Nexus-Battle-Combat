@@ -4,7 +4,7 @@ import {
   InvalidEffectTableError,
 } from '../errors/RandomEffectErrors'
 import { RandomIndex } from '../value-objects/RandomIndex'
-import { EFFECT_MAGNITUDES } from './EffectMagnitude'
+import { EFFECT_MAGNITUDES, materializePercent } from './EffectMagnitude'
 import type { ProbabilityModifier } from './ProbabilityModifier'
 import { RANDOM_EFFECT_ORDER, RandomEffectType } from './RandomEffectType'
 import type { ResolvedRandomEffect } from './ResolvedRandomEffect'
@@ -128,11 +128,11 @@ export class EffectControlTable {
   resolve(index: RandomIndex): ResolvedRandomEffect {
     for (const range of this.#leadingRanges) {
       if (index.value <= range.lastRow) {
-        return EffectControlTable.#toResult(range.effect)
+        return EffectControlTable.#toResult(range, index)
       }
     }
 
-    return EffectControlTable.#toResult(this.#finalRange.effect)
+    return EffectControlTable.#toResult(this.#finalRange, index)
   }
 
   /**
@@ -161,7 +161,41 @@ export class EffectControlTable {
     return EffectControlTable.fromRowCounts(next)
   }
 
-  static #toResult(effect: RandomEffectType): ResolvedRandomEffect {
-    return { effect, magnitude: EFFECT_MAGNITUDES[effect] }
+  /**
+   * Nueva tabla con la probabilidad de uno o varios efectos REDUCIDA. Es el
+   * sentido inverso de `withModifiers`: lo que un efecto pierde vuelve a «no
+   * causar dano», el efecto residual de la tabla (Tabla 23), de modo que la suma
+   * sigue siendo exactamente 8000. La original no cambia.
+   *
+   * Un efecto no puede quedar por debajo de 0 filas: si la reduccion pedida
+   * supera sus filas, se le quitan solo las que tiene (una probabilidad no es
+   * negativa). Reducir un efecto que ya esta en 0 no cambia la tabla. Para un
+   * mismo efecto el resultado no depende del orden de las reducciones.
+   *
+   * Aplicar primero `withModifiers` (incrementos) y despues `withReductions`
+   * equivale a sumar el neto y acotarlo en 0.
+   */
+  withReductions(reductions: readonly ProbabilityModifier[]): EffectControlTable {
+    const next: Record<RandomEffectType, number> = { ...this.#rowCounts }
+
+    for (const reduction of reductions) {
+      const removed = Math.min(next[reduction.effect], reduction.rows)
+
+      next[reduction.effect] -= removed
+      next[RandomEffectType.NoDamage] += removed
+    }
+
+    return EffectControlTable.fromRowCounts(next)
+  }
+
+  static #toResult(range: EffectRange, index: RandomIndex): ResolvedRandomEffect {
+    const magnitude = EFFECT_MAGNITUDES[range.effect]
+    const rowCount = range.lastRow - range.firstRow + 1
+
+    return {
+      effect: range.effect,
+      magnitude,
+      percent: materializePercent(magnitude, index.value - range.firstRow, rowCount),
+    }
   }
 }

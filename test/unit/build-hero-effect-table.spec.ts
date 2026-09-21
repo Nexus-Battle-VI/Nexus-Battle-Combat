@@ -21,10 +21,7 @@ import {
 } from '../../src/application/use-cases/BuildHeroEffectTable'
 import { ResolveRandomEffect } from '../../src/application/use-cases/ResolveRandomEffect'
 import { DomainError } from '../../src/domain/errors/DomainError'
-import {
-  InsufficientNoDamageProbabilityError,
-  UnsupportedHeroEffectProfileError,
-} from '../../src/domain/errors/RandomEffectErrors'
+import { InsufficientNoDamageProbabilityError } from '../../src/domain/errors/RandomEffectErrors'
 import {
   BASE_EFFECT_PERCENTAGES,
   ROWS_PER_PERCENT,
@@ -172,11 +169,18 @@ describe('buildHeroEffectTable — subtype real -> tabla base (HU-25)', () => {
   })
 
   it.each([HeroSubtype.Chaman, HeroSubtype.Medico])(
-    '%s -> UnsupportedHeroEffectProfileError: no se inventa una tabla de sanadores',
+    '%s -> tabla de sanadores: 8000 filas de «no causar dano» (decision de diseno del documento)',
     (subtype) => {
-      expect(() => buildHeroEffectTable(equippedHeroFixture({ subtype }))).toThrow(
-        UnsupportedHeroEffectProfileError,
-      )
+      const { table } = buildHeroEffectTable(equippedHeroFixture({ subtype, activeEffects: [] }))
+
+      expect(rowsOfTable(table)).toEqual({
+        DAMAGE: 0,
+        CRITICAL_DAMAGE: 0,
+        EVADE: 0,
+        RESIST: 0,
+        ESCAPE: 0,
+        NO_DAMAGE: 8000,
+      })
     },
   )
 
@@ -715,12 +719,13 @@ describe('BuildHeroEffectTable — playerId -> heroe real -> tabla (HU-25)', () 
     )
   })
 
-  it('un heroe Chaman falla con UnsupportedHeroEffectProfileError', async () => {
-    const port = portReturning(equippedHeroFixture({ subtype: 'CHAMAN' }))
+  it('un heroe Chaman obtiene su tabla de sanador (100 % «no causar dano»)', async () => {
+    const port = portReturning(equippedHeroFixture({ subtype: 'CHAMAN', activeEffects: [] }))
 
-    await expect(new BuildHeroEffectTable(port).execute('jugador-7')).rejects.toBeInstanceOf(
-      UnsupportedHeroEffectProfileError,
-    )
+    const { subtype, table } = await new BuildHeroEffectTable(port).execute('jugador-7')
+
+    expect(subtype).toBe(HeroSubtype.Chaman)
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(8000)
   })
 })
 
@@ -798,10 +803,14 @@ describe('Cadena contractual completa: JSON de Player-Inventory -> tabla -> efec
     expect(resolveAt(table, 4001)).toBe(RandomEffectType.NoDamage)
   })
 
-  it('un JSON de Chaman falla de forma explicita, sin una tabla inventada', async () => {
-    await expect(
-      chainFor(equippedHeroContractBody({ subtype: 'CHAMAN' })).execute('jugador-1'),
-    ).rejects.toBeInstanceOf(UnsupportedHeroEffectProfileError)
+  it('un JSON de Chaman produce la tabla de sanador: ningun indice causa dano', async () => {
+    const { table } = await chainFor(
+      equippedHeroContractBody({ subtype: 'CHAMAN', activeEffects: [] }),
+    ).execute('jugador-1')
+
+    expect(table.resolve(RandomIndex.create(1)).effect).toBe(RandomEffectType.NoDamage)
+    expect(table.resolve(RandomIndex.create(8000)).effect).toBe(RandomEffectType.NoDamage)
+    expect(table.rowsOf(RandomEffectType.NoDamage)).toBe(8000)
   })
 
   it('un Player-Inventory anterior al contrato (sin activeEffects) falla: no se ejecuta la tabla base ignorando el equipamiento', async () => {

@@ -160,10 +160,11 @@ describe('EffectControlTable', () => {
       })
     })
 
-    it('el resultado no revela indice, fila ni semilla', () => {
+    it('el resultado no revela indice, fila ni semilla: solo efecto, magnitud y porcentaje', () => {
       expect(Object.keys(table.resolve(RandomIndex.create(1234))).sort()).toEqual([
         'effect',
         'magnitude',
+        'percent',
       ])
     })
 

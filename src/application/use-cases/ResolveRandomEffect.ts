@@ -23,13 +23,15 @@ export interface ResolveRandomEffectInput {
  *    aleatoriedad (RF-25, CA-07), y este caso de uso solo depende de
  *    `RandomSequencePort.nextIndex()`, nunca de la normal cruda ni de la semilla;
  *  - no decide SI el golpe es efectivo. Esa comparacion Ataque/Defensa es de
- *    HU-20, que invocara este caso de uso solo cuando el Ataque supere la
- *    Defensa (un golpe no efectivo no debe consumir indice).
+ *    HU-20 (`ResolveAttack`), que invoca este caso de uso solo cuando el
+ *    Ataque supera la Defensa (un golpe no efectivo no consume el indice del
+ *    EFECTO).
  *
  * La secuencia se recibe por llamada, no en el constructor, porque es un
  * objeto con estado que pertenece a cada batalla y no un servicio compartido.
- * Sin consumidores todavia: no se registra en `app.module.ts` hasta que HU-20
- * defina el flujo de batalla que lo invoque.
+ * Su unico consumidor es `ResolveAttack`, y ese aun no tiene consumidor de
+ * produccion: no se registra en `app.module.ts` hasta que HU-17/HU-18 definan el
+ * flujo de batalla.
  */
 export class ResolveRandomEffect {
   execute(input: ResolveRandomEffectInput): ResolvedRandomEffect {

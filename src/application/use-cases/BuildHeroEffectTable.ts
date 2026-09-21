@@ -13,24 +13,32 @@ import type {
 
 /**
  * Que hizo Combat con un efecto de equipamiento respecto a la TABLA de efectos
- * aleatorios de HU-25. Cada efecto recibido tiene exactamente uno: ninguno se
- * aplica ni se descarta en silencio.
+ * aleatorios de HU-25 y al ataque de HU-20. Cada efecto recibido tiene
+ * exactamente uno: ninguno se aplica ni se descarta en silencio.
  *
- *  - `APPLIED_TO_TABLE`: modifico la tabla. Hoy solo lo hace `CRITICAL_CHANCE
- *    INCREASE PERCENTAGE` incondicional, permanente y sobre uno mismo (ver
- *    `assessEquipmentEffect`). Lleva el `ProbabilityModifier` que se aplico.
+ *  - `APPLIED_TO_TABLE`: modifico la tabla DEL PORTADOR. Hoy solo lo hace
+ *    `CRITICAL_CHANCE INCREASE PERCENTAGE` incondicional, permanente y sobre uno
+ *    mismo (ver `assessEquipmentEffect`). Lleva el `ProbabilityModifier` que se
+ *    aplico.
+ *  - `AFFECTS_ATTACKERS`: efecto del portador que modifica al heroe que LO ATACA
+ *    (`target = OPPONENT`): «-2 % de critico al ataque del oponente» o «-1 al
+ *    ataque del oponente». NO cambia la tabla ni el Ataque del portador; lo
+ *    aplica `prepareAttack` cuando el portador es el objetivo de un golpe. Lleva
+ *    su `adjustment`.
  *  - `REFLECTED_IN_STATS`: ya esta dentro de `effectiveStats` (Player-Inventory
  *    lo marca `appliedToStats`). Ignorado A PROPOSITO para no aplicarlo dos
  *    veces.
  *  - `NOT_A_TABLE_MODIFIER`: efecto conocido que NO es una probabilidad de la
- *    tabla (estadisticas numericas, dano, sanacion, inmunidad...). No modifica
- *    la tabla; su semantica pertenece a otras historias (HU-20, HU-31...).
- *  - `PENDING_DEFINITION`: podria modificar la tabla, pero el requisito no
- *    define como. NO se aplica y se declara, con sus motivos. Tambien cae aqui
- *    todo efecto que esta version de Combat no reconoce.
+ *    tabla ni una estadistica del golpe (dano, sanacion, inmunidad...). No
+ *    modifica la tabla; su semantica pertenece a otras historias (HU-18, HU-19,
+ *    HU-31...).
+ *  - `PENDING_DEFINITION`: podria modificar la tabla o el golpe, pero el
+ *    requisito no define como. NO se aplica y se declara, con sus motivos.
+ *    Tambien cae aqui todo efecto que esta version de Combat no reconoce.
  */
 export const EquipmentEffectOutcome = Object.freeze({
   AppliedToTable: 'APPLIED_TO_TABLE',
+  AffectsAttackers: 'AFFECTS_ATTACKERS',
   ReflectedInStats: 'REFLECTED_IN_STATS',
   NotATableModifier: 'NOT_A_TABLE_MODIFIER',
   PendingDefinition: 'PENDING_DEFINITION',
@@ -53,13 +61,21 @@ export type EquipmentEffectOutcome =
  *    `appliedToStats`. `effectiveStats` no tiene ningun campo de critico, asi que
  *    es una contradiccion del contrato: ni se da por consolidado ni se aplica.
  *  - `ACTIVATION_CONDITION_UNEVALUATED`: hay una condicion y nadie define
- *    cuando se evalua; no se trata como bonus permanente.
+ *    cuando se evalua; no se trata como bonus permanente. Evaluarla exige el
+ *    estado de la batalla (turnos, estadisticas del oponente), que Combat aun no
+ *    tiene.
  *  - `TEMPORARY_EFFECT_UNDEFINED`: tiene duracion; HU-25 solo modela una tabla
- *    vigente, no efectos que caducan por turnos.
- *  - `NON_SELF_TARGET_UNDEFINED`: apunta a otro participante; como afecta a la
- *    tabla de ESE participante no esta definido.
- *  - `OPERATION_UNDEFINED`: HU-25 solo define incrementos («todo incremento de
- *    probabilidad»); una disminucion, un multiplicador o un valor fijo no.
+ *    vigente, no efectos que caducan por turnos (necesitan el contador de turnos
+ *    de la batalla).
+ *  - `NON_SELF_TARGET_UNDEFINED`: apunta a otro participante y no es el caso
+ *    definido (el critico dirigido al oponente solo se define como disminucion).
+ *  - `OPERATION_UNDEFINED`: una operacion que el documento no define para ese
+ *    objetivo: sobre uno mismo solo hay incrementos («todo incremento de
+ *    probabilidad»); contra el oponente, solo disminuciones.
+ *  - `OPPONENT_STAT_EFFECT_UNDEFINED`: efecto dirigido al oponente sobre una
+ *    estadistica del golpe cuya forma el documento no define: solo se define
+ *    `ATTACK DECREASE FIXED` («-1 al ataque del oponente»); un porcentaje, un
+ *    dado, un aumento o un efecto sobre la Defensa no.
  *  - `UNRECOGNIZED_EFFECT`: esta version de Combat no conoce el efecto. No se
  *    reinterpreta ni se da por irrelevante.
  */
@@ -71,10 +87,22 @@ export const PendingReason = Object.freeze({
   TemporaryEffectUndefined: 'TEMPORARY_EFFECT_UNDEFINED',
   NonSelfTargetUndefined: 'NON_SELF_TARGET_UNDEFINED',
   OperationUndefined: 'OPERATION_UNDEFINED',
+  OpponentStatEffectUndefined: 'OPPONENT_STAT_EFFECT_UNDEFINED',
   UnrecognizedEffect: 'UNRECOGNIZED_EFFECT',
 } as const)
 
 export type PendingReason = (typeof PendingReason)[keyof typeof PendingReason]
+
+/**
+ * Lo que un efecto `AFFECTS_ATTACKERS` le hace al heroe que ataca a su portador:
+ *
+ *  - `CRITICAL_CHANCE`: le quita filas de critico a su tabla (que vuelven a «no
+ *    causar dano»).
+ *  - `ATTACK`: le resta puntos a su Ataque.
+ */
+export type AttackerAdjustment =
+  | { readonly statistic: 'CRITICAL_CHANCE'; readonly reduction: ProbabilityModifier }
+  | { readonly statistic: 'ATTACK'; readonly points: number }
 
 export interface EquipmentEffectAssessment {
   readonly effect: EquippedHeroEffect
@@ -83,10 +111,18 @@ export interface EquipmentEffectAssessment {
   readonly reasons: readonly PendingReason[]
   /** Solo en `APPLIED_TO_TABLE`: el incremento que se aplico a la tabla. */
   readonly modifier?: ProbabilityModifier
+  /** Solo en `AFFECTS_ATTACKERS`: lo que le hace al heroe que ataca al portador. */
+  readonly adjustment?: AttackerAdjustment
 }
 
 const STAT_MODIFIER = 'STAT_MODIFIER'
 const CRITICAL_CHANCE = 'CRITICAL_CHANCE'
+const ATTACK = 'ATTACK'
+const DEFENSE = 'DEFENSE'
+const SELF = 'SELF'
+const OPPONENT = 'OPPONENT'
+const INCREASE = 'INCREASE'
+const DECREASE = 'DECREASE'
 
 /**
  * Vocabulario CONOCIDO de Catalog v1 que no es una probabilidad de la tabla.
@@ -118,9 +154,9 @@ const isKnownNonTableEffect = (effect: EquippedHeroEffect): boolean =>
     : NON_TABLE_KINDS.has(effect.kind)
 
 /**
- * `PERCENTAGE` de `CRITICAL_CHANCE` -> incremento de la tabla. Regla LOCAL a la
- * tabla de HU-25 (Tabla 23: 5 % + 6 % = 11 %): los puntos basicos son PUNTOS
- * PORCENTUALES ABSOLUTOS de probabilidad (100 pb = +1 pp = +80 filas). NO
+ * `PERCENTAGE` de `CRITICAL_CHANCE` -> cantidad de filas de la tabla. Regla LOCAL
+ * a la tabla de HU-25 (Tabla 23: 5 % + 6 % = 11 %): los puntos basicos son
+ * PUNTOS PORCENTUALES ABSOLUTOS de probabilidad (100 pb = 1 pp = 80 filas). NO
  * redefine `PERCENTAGE` para ninguna otra estadistica.
  *
  * Devuelve `undefined` si los puntos basicos no equivalen a un numero exacto de
@@ -138,6 +174,17 @@ const criticalChanceModifier = (basisPoints: number): ProbabilityModifier | unde
   }
 }
 
+/**
+ * Las dos formas de `CRITICAL_CHANCE` que el documento define: un incremento
+ * sobre uno mismo («+3 % de critico al ataque») y una disminucion sobre el
+ * oponente («-2 % de critico al ataque del oponente», Baculo de Permafrost).
+ */
+const isSelfIncrease = (effect: EquippedHeroEffect): boolean =>
+  effect.target === SELF && effect.operation === INCREASE
+
+const isOpponentDecrease = (effect: EquippedHeroEffect): boolean =>
+  effect.target === OPPONENT && effect.operation === DECREASE
+
 const criticalChanceBlockers = (
   effect: EquippedHeroEffect,
   modifier: ProbabilityModifier | undefined,
@@ -149,20 +196,55 @@ const criticalChanceBlockers = (
   ...(effect.appliedToStats ? [PendingReason.CriticalChanceAlreadyInStatsInconsistent] : []),
   ...(effect.hasActivationCondition ? [PendingReason.ActivationConditionUnevaluated] : []),
   ...(effect.durationTurns === undefined ? [] : [PendingReason.TemporaryEffectUndefined]),
-  ...(effect.target === 'SELF' ? [] : [PendingReason.NonSelfTargetUndefined]),
-  ...(effect.operation === 'INCREASE' ? [] : [PendingReason.OperationUndefined]),
+  ...(isSelfIncrease(effect) || isOpponentDecrease(effect)
+    ? []
+    : [
+        ...(effect.target === SELF ? [] : [PendingReason.NonSelfTargetUndefined]),
+        ...(effect.operation === INCREASE ? [] : [PendingReason.OperationUndefined]),
+      ]),
 ]
 
 /**
- * Clasifica un efecto de equipamiento respecto a la tabla de HU-25. Pura y sin
- * estado.
+ * Puntos que un efecto `ATTACK` dirigido al oponente le resta al Ataque de
+ * quien ataca al portador. Solo se define `DECREASE FIXED` («-1 al ataque del
+ * oponente», Vision borrosa) con una cantidad entera no negativa: un porcentaje
+ * necesitaria la base de OTRO heroe, un dado no es un valor y un aumento del
+ * Ataque del oponente no existe en el documento.
+ */
+const attackReductionPoints = (effect: EquippedHeroEffect): number | undefined => {
+  if (effect.operation !== DECREASE || effect.magnitude?.mode !== 'FIXED') {
+    return undefined
+  }
+
+  const { amount } = effect.magnitude
+
+  return Number.isInteger(amount) && amount >= 0 ? amount : undefined
+}
+
+const opponentStatBlockers = (
+  effect: EquippedHeroEffect,
+  supported: boolean,
+): readonly PendingReason[] => [
+  ...(supported ? [] : [PendingReason.OpponentStatEffectUndefined]),
+  ...(effect.hasActivationCondition ? [PendingReason.ActivationConditionUnevaluated] : []),
+  ...(effect.durationTurns === undefined ? [] : [PendingReason.TemporaryEffectUndefined]),
+]
+
+/**
+ * Clasifica un efecto de equipamiento respecto a la tabla de HU-25 y al ataque
+ * de HU-20. Pura y sin estado.
  *
- * UNICO efecto que modifica la tabla: `STAT_MODIFIER` sobre `CRITICAL_CHANCE`,
- * `INCREASE`, magnitud `PERCENTAGE`, objetivo `SELF`, sin condicion de
- * activacion, sin duracion y sin `appliedToStats`. Se traduce a
- * `ProbabilityModifier.ofBasisPoints(CRITICAL_DAMAGE, basisPoints)`. Cualquier
- * otra variante de `CRITICAL_CHANCE` (DECREASE, SET, MULTIPLY, BLOCK, FIXED,
- * DICE, condicionada, temporal, hacia otro objetivo) queda PENDIENTE.
+ * Solo dos formas de `CRITICAL_CHANCE` modifican una tabla, ambas
+ * `PERCENTAGE`, permanentes, sin condicion de activacion y sin `appliedToStats`:
+ *
+ *  - `INCREASE` sobre `SELF` -> `APPLIED_TO_TABLE` (+ `ProbabilityModifier`).
+ *  - `DECREASE` sobre `OPPONENT` -> `AFFECTS_ATTACKERS` (- `ProbabilityModifier`
+ *    que `prepareAttack` resta de la tabla de quien ataca al portador).
+ *
+ * Y una forma de `ATTACK` altera el golpe: `DECREASE FIXED` sobre `OPPONENT` ->
+ * `AFFECTS_ATTACKERS` (puntos que se restan al Ataque de quien ataca al portador).
+ * Cualquier otra variante (SET, MULTIPLY, BLOCK, FIXED, DICE, condicionada,
+ * temporal, hacia otro objetivo...) queda PENDIENTE.
  *
  * El critico se evalua ANTES que `appliedToStats`: `effectiveStats` no tiene
  * ningun campo de critico, asi que un `CRITICAL_CHANCE` marcado como ya
@@ -178,7 +260,14 @@ export const assessEquipmentEffect = (effect: EquippedHeroEffect): EquipmentEffe
     const reasons = criticalChanceBlockers(effect, modifier)
 
     if (reasons.length === 0 && modifier !== undefined) {
-      return { effect, outcome: EquipmentEffectOutcome.AppliedToTable, reasons, modifier }
+      return isOpponentDecrease(effect)
+        ? {
+            effect,
+            outcome: EquipmentEffectOutcome.AffectsAttackers,
+            reasons,
+            adjustment: { statistic: CRITICAL_CHANCE, reduction: modifier },
+          }
+        : { effect, outcome: EquipmentEffectOutcome.AppliedToTable, reasons, modifier }
     }
 
     return { effect, outcome: EquipmentEffectOutcome.PendingDefinition, reasons }
@@ -186,6 +275,26 @@ export const assessEquipmentEffect = (effect: EquippedHeroEffect): EquipmentEffe
 
   if (effect.appliedToStats) {
     return { effect, outcome: EquipmentEffectOutcome.ReflectedInStats, reasons: [] }
+  }
+
+  if (
+    effect.kind === STAT_MODIFIER &&
+    effect.target === OPPONENT &&
+    (effect.statistic === ATTACK || effect.statistic === DEFENSE)
+  ) {
+    const points = effect.statistic === ATTACK ? attackReductionPoints(effect) : undefined
+    const reasons = opponentStatBlockers(effect, points !== undefined)
+
+    if (reasons.length === 0 && points !== undefined) {
+      return {
+        effect,
+        outcome: EquipmentEffectOutcome.AffectsAttackers,
+        reasons,
+        adjustment: { statistic: ATTACK, points },
+      }
+    }
+
+    return { effect, outcome: EquipmentEffectOutcome.PendingDefinition, reasons }
   }
 
   if (isKnownNonTableEffect(effect)) {
@@ -207,20 +316,27 @@ export interface HeroEffectTable {
   readonly heroId: string
   readonly subtype: HeroSubtype
   /**
-   * La tabla que HU-20 debe usar: la BASE del subtipo mas los incrementos de
-   * `appliedEffects`. Si `pendingEffects` no esta vacio, esta tabla NO incluye el
-   * efecto de esos productos.
+   * La tabla del heroe cuando ATACA: la BASE del subtipo mas los incrementos de
+   * `appliedEffects`. NO incluye lo que le quite el equipo de su objetivo (los
+   * `AFFECTS_ATTACKERS` de OTRO heroe): eso lo resta `prepareAttack`. Si
+   * `pendingEffects` no esta vacio, esta tabla NO incluye el efecto de esos
+   * productos.
    */
   readonly table: EffectControlTable
   /** Una entrada por efecto recibido, en el orden del contrato. */
   readonly assessments: readonly EquipmentEffectAssessment[]
   /** Los efectos que modificaron la tabla (cada uno con su `modifier`). */
   readonly appliedEffects: readonly EquipmentEffectAssessment[]
+  /**
+   * Los efectos de ESTE heroe que alteran a quien lo ataca. No se aplican a su
+   * propia tabla: los usa `prepareAttack` cuando este heroe es el objetivo.
+   */
+  readonly opponentEffects: readonly EquipmentEffectAssessment[]
   /** Los efectos ya incluidos en `effectiveStats`: no se aplican otra vez. */
   readonly reflectedInStatsEffects: readonly EquipmentEffectAssessment[]
   /** Los efectos conocidos que no son una probabilidad de la tabla. */
   readonly nonTableEffects: readonly EquipmentEffectAssessment[]
-  /** Los efectos que podrian modificar la tabla y NO se aplicaron. */
+  /** Los efectos que podrian modificar la tabla o el golpe y NO se aplicaron. */
   readonly pendingEffects: readonly EquipmentEffectAssessment[]
 }
 
@@ -233,10 +349,11 @@ export interface HeroEffectTable {
  *
  * Falla de forma EXPLICITA, sin inventar tabla:
  *  - subtipo fuera del registro `hero-subtypes-v1`: `DomainError`;
- *  - `CHAMAN` / `MEDICO`: `UnsupportedHeroEffectProfileError` (la Tabla 21 no
- *    les da una distribucion valida; no se inventa una);
  *  - incrementos que suman mas que el «no causar dano» disponible:
  *    `InsufficientNoDamageProbabilityError` (no se recorta ni se redistribuye).
+ *
+ * Los ocho subtipos tienen tabla: Chaman y Medico usan «no causar dano» = 100 %
+ * (ver `BASE_EFFECT_PERCENTAGES`).
  *
  * El apilamiento de varios incrementos es el aditivo de
  * `EffectControlTable.withModifiers`: no depende del orden. La tabla base es
@@ -244,8 +361,8 @@ export interface HeroEffectTable {
  * `activeEffects` se mutan.
  *
  * Pura y sin E/S: se prueba sin puerto ni generador, y no toca la aleatoriedad
- * (HU-24). No invoca `ResolveRandomEffect`: eso lo hara HU-20 tras un golpe
- * efectivo.
+ * (HU-24). No invoca `ResolveRandomEffect`: eso lo hace `ResolveAttack` (HU-20)
+ * tras un golpe efectivo.
  */
 export const buildHeroEffectTable = (hero: EquippedHero): HeroEffectTable => {
   const subtype = parseHeroSubtype(hero.subtype)
@@ -263,6 +380,7 @@ export const buildHeroEffectTable = (hero: EquippedHero): HeroEffectTable => {
     table: baseEffectTableFor(subtype).withModifiers(modifiers),
     assessments,
     appliedEffects,
+    opponentEffects: withOutcome(EquipmentEffectOutcome.AffectsAttackers),
     reflectedInStatsEffects: withOutcome(EquipmentEffectOutcome.ReflectedInStats),
     nonTableEffects: withOutcome(EquipmentEffectOutcome.NotATableModifier),
     pendingEffects: withOutcome(EquipmentEffectOutcome.PendingDefinition),
@@ -277,9 +395,8 @@ export const buildHeroEffectTable = (hero: EquippedHero): HeroEffectTable => {
  * `PlayerWithoutEquippedHeroError`, igual que `JoinBattleRoom`: no se inventa un
  * heroe por defecto.
  *
- * Sin consumidor todavia: no se registra en `app.module.ts` hasta que HU-20
- * defina el flujo de batalla que lo invoque (mismo criterio que
- * `ResolveRandomEffect`).
+ * Sin consumidor de produccion todavia: no se registra en `app.module.ts` hasta
+ * que exista el flujo de batalla (HU-17, HU-18) que llame a `prepareAttack`.
  */
 export class BuildHeroEffectTable {
   constructor(private readonly equippedHeroes: PlayerInventoryEquippedHeroPort) {}

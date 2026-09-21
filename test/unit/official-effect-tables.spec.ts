@@ -96,7 +96,7 @@ describe('Tabla 22 — Guerrero Armas base', () => {
     [5601, N],
     [8000, N],
   ])('frontera: la fila %i es %s', (row, effect) => {
-    expect(at(table, row)).toEqual({ effect, magnitude: EFFECT_MAGNITUDES[effect] })
+    expect(at(table, row)).toMatchObject({ effect, magnitude: EFFECT_MAGNITUDES[effect] })
   })
 
   it('"Resisten el golpe" (0 %) no ocupa ninguna fila: ningun indice lo resuelve', () => {
