@@ -16,5 +16,7 @@ export const BATTLE_RANDOM = Symbol('BoundedRandom')
 /** HU-18: la MISMA secuencia HU-24 de proceso que alimenta `BATTLE_RANDOM` (una sola fuente). */
 export const BATTLE_RANDOM_SEQUENCE = Symbol('BattleRandomSequence')
 export const EXECUTE_BASIC_ATTACK = Symbol('ExecuteBasicAttack')
+/** HU-19: habilidad especial (`useSkill`); reutiliza el ataque basico cuando el Poder no alcanza. */
+export const USE_SKILL = Symbol('UseSkill')
 /** HU-18: serializa los comandos de una misma sala (una replica, ADR-020). */
 export const ROOM_COMMAND_LOCK = Symbol('RoomCommandLock')

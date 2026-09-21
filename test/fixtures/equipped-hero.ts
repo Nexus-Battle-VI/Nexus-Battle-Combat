@@ -1,5 +1,6 @@
 import type {
   EquippedHero,
+  EquippedHeroAbility,
   EquippedHeroBlocker,
   EquippedHeroEffect,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
@@ -79,6 +80,48 @@ export const equippedProductNotOwnedBlocker: EquippedHeroBlocker = {
   detail: 'El producto equipado ya no esta en el inventario del jugador.',
 }
 
+/**
+ * Habilidades del contrato (HU-19, `abilities`): «Golpe con escudo» (soportada: +2 al Ataque) y
+ * «Mano de piedra» (con duracion y condicion: NO soportada). Mismos ids de Catalog que usa la
+ * documentacion de Player-Inventory.
+ */
+export const shieldStrikeAbility: EquippedHeroAbility = {
+  abilityId: '2e97537a-675c-461a-b902-4fcf369083a8',
+  reference: 'golpe-con-escudo',
+  name: 'Golpe con escudo',
+  powerCost: { mode: 'FIXED', amount: 2 },
+  chargeTurns: 1,
+  effects: [
+    {
+      kind: 'STAT_MODIFIER',
+      target: 'SELF',
+      statistic: 'ATTACK',
+      operation: 'INCREASE',
+      magnitude: { mode: 'FIXED', amount: 2 },
+      hasActivationCondition: false,
+    },
+  ],
+}
+
+export const stoneHandAbility: EquippedHeroAbility = {
+  abilityId: '6c2bac06-0dc2-4a63-a526-a3adca2200d7',
+  reference: 'mano-de-piedra',
+  name: 'Mano de piedra',
+  powerCost: { mode: 'FIXED', amount: 4 },
+  chargeTurns: 1,
+  effects: [
+    {
+      kind: 'STAT_MODIFIER',
+      target: 'SELF',
+      statistic: 'DEFENSE',
+      operation: 'INCREASE',
+      magnitude: { mode: 'FIXED', amount: 12 },
+      durationTurns: 2,
+      hasActivationCondition: true,
+    },
+  ],
+}
+
 const baseStats = {
   power: 8,
   health: 40,
@@ -107,6 +150,7 @@ export const equippedHeroContractBody = (
     conditionalDefenseEffect,
     opponentDamageDiceEffect,
   ],
+  abilities: [shieldStrikeAbility, stoneHandAbility],
   ready: true,
   blockers: [],
   loadoutVersion: 0,
@@ -129,6 +173,7 @@ export const equippedHeroFixture = (overrides: Partial<EquippedHero> = {}): Equi
     conditionalDefenseEffect,
     opponentDamageDiceEffect,
   ],
+  abilities: [shieldStrikeAbility, stoneHandAbility],
   ready: true,
   blockers: [],
   loadoutVersion: 0,

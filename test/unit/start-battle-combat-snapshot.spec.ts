@@ -71,7 +71,8 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
       ),
     )
 
-    expect(dto.battle?.combatants).toEqual([
+    // HU-19 amplia la vista con `power` y `skills`: aqui solo importa la Vida.
+    expect(dto.battle?.combatants).toMatchObject([
       { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 } },
       { teamLabel: 'B', seat: 0, health: { current: 36, max: 36 } },
     ])
@@ -142,7 +143,7 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
     expect(profile?.damage).toEqual({ mode: 'DICE', count: 1, sides: 6 })
   })
 
-  it('el snapshot es un modelo LOCAL MINIMO: no copia inventario, nombre, referencia, fecha ni Poder', async () => {
+  it('el snapshot es un modelo LOCAL MINIMO: no copia inventario, nombre, referencia ni fecha (solo el Poder MAXIMO y las habilidades de HU-19)', async () => {
     const { repo } = await start()
     const profile = (await repo.findById(ROOM_ID))?.battle?.combatantFor({
       teamLabel: 'A',
@@ -150,17 +151,19 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
     })?.profile
 
     expect(Object.keys(profile ?? {}).sort()).toEqual([
+      'abilities',
       'activeEffects',
       'attack',
       'damage',
       'defense',
       'heroId',
       'maxHealth',
+      'maxPower',
       'subtype',
     ])
-    expect(JSON.stringify(profile)).not.toMatch(
-      /selectedAt|reference|power|name|baseStats|blockers|loadout/i,
-    )
+    expect(JSON.stringify(profile)).not.toMatch(/selectedAt|baseStats|blockers|loadout|sourceSlot/i)
+    // La `reference` (alias) de una habilidad es trazabilidad de Player-Inventory: no se congela.
+    expect(JSON.stringify(profile?.abilities)).not.toMatch(/reference|golpe-con-escudo/)
   })
 
   it('combatProfileFrom copia solo los efectos que HU-20 necesita y no comparte referencias con el DTO upstream', () => {
@@ -192,10 +195,19 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
       heroesPort({}, (playerId) => hero(playerId)),
     )
 
-    expect(dto.battle?.combatants).toEqual([
-      { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 } },
-      { teamLabel: 'B', seat: 0, health: null },
-    ])
+    expect(dto.battle?.combatants[0]).toMatchObject({
+      teamLabel: 'A',
+      seat: 0,
+      health: { current: 44, max: 44 },
+    })
+    // Un `AI` no tiene perfil: ni Vida, ni Poder, ni habilidades (no se inventan valores).
+    expect(dto.battle?.combatants[1]).toEqual({
+      teamLabel: 'B',
+      seat: 0,
+      health: null,
+      power: null,
+      skills: [],
+    })
     expect(heroes.calls).toEqual(['a1'])
   })
 

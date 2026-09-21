@@ -204,9 +204,40 @@ export class BattleState {
   /**
    * Cierra el turno activo y avanza al siguiente elemento de la cola. Devuelve
    * un estado NUEVO con la MISMA cola (misma referencia, mismo orden).
+   *
+   * HU-19 (`hu-19-skills-v1` §5): con snapshot de combate, cerrar el turno tambien
+   * cierra el turno PROPIO de quien lo termina (a cada una de sus habilidades en recarga
+   * le falta un turno menos) y abre el turno propio del siguiente (recupera +2 de Poder,
+   * con tope). Es la unica regla de avance: `attack`, `useSkill` y el avance de HU-17 la
+   * comparten, asi que ninguna accion puede olvidarse de la recarga ni de la regeneracion.
    */
   completeTurn(): BattleState {
-    return new BattleState(this.startedAt, this.turnOrder, this.turnsCompleted + 1, this.combatants)
+    const turnsCompleted = this.turnsCompleted + 1
+
+    if (this.combatants === null) {
+      return new BattleState(this.startedAt, this.turnOrder, turnsCompleted, null)
+    }
+
+    const finishing = this.currentEntry
+    const starting = this.turnOrder[turnsCompleted % this.turnOrder.length]
+    const same = (combatant: Combatant, entry: CombatantKey | undefined): boolean =>
+      combatant.teamLabel === entry?.teamLabel && combatant.seat === entry.seat
+
+    const advanced = this.combatants.map((combatant) => {
+      const closed = same(combatant, finishing) ? combatant.closeOwnTurn() : combatant
+
+      return same(closed, starting) ? closed.openOwnTurn() : closed
+    })
+    // Sin recargas que cerrar ni Poder que regenerar (batalla anterior a HU-19, o nada que
+    // cambie) el snapshot se conserva TAL CUAL: misma referencia, ningun objeto nuevo.
+    const unchanged = advanced.every((combatant, index) => combatant === this.combatants?.[index])
+
+    return new BattleState(
+      this.startedAt,
+      this.turnOrder,
+      turnsCompleted,
+      unchanged ? this.combatants : Object.freeze(advanced),
+    )
   }
 
   /** El combatiente de una identidad `(teamLabel, seat)`, o `undefined` si no participa. */

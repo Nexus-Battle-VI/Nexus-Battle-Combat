@@ -1,5 +1,6 @@
 import type { BattleView } from './BattleState'
 import type { CombatantKey } from './Combatant'
+import type { CombatPowerCost } from './CombatProfile'
 
 /**
  * Eventos de batalla con numero de secuencia (ADR-020, HU-17). `seq` es un
@@ -15,6 +16,8 @@ export const BattleEventType = {
   TurnAdvanced: 'turnAdvanced',
   /** HU-18: un ataque basico resuelto, con el estado YA avanzado (un solo `seq` por accion). */
   BasicAttackResolved: 'basicAttackResolved',
+  /** HU-19: una habilidad especial ejecutada, con el estado YA avanzado (un solo `seq` por accion). */
+  SkillUsed: 'skillUsed',
 } as const
 
 export type BattleEventType = (typeof BattleEventType)[keyof typeof BattleEventType]
@@ -52,6 +55,17 @@ export interface BasicAttackResolution {
   readonly appliedDamage: number
 }
 
+/**
+ * Un `useSkill` que se degrado a ataque basico porque el Poder no alcanzaba (HU-11:
+ * «el sistema debe forzar el uso del ataque basico en ese turno»). Solo existe en un
+ * `basicAttackResolved` que viene de una habilidad; un ataque normal no lo lleva.
+ */
+export interface DegradedFrom {
+  readonly command: 'useSkill'
+  readonly abilityId: string
+  readonly reason: 'INSUFFICIENT_POWER'
+}
+
 export interface BasicAttackResolvedPayload {
   /** El `commandId` del atacante: permite al remitente correlacionar su comando. */
   readonly commandId: string
@@ -61,7 +75,38 @@ export interface BasicAttackResolvedPayload {
   readonly target: CombatantKey
   readonly resolution: BasicAttackResolution
   readonly targetHealth: { readonly before: number; readonly after: number }
+  /** HU-19 (opcional): por que este ataque basico sustituyo a una habilidad. */
+  readonly degradedFrom?: DegradedFrom
   /** Vista POSTERIOR: Vida actualizada y turno ya avanzado. */
+  readonly battle: BattleView
+}
+
+/**
+ * Resultado de una habilidad especial (HU-19, contrato `hu-19-skills-v1` §6.1). Trae el
+ * resultado del golpe, lo que aporto la habilidad, el Poder y la recarga, y la vista
+ * POSTERIOR. No viajan los efectos de la habilidad, el dado de Ataque por separado, los
+ * indices sorteados ni la semilla.
+ */
+export interface SkillUsedPayload {
+  readonly commandId: string
+  readonly completedPosition: number
+  readonly actor: CombatantKey
+  readonly target: CombatantKey
+  readonly skill: {
+    readonly abilityId: string
+    readonly name: string
+    readonly powerCost: CombatPowerCost
+    readonly chargeTurns: number
+  }
+  /** Poder del actor antes y despues de pagar el costo. */
+  readonly power: { readonly before: number; readonly after: number }
+  /** Turnos propios que le faltan a ESTA habilidad tras la accion. */
+  readonly cooldown: { readonly remainingTurns: number }
+  /** Lo que aporto la habilidad. `damage` es `null` si no se tiro (golpe no efectivo o efecto 0 %). */
+  readonly bonus: { readonly attack: number; readonly damage: number | null }
+  readonly resolution: BasicAttackResolution
+  readonly targetHealth: { readonly before: number; readonly after: number }
+  /** Vista POSTERIOR: Vida, Poder, recargas y turno ya avanzado. */
   readonly battle: BattleView
 }
 
@@ -69,7 +114,8 @@ export interface BattleEvent {
   readonly seq: number
   readonly type: BattleEventType
   readonly occurredAt: Date
-  readonly payload: BattleStartedPayload | TurnAdvancedPayload | BasicAttackResolvedPayload
+  readonly payload:
+    BattleStartedPayload | TurnAdvancedPayload | BasicAttackResolvedPayload | SkillUsedPayload
 }
 
 /** Comando ya procesado (ADR-020: repetir un `commandId` no ejecuta dos veces). */

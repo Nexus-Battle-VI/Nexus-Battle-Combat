@@ -5,6 +5,7 @@ import {
   type RealtimeGatewayOptions,
 } from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
 import type { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicAttackRealtimeHandler'
+import type { SkillRealtimeHandler } from '../../src/adapters/inbound/ws/SkillRealtimeHandler'
 import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
 import type { RealtimeSocket } from '../../src/adapters/inbound/ws/RealtimeSocket'
 import { InMemoryRealtimeTicketStore } from '../../src/adapters/outbound/realtime/InMemoryRealtimeTicketStore'
@@ -66,6 +67,7 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
       logger,
       chat ?? harness.handler,
       { handle: jest.fn() } as unknown as BasicAttackRealtimeHandler,
+      { handle: jest.fn() } as unknown as SkillRealtimeHandler,
       options,
     )
 

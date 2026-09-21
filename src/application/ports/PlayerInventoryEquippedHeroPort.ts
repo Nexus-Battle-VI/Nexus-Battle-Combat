@@ -70,6 +70,14 @@ export interface EquippedHero {
    * requisito no define queda declarado como pendiente, no aplicado.
    */
   readonly activeEffects: readonly EquippedHeroEffect[]
+  /**
+   * Habilidades especiales del heroe (HU-19, Tabla 7), en el orden de Catalog. Combat las
+   * RECIBE y las congela al iniciar la batalla; que efecto sabe ejecutar lo decide
+   * `evaluateSkill`. OBLIGATORIO, igual que `activeEffects`: no se sustituye por `[]`
+   * cuando falta (un heroe sin sus habilidades por un despliegue mal ordenado parecera no
+   * tenerlas), asi que Player-Inventory se despliega primero.
+   */
+  readonly abilities: readonly EquippedHeroAbility[]
   readonly ready: boolean
   /**
    * Motivos por los que `ready` es `false` (HU-16.1/HU-16.2). Vacio cuando
@@ -87,6 +95,40 @@ export interface EquippedHero {
   readonly loadoutVersion: number
   /** Instante ISO-8601 en que el jugador preparo el heroe. */
   readonly selectedAt: string
+}
+
+/** Costo de Poder de una habilidad tal como lo publica Catalog v1 (Tabla 7). */
+export type EquippedHeroPowerCost =
+  { readonly mode: 'FIXED'; readonly amount: number } | { readonly mode: 'ALL_AVAILABLE' }
+
+/**
+ * Efecto de una habilidad normalizado (HU-19): lista blanca de Player-Inventory, sin `raw`,
+ * sin la condicion de activacion (solo su indicador) y sin el codigo de una inmunidad.
+ * `kind`, `target`, `statistic` y `operation` viajan como TEXTO: el vocabulario es de
+ * Catalog y puede crecer; lo desconocido se rechaza al ejecutar, no al ingresar a sala.
+ */
+export interface EquippedHeroAbilityEffect {
+  readonly kind: string
+  readonly target: string
+  readonly statistic?: string
+  readonly operation?: string
+  readonly magnitude?: EquippedHeroMagnitude
+  readonly durationTurns?: number
+  readonly hasActivationCondition: boolean
+}
+
+/**
+ * Habilidad especial de un heroe (HU-19). `abilityId` es el `productId` de Catalog: el
+ * identificador que el cliente envia en `useSkill`. `reference` es solo trazabilidad.
+ */
+export interface EquippedHeroAbility {
+  readonly abilityId: string
+  readonly reference: string
+  readonly name: string
+  readonly powerCost: EquippedHeroPowerCost
+  /** Turnos propios de recarga tras usarla (Catalog v1: 1). Entero >= 1. */
+  readonly chargeTurns: number
+  readonly effects: readonly EquippedHeroAbilityEffect[]
 }
 
 /**

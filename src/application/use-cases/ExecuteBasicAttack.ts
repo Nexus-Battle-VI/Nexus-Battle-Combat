@@ -1,4 +1,4 @@
-import type { BattleEvent } from '../../domain/entities/BattleEvent'
+import type { BattleEvent, DegradedFrom } from '../../domain/entities/BattleEvent'
 import type { BasicAttackOutcome, BasicAttackReadyPlan } from '../../domain/entities/BattleRoom'
 import type { CombatantKey } from '../../domain/entities/Combatant'
 import { UnsupportedCombatProfileError } from '../../domain/errors/BattleErrors'
@@ -24,6 +24,12 @@ export interface ExecuteBasicAttackInput {
   readonly commandId: string
   /** UN objetivo, con la identidad estable `(teamLabel, seat)`. */
   readonly target: CombatantKey
+  /**
+   * HU-19: solo lo pone `UseSkill` cuando una habilidad se degrada a ataque basico (HU-11).
+   * El evento lo lleva para explicar por que hubo un ataque basico; el resto del flujo es
+   * exactamente el de `attack`. Un cliente nunca lo aporta: el handler de `attack` no lo lee.
+   */
+  readonly degradedFrom?: DegradedFrom
 }
 
 export interface ExecuteBasicAttackResult {
@@ -89,9 +95,13 @@ export class ExecuteBasicAttack {
     return this.lock.run(input.roomId, () => this.executeExclusively(input))
   }
 
-  private async executeExclusively(
-    input: ExecuteBasicAttackInput,
-  ): Promise<ExecuteBasicAttackResult> {
+  /**
+   * El flujo completo SIN tomar el bloqueo de la sala. Es publico para que `UseSkill`, que ya
+   * tiene el bloqueo de esa sala, ejecute el ataque basico al que se degrada una habilidad
+   * sin volver a pedirlo: el bloqueo no es reentrante y esperaria a si mismo. Nadie mas debe
+   * llamarlo fuera de un `lock.run`.
+   */
+  async executeExclusively(input: ExecuteBasicAttackInput): Promise<ExecuteBasicAttackResult> {
     const room = await this.rooms.findById(input.roomId)
 
     if (room === null) {
@@ -112,7 +122,13 @@ export class ExecuteBasicAttack {
     // ya se comprobo (planBasicAttack) o se comprueba en `prepare`, que no sortea.
     const prepared = this.prepare(plan)
     const outcome = this.resolve(plan, prepared)
-    const next = room.applyBasicAttack(plan, outcome, input.commandId, this.clock.now())
+    const next = room.applyBasicAttack(
+      plan,
+      outcome,
+      input.commandId,
+      this.clock.now(),
+      input.degradedFrom,
+    )
 
     try {
       const saved = await this.rooms.save(next, room.version)

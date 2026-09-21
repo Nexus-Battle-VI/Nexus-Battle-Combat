@@ -1,9 +1,12 @@
 import { UpstreamServiceError } from '../../../application/errors/UpstreamErrors'
 import type {
   EquippedHero,
+  EquippedHeroAbility,
+  EquippedHeroAbilityEffect,
   EquippedHeroBlocker,
   EquippedHeroEffect,
   EquippedHeroMagnitude,
+  EquippedHeroPowerCost,
   EquippedHeroStats,
   PlayerInventoryEquippedHeroPort,
 } from '../../../application/ports/PlayerInventoryEquippedHeroPort'
@@ -32,7 +35,7 @@ const SERVICE = 'player-inventory'
  * blanca; nunca se hace `body as EquippedHero`. Cualquier estructura que no
  * cumpla el contrato lanza `UpstreamServiceError(player-inventory,
  * respuesta_invalida)` (503): Combat no inventa estadisticas, efectos ni un
- * `[]` por defecto. En particular `activeEffects`, `blockers` y
+ * `[]` por defecto. En particular `activeEffects`, `abilities` (HU-19), `blockers` y
  * `loadoutVersion` son OBLIGATORIOS: sustituir `blockers` por `[]` cuando
  * falta haria que `PrecombatEligibilityPolicy` (HU-16.2) viera un heroe con
  * `ready=false` como si no tuviera ningun motivo declarado, y sustituir
@@ -203,6 +206,71 @@ const parseActiveEffects = (value: unknown): readonly EquippedHeroEffect[] => {
   return value.map(parseEffect)
 }
 
+/**
+ * Efecto de una habilidad (HU-19): mismos campos opcionales que un efecto de equipamiento
+ * (solo pueden AUSENTARSE), sin procedencia ni `appliedToStats`.
+ */
+const parseAbilityEffect = (value: unknown): EquippedHeroAbilityEffect => {
+  const record = asRecord(value)
+
+  return {
+    kind: nonEmptyString(record.kind),
+    target: nonEmptyString(record.target),
+    ...(record.statistic === undefined ? {} : { statistic: nonEmptyString(record.statistic) }),
+    ...(record.operation === undefined ? {} : { operation: nonEmptyString(record.operation) }),
+    ...(record.magnitude === undefined ? {} : { magnitude: parseMagnitude(record.magnitude) }),
+    ...(record.durationTurns === undefined
+      ? {}
+      : { durationTurns: positiveInteger(record.durationTurns) }),
+    hasActivationCondition: requiredBoolean(record.hasActivationCondition),
+  }
+}
+
+/** `FIXED` exige un entero >= 1 (igual que Catalog); `ALL_AVAILABLE` no lleva monto. */
+const parsePowerCost = (value: unknown): EquippedHeroPowerCost => {
+  const record = asRecord(value)
+
+  if (record.mode === 'ALL_AVAILABLE') {
+    return { mode: 'ALL_AVAILABLE' }
+  }
+
+  if (record.mode === 'FIXED') {
+    return { mode: 'FIXED', amount: positiveInteger(record.amount) }
+  }
+
+  throw invalidResponse()
+}
+
+const parseAbility = (value: unknown): EquippedHeroAbility => {
+  const record = asRecord(value)
+
+  if (!Array.isArray(record.effects)) {
+    throw invalidResponse()
+  }
+
+  return {
+    abilityId: nonEmptyString(record.abilityId),
+    reference: nonEmptyString(record.reference),
+    name: nonEmptyString(record.name),
+    powerCost: parsePowerCost(record.powerCost),
+    chargeTurns: positiveInteger(record.chargeTurns),
+    effects: record.effects.map(parseAbilityEffect),
+  }
+}
+
+/**
+ * OBLIGATORIO, igual que `activeEffects`: no se sustituye por `[]` cuando falta. Un
+ * `abilities` ausente significa que Player-Inventory aun no lo publica (despliegue mal
+ * ordenado): se responde 503 en lugar de dejar al heroe sin habilidades en silencio.
+ */
+const parseAbilities = (value: unknown): readonly EquippedHeroAbility[] => {
+  if (!Array.isArray(value)) {
+    throw invalidResponse()
+  }
+
+  return value.map(parseAbility)
+}
+
 const nullableNonEmptyString = (value: unknown): string | null =>
   value === null ? null : nonEmptyString(value)
 
@@ -260,6 +328,7 @@ const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHer
     effectiveStats,
     maxPower: effectiveStats.power,
     activeEffects: parseActiveEffects(record.activeEffects),
+    abilities: parseAbilities(record.abilities),
     ready: requiredBoolean(record.ready),
     blockers: parseBlockers(record.blockers),
     loadoutVersion: nonNegativeInteger(record.loadoutVersion),

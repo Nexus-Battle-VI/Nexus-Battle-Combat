@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 
 import { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicAttackRealtimeHandler'
+import type { SkillRealtimeHandler } from '../../src/adapters/inbound/ws/SkillRealtimeHandler'
 import { BattleRoomRealtimeGateway } from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
 import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
 import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
@@ -33,6 +34,9 @@ const codec: RealtimeTicketCodecPort = {
   hash: (ticket) => `h:${ticket}`,
 }
 
+/** La habilidad (HU-19) tiene su propia suite: aqui el gateway solo ejerce `attack`. */
+const noSkill = { handle: jest.fn() } as unknown as SkillRealtimeHandler
+
 const noChat = {
   handle: jest.fn(),
   onDisconnect: jest.fn(),
@@ -57,6 +61,7 @@ const world = async (indices: readonly number[] = HIT) => {
     silentLogger,
     noChat,
     new BasicAttackRealtimeHandler(attack, silentLogger),
+    noSkill,
   )
 
   await repo.save(battleWithCombat(), 0)
@@ -135,7 +140,8 @@ describe('Gateway — comando attack (HU-18)', () => {
     expect(
       (event?.battle as { turnsCompleted: number; combatants: unknown[] }).turnsCompleted,
     ).toBe(1)
-    expect((event?.battle as { combatants: unknown[] }).combatants).toEqual([
+    // HU-19 amplia la vista con `power` y `skills`: aqui solo importa la Vida.
+    expect((event?.battle as { combatants: unknown[] }).combatants).toMatchObject([
       { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 } },
       { teamLabel: 'B', seat: 0, health: { current: 40, max: 44 } },
     ])
@@ -307,7 +313,8 @@ describe('Gateway — comando attack (HU-18)', () => {
     expect((snapshot?.battle as { currentTurn: { playerId: string } }).currentTurn.playerId).toBe(
       'b1',
     )
-    expect((snapshot?.battle as { combatants: unknown[] }).combatants).toEqual([
+    // HU-19 amplia la vista con `power` y `skills`: aqui solo importa la Vida.
+    expect((snapshot?.battle as { combatants: unknown[] }).combatants).toMatchObject([
       { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 } },
       { teamLabel: 'B', seat: 0, health: { current: 40, max: 44 } },
     ])
@@ -356,6 +363,16 @@ describe('Gateway — comando attack (HU-18)', () => {
       'turnOrder',
       'turnsCompleted',
     ])
-    expect(a.sent[0]).not.toMatch(/seed|semilla|activeEffects|power|poder|token|ticket|maxHealth/i)
+    // HU-19: cada participante de la vista lleva su Poder y sus habilidades (jamas sus efectos).
+    for (const combatant of battle.combatants as Record<string, unknown>[]) {
+      expect(Object.keys(combatant).sort()).toEqual([
+        'health',
+        'power',
+        'seat',
+        'skills',
+        'teamLabel',
+      ])
+    }
+    expect(a.sent[0]).not.toMatch(/seed|semilla|activeEffects|token|ticket|maxHealth/i)
   })
 })

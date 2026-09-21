@@ -14,6 +14,7 @@ import {
   CONSUME_REALTIME_TICKET,
   CREATE_BATTLE_ROOM,
   EXECUTE_BASIC_ATTACK,
+  USE_SKILL,
   GET_BATTLE_ROOM,
   ISSUE_REALTIME_TICKET,
   JOIN_BATTLE_ROOM,
@@ -28,6 +29,7 @@ import { InternalServiceGuard } from '../../adapters/inbound/http/auth/internal-
 import { JwtAuthGuard } from '../../adapters/inbound/http/auth/jwt-auth.guard'
 import { RolesGuard } from '../../adapters/inbound/http/auth/roles.guard'
 import { BasicAttackRealtimeHandler } from '../../adapters/inbound/ws/BasicAttackRealtimeHandler'
+import { SkillRealtimeHandler } from '../../adapters/inbound/ws/SkillRealtimeHandler'
 import { BattleRoomRealtimeGateway } from '../../adapters/inbound/ws/BattleRoomRealtimeGateway'
 import { ChannelLock } from '../../adapters/inbound/ws/ChannelLock'
 import { ChatRealtimeHandler } from '../../adapters/inbound/ws/ChatRealtimeHandler'
@@ -84,6 +86,7 @@ import { RandomSeed } from '../../domain/value-objects/RandomSeed'
 import type { BoundedRandom } from '../../domain/policies/TurnOrderPolicy'
 import { CompleteBattleTurn } from '../../application/use-cases/CompleteBattleTurn'
 import { ExecuteBasicAttack } from '../../application/use-cases/ExecuteBasicAttack'
+import { UseSkill } from '../../application/use-cases/UseSkill'
 import { GetBattleRoom } from '../../application/use-cases/GetBattleRoom'
 import { ResumeBattle } from '../../application/use-cases/ResumeBattle'
 import { StartBattle } from '../../application/use-cases/StartBattle'
@@ -570,6 +573,32 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       useFactory: (attack: ExecuteBasicAttack, logger: Logger): BasicAttackRealtimeHandler =>
         new BasicAttackRealtimeHandler(attack, logger),
       inject: [EXECUTE_BASIC_ATTACK, LOGGER],
+    },
+    // HU-19 (RF-19): habilidad especial por el mismo WebSocket (`useSkill`). Comparte el bloqueo
+    // de sala y la secuencia HU-24 con el ataque basico, y lo reutiliza (mismo bloqueo, sin pedirlo
+    // otra vez) cuando el Poder no alcanza y HU-11 fuerza el ataque basico.
+    {
+      provide: USE_SKILL,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        clock: ClockPort,
+        sequence: RandomSequencePort,
+        lock: RoomCommandLockPort,
+        basicAttack: ExecuteBasicAttack,
+      ): UseSkill => new UseSkill(rooms, clock, sequence, lock, basicAttack),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        CLOCK,
+        BATTLE_RANDOM_SEQUENCE,
+        ROOM_COMMAND_LOCK,
+        EXECUTE_BASIC_ATTACK,
+      ],
+    },
+    {
+      provide: SkillRealtimeHandler,
+      useFactory: (skill: UseSkill, logger: Logger): SkillRealtimeHandler =>
+        new SkillRealtimeHandler(skill, logger),
+      inject: [USE_SKILL, LOGGER],
     },
     {
       provide: READINESS_CHECKS,

@@ -261,7 +261,8 @@ describe('BattleRoom.applyBasicAttack — UNA sola transicion', () => {
     })
     expect(payload.targetHealth).toEqual({ before: 44, after: 38 })
     expect(payload.battle.turnsCompleted).toBe(1)
-    expect(payload.battle.combatants).toEqual([
+    // HU-19 amplia la vista con `power` y `skills`: aqui solo importa la Vida.
+    expect(payload.battle.combatants).toMatchObject([
       { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 } },
       { teamLabel: 'B', seat: 0, health: { current: 38, max: 44 } },
     ])
@@ -384,11 +385,20 @@ describe('BattleRoom.applyBasicAttack — UNA sola transicion', () => {
     )
   })
 
-  it('el Poder no existe en la accion: ni el evento ni la vista lo mencionan', () => {
+  it('el evento del ataque basico no lleva Poder ni recarga propios; sin estado de habilidades la vista los deja vacios', () => {
     const { after } = applied(hit())
+    const payload = after.events.at(-1)?.payload as unknown as Record<string, unknown>
 
-    expect(JSON.stringify(after.events.at(-1)?.payload)).not.toMatch(/power|poder/i)
-    expect(JSON.stringify(after.battleView())).not.toMatch(/power|poder/i)
+    // HU-19: la vista de la batalla ahora lleva `power` y `skills` por participante, pero la ACCION
+    // del ataque basico no aporta nada de Poder: ni claves propias en el evento...
+    expect(Object.keys(payload).filter((key) => /power|cooldown|skill|bonus/i.test(key))).toEqual(
+      [],
+    )
+    // ...y este perfil es anterior a HU-19 (sin Poder maximo ni habilidades): la vista no inventa valores.
+    expect(after.battleView()?.combatants.map(({ power, skills }) => ({ power, skills }))).toEqual([
+      { power: null, skills: [] },
+      { power: null, skills: [] },
+    ])
   })
 })
 
@@ -436,9 +446,10 @@ describe('Snapshot de combate en BattleState', () => {
   it('la vista lleva la Vida de cada participante, en el orden de la cola, sin perfil', () => {
     const view = battleWithCombat().battleView()
 
+    // Este perfil es anterior a HU-19: sin Poder maximo ni habilidades (`power: null`, `skills: []`).
     expect(view?.combatants).toEqual([
-      { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 } },
-      { teamLabel: 'B', seat: 0, health: { current: 44, max: 44 } },
+      { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 }, power: null, skills: [] },
+      { teamLabel: 'B', seat: 0, health: { current: 44, max: 44 }, power: null, skills: [] },
     ])
     expect(JSON.stringify(view?.combatants)).not.toMatch(
       /attack|defense|damage|effects|maxHealth|heroId/i,
