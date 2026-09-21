@@ -14,7 +14,13 @@ export interface RealtimeTicketCodecPort {
 
 /** Almacen efimero de tickets EMITIDOS: solo guarda el hash, ligado al `sub` y a su caducidad. */
 export interface RealtimeTicketStorePort {
-  issue(ticketHash: string, subject: string, expiresAt: Date): void
+  /**
+   * `now` es el reloj INYECTADO (el mismo con el que se calculo `expiresAt`): con el se
+   * purgan los caducados. El almacen no lee el reloj del sistema, asi que emitir y
+   * consumir usan siempre la misma nocion de "ahora" (y las pruebas con fecha fija
+   * no dependen de la fecha real).
+   */
+  issue(ticketHash: string, subject: string, expiresAt: Date, now: Date): void
   /**
    * Consume el ticket: lo elimina SIEMPRE (un ticket no se puede usar dos
    * veces) y devuelve el `sub` solo si existia y no habia caducado.

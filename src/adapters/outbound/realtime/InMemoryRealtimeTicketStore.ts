@@ -19,8 +19,8 @@ interface StoredTicket {
 export class InMemoryRealtimeTicketStore implements RealtimeTicketStorePort {
   private readonly tickets = new Map<string, StoredTicket>()
 
-  issue(ticketHash: string, subject: string, expiresAt: Date): void {
-    this.purge(Date.now())
+  issue(ticketHash: string, subject: string, expiresAt: Date, now: Date): void {
+    this.purge(now.getTime())
     this.tickets.set(ticketHash, { subject, expiresAt: expiresAt.getTime() })
   }
 
