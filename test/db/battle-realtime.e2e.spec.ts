@@ -8,7 +8,7 @@ import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/
 import { type Db, type MongoClient, MongoServerError } from 'mongodb'
 import { WebSocket } from 'ws'
 
-import { COMPLETE_BATTLE_TURN } from '../../src/adapters/inbound/http/tokens'
+import { COMPLETE_BATTLE_TURN, RESUME_BATTLE } from '../../src/adapters/inbound/http/tokens'
 import {
   ACCOUNT_BATTLE_PROFILE,
   type AccountBattleProfilePort,
@@ -25,6 +25,7 @@ import {
   type VerifiedIdentity,
 } from '../../src/application/ports/TokenVerifierPort'
 import type { CompleteBattleTurn } from '../../src/application/use-cases/CompleteBattleTurn'
+import type { ResumeBattle } from '../../src/application/use-cases/ResumeBattle'
 import { AppModule } from '../../src/infrastructure/bootstrap/app.module'
 import { describeError } from '../../src/infrastructure/observability/describe-error'
 import {
@@ -152,6 +153,7 @@ describe('HU-17 de extremo a extremo (protocolo): dos clientes WebSocket reales 
   let mongoUri: string
   let app: INestApplication
   let complete: CompleteBattleTurn
+  let resume: ResumeBattle
   let port: number
   let restoreEnv: () => void
 
@@ -177,6 +179,7 @@ describe('HU-17 de extremo a extremo (protocolo): dos clientes WebSocket reales 
 
     port = address.port
     complete = moduleRef.get<CompleteBattleTurn>(COMPLETE_BATTLE_TURN, { strict: false })
+    resume = moduleRef.get<ResumeBattle>(RESUME_BATTLE, { strict: false })
   }
 
   beforeAll(async () => {
@@ -641,6 +644,67 @@ describe('HU-17 de extremo a extremo (protocolo): dos clientes WebSocket reales 
       a.close()
       b.close()
     })
+
+    it('resume concurrente: un evento persistido y publicado ENTRE la lectura y la suscripcion NO se pierde', async () => {
+      const roomId = await preparingRoom()
+      const started = await call('POST', `/rooms/${roomId}/start`, 'token-a')
+      const first = started.body.battle.currentTurn.playerId as string
+
+      await complete.execute({ roomId, actorPlayerId: first, commandId: 'carrera-1' }) // seq 2
+
+      const beforeWindow = await call('GET', `/rooms/${roomId}`, 'token-a')
+      const second = beforeWindow.body.battle.currentTurn.playerId as string
+      const b = await connect('token-b')
+
+      // El resume lee el estado REAL de MongoDB (seq 2) y se detiene ANTES de quedar
+      // suscrito, hasta que este test lo libera.
+      let openGate: () => void = () => undefined
+      let markRead: () => void = () => undefined
+      const gate = new Promise<void>((resolve) => {
+        openGate = resolve
+      })
+      const read = new Promise<void>((resolve) => {
+        markRead = resolve
+      })
+      const original = resume.execute.bind(resume)
+      const spy = jest.spyOn(resume, 'execute').mockImplementationOnce(async (...args) => {
+        const result = await original(...args)
+
+        markRead()
+        await gate
+
+        return result
+      })
+
+      b.send({ type: 'resume', roomId, lastSeq: 1 })
+      await read
+
+      // EN LA VENTANA: otro request persiste en MongoDB y publica el seq 3.
+      await complete.execute({ roomId, actorPlayerId: second, commandId: 'carrera-2' })
+      openGate()
+      await b.waitFor('resume.ok')
+      spy.mockRestore()
+
+      expect(b.ofType('turnAdvanced').map((event) => event.seq)).toEqual([2, 3])
+      expect(b.ofType('resume.ok')[0]).toMatchObject({ roomId, seq: 3 })
+
+      // MongoDB confirma que el ultimo seq es 3: el cliente termino con el estado completo.
+      const persisted = await call('GET', `/rooms/${roomId}`, 'token-b')
+
+      expect(persisted.body.lastSeq).toBe(3)
+      expect(persisted.body.battle).toEqual((b.ofType('turnAdvanced').at(-1) as any).battle)
+
+      // Y a partir de aqui los eventos siguen llegando en caliente, en orden.
+      await complete.execute({
+        roomId,
+        actorPlayerId: persisted.body.battle.currentTurn.playerId as string,
+        commandId: 'carrera-3',
+      })
+      await b.waitFor('turnAdvanced', 3)
+
+      expect(b.ofType('turnAdvanced').map((event) => event.seq)).toEqual([2, 3, 4])
+      b.close()
+    }, 30_000)
 
     it('el estado sobrevive a un REINICIO de Combat: misma cola, mismo turno y resume funcional', async () => {
       const roomId = await preparingRoom()

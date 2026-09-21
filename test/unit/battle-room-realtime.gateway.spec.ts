@@ -101,14 +101,14 @@ const codec: RealtimeTicketCodecPort = {
   hash: (ticket) => `h:${ticket}`,
 }
 
-const world = () => {
+const world = (resume?: (repo: InMemoryBattleRoomRepository) => ResumeBattle) => {
   const repo = new InMemoryBattleRoomRepository()
   const store = new InMemoryRealtimeTicketStore()
   const issue = new IssueRealtimeTicket(codec, store, clock)
   const gateway = new BattleRoomRealtimeGateway(
     new ConsumeRealtimeTicket(codec, store, clock),
     repo,
-    new ResumeBattle(repo),
+    resume?.(repo) ?? new ResumeBattle(repo),
     silentLogger,
   )
 
@@ -479,6 +479,239 @@ describe('BattleRoomRealtimeGateway — batalla: battleStarted, seq, resume y sn
     gateway.publish(ROOM_ID, (await repo.findById(ROOM_ID))?.events ?? [])
 
     expect(socket.sent).toEqual([])
+  })
+})
+
+/**
+ * Carrera de `resume` (ADR-020: reconexion SIN perdida de eventos). `GatedResume`
+ * lee el estado con el caso de uso REAL y luego se detiene hasta que el test lo
+ * libera: reproduce exactamente la ventana entre "leer seq N" y "quedar
+ * suscrito", en la que otro request puede persistir y publicar `N + 1`.
+ */
+class GatedResume extends ResumeBattle {
+  private release: () => void = () => undefined
+  private readSignal: () => void = () => undefined
+  readonly read = new Promise<void>((resolve) => {
+    this.readSignal = resolve
+  })
+  private readonly gate = new Promise<void>((resolve) => {
+    this.release = resolve
+  })
+
+  override async execute(
+    ...args: Parameters<ResumeBattle['execute']>
+  ): ReturnType<ResumeBattle['execute']> {
+    const result = await super.execute(...args)
+
+    this.readSignal()
+    await this.gate
+
+    return result
+  }
+
+  open(): void {
+    this.release()
+  }
+}
+
+describe('BattleRoomRealtimeGateway — resume sin perdida de eventos (carrera lectura/suscripcion)', () => {
+  const advance = (
+    repo: InMemoryBattleRoomRepository,
+    gateway: BattleRoomRealtimeGateway,
+    actor: string,
+    commandId: string,
+  ) =>
+    new CompleteBattleTurn(repo, clock, gateway).execute({
+      roomId: ROOM_ID,
+      actorPlayerId: actor,
+      commandId,
+    })
+
+  const setup = async () => {
+    let gated: GatedResume | undefined
+    const context = world((repo) => (gated = new GatedResume(repo)))
+
+    await context.repo.save(inBattleRoom(), 0)
+
+    if (gated === undefined) {
+      throw new Error('no se creo el resume con compuerta')
+    }
+
+    return { ...context, gated }
+  }
+
+  it('un evento persistido y publicado DESPUES de leer seq N y ANTES de suscribirse NO se pierde', async () => {
+    const { connect, repo, gateway, gated } = await setup()
+
+    await advance(repo, gateway, 'a1', 'c-1') // seq 2
+    await advance(repo, gateway, 'b1', 'c-2') // seq 3
+
+    const socket = await connect('b1')
+
+    socket.emit({ type: 'resume', roomId: ROOM_ID, lastSeq: 1 })
+    await gated.read // el resume ya leyo seq 3 y aun NO esta suscrito
+
+    await advance(repo, gateway, 'a1', 'c-3') // seq 4: persiste y publica EN LA VENTANA
+    gated.open()
+    await flush()
+
+    const received = socket.messages().slice(1)
+
+    expect(received.map((message) => message.type)).toEqual([
+      'turnAdvanced',
+      'turnAdvanced',
+      'turnAdvanced',
+      'resume.ok',
+    ])
+    expect(received.map((message) => message.seq)).toEqual([2, 3, 4, 4])
+  })
+
+  it('tras el resume, los eventos posteriores siguen llegando en caliente y en orden', async () => {
+    const { connect, repo, gateway, gated } = await setup()
+    const socket = await connect('b1')
+
+    socket.emit({ type: 'resume', roomId: ROOM_ID })
+    await gated.read
+    gated.open()
+    await flush()
+    socket.sent.length = 0
+
+    await advance(repo, gateway, 'a1', 'c-1')
+    await advance(repo, gateway, 'b1', 'c-2')
+
+    expect(socket.messages().map((message) => message.seq)).toEqual([2, 3])
+  })
+
+  it('un evento con seq <= al leido (ya incluido en la lectura) NO se duplica', async () => {
+    const { connect, repo, gateway, gated } = await setup()
+
+    await advance(repo, gateway, 'a1', 'c-1') // seq 2
+
+    const socket = await connect('b1')
+
+    socket.emit({ type: 'resume', roomId: ROOM_ID, lastSeq: 1 })
+    await gated.read
+
+    // Se publica de nuevo el seq 2 (ya incluido en la lectura) y DESPUES ocurre un
+    // evento nuevo (seq 3): el duplicado se ignora y el nuevo NO se pierde.
+    gateway.publish(ROOM_ID, (await repo.findById(ROOM_ID))?.eventsAfter(1) ?? [])
+    await advance(repo, gateway, 'b1', 'c-2') // seq 3
+    gated.open()
+    await flush()
+
+    expect(
+      socket
+        .messages()
+        .slice(1)
+        .map((message) => [message.type, message.seq]),
+    ).toEqual([
+      ['turnAdvanced', 2],
+      ['turnAdvanced', 3],
+      ['resume.ok', 3],
+    ])
+  })
+
+  it('un snapshot tambien recibe los eventos ocurridos durante la ventana, despues de el', async () => {
+    const { connect, repo, gateway, gated } = await setup()
+    const socket = await connect('a1')
+
+    socket.emit({ type: 'resume', roomId: ROOM_ID })
+    await gated.read
+    await advance(repo, gateway, 'a1', 'c-1') // seq 2 dentro de la ventana
+    gated.open()
+    await flush()
+
+    expect(
+      socket
+        .messages()
+        .slice(1)
+        .map((message) => [message.type, message.seq]),
+    ).toEqual([
+      ['snapshot', 1],
+      ['turnAdvanced', 2],
+      ['resume.ok', 2],
+    ])
+  })
+
+  it('un hueco en lo retenido no se rellena: se detiene y resume.ok informa el ultimo seq REAL entregado', async () => {
+    const { connect, repo, gateway, gated } = await setup()
+
+    await advance(repo, gateway, 'a1', 'c-1') // seq 2
+    await advance(repo, gateway, 'b1', 'c-2') // seq 3
+    await advance(repo, gateway, 'a1', 'c-3') // seq 4
+
+    const socket = await connect('b1')
+
+    socket.emit({ type: 'resume', roomId: ROOM_ID, lastSeq: 3 })
+    await gated.read
+
+    // Llega el seq 6 sin haber visto el 5 (no ocurre con un unico proceso; el
+    // cliente lo detecta por `seq` y pide otro resume): NO se entrega como si nada.
+    const room = await repo.findById(ROOM_ID)
+    const [event] = room?.eventsAfter(3) ?? []
+
+    if (event === undefined) {
+      throw new Error('se esperaba un evento')
+    }
+    gateway.publish(ROOM_ID, [{ ...event, seq: 6 }])
+    gated.open()
+    await flush()
+
+    const received = socket.messages().slice(1)
+
+    expect(received.map((message) => message.seq)).toEqual([4, 4])
+    expect(received.at(-1)).toEqual({ type: 'resume.ok', roomId: ROOM_ID, seq: 4 })
+  })
+
+  it('un NO participante nunca recibe lo retenido: command.rejected y nada mas, tampoco despues', async () => {
+    const { connect, repo, gateway, gated } = await setup()
+    const intruso = await connect('intruso')
+
+    intruso.emit({ type: 'resume', roomId: ROOM_ID })
+    await flush() // el caso de uso lanza RoomAccessForbiddenError antes de la compuerta
+
+    await advance(repo, gateway, 'a1', 'c-1')
+    gated.open()
+    await flush()
+    await advance(repo, gateway, 'b1', 'c-2')
+
+    expect(intruso.messages().map((message) => message.type)).toEqual([
+      'auth.ok',
+      'command.rejected',
+    ])
+  })
+
+  it('dos resume seguidos de la misma conexion se serializan: no comparten ventana y terminan en orden', async () => {
+    const { connect, repo, gateway, gated } = await setup()
+    const socket = await connect('a1')
+
+    socket.emit({ type: 'resume', roomId: ROOM_ID })
+    socket.emit({ type: 'resume', roomId: ROOM_ID, lastSeq: 1 })
+    await gated.read
+    await advance(repo, gateway, 'a1', 'c-1')
+    gated.open()
+    await flush()
+
+    const types = socket
+      .messages()
+      .slice(1)
+      .map((message) => message.type)
+
+    expect(types.filter((type) => type === 'resume.ok')).toHaveLength(2)
+    expect(socket.messages().slice(1).at(-1)).toMatchObject({ type: 'resume.ok', seq: 2 })
+  })
+
+  it('un resume que falla libera la ventana: no queda reteniendo eventos ni suscrito', async () => {
+    const { connect, repo, gateway } = await setup()
+    const intruso = await connect('intruso')
+
+    intruso.emit({ type: 'resume', roomId: ROOM_ID })
+    await flush()
+    intruso.sent.length = 0
+
+    await advance(repo, gateway, 'a1', 'c-1')
+
+    expect(intruso.sent).toEqual([])
   })
 })
 

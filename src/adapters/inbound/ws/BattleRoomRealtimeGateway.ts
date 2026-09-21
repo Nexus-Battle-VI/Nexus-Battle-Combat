@@ -45,6 +45,10 @@ import { CONSUME_REALTIME_TICKET, RESUME_BATTLE } from '../http/tokens'
  *  - `{"type":"resume","roomId","lastSeq"?}`: SOLO participantes. Se suscribe a
  *    los eventos de batalla y recupera el estado: reenvio ordenado de los
  *    eventos posteriores a `lastSeq` o `snapshot` completo, y `resume.ok`.
+ *    RECUPERACION SIN PERDIDA: la conexion pasa a "recuperando" ANTES de leer el
+ *    estado y retiene los eventos que se publiquen mientras tanto; despues entrega
+ *    (en un unico bloque sincrono) lectura, retenidos con `seq` posterior y
+ *    suscripcion, y por ultimo `resume.ok` con el ultimo `seq` realmente entregado.
  *  - Difusion de eventos de batalla con `seq` (`battleStarted`,
  *    `turnAdvanced`): SOLO a las conexiones de participantes de esa sala, y
  *    SIEMPRE despues de que el caso de uso persistio (este gateway solo recibe
@@ -94,12 +98,26 @@ export interface RealtimeGatewayOptions {
 /** Token opcional: sin proveedor se usan los valores de ADR-020 (5 s de autenticacion, latido de 25 s). */
 export const REALTIME_GATEWAY_OPTIONS = Symbol('RealtimeGatewayOptions')
 
+/**
+ * Ventana de recuperacion de un `resume` en curso: eventos YA PERSISTIDOS y
+ * publicados mientras el estado aun se esta leyendo. Se retienen (no se envian ni
+ * se pierden) hasta que la recuperacion se entrega en orden.
+ */
+interface PendingResume {
+  readonly roomId: string
+  readonly buffered: { readonly seq: number; readonly payload: string }[]
+}
+
 interface ConnectionState {
   subject: string | null
   /** Sala del lobby a la que esta suscrita (`battle-room.updated`). */
   roomId: string | null
   /** Sala de batalla de la que es PARTICIPANTE y de la que recibe eventos con `seq`. */
   battleRoomId: string | null
+  /** `resume` en curso: mientras exista, los eventos de su sala se retienen aqui. */
+  pendingResume: PendingResume | null
+  /** Serializa los `resume` de una misma conexion: una recuperacion no se intercala con otra. */
+  resumeChain: Promise<void>
   authTimer: ReturnType<typeof setTimeout> | null
   heartbeat: ReturnType<typeof setInterval> | null
   alive: boolean
@@ -143,6 +161,8 @@ export class BattleRoomRealtimeGateway
       subject: null,
       roomId: null,
       battleRoomId: null,
+      pendingResume: null,
+      resumeChain: Promise.resolve(),
       authTimer: setTimeout(() => {
         // Sin `{"type":"auth","ticket"}` valido en la ventana de ADR-020: se
         // cierra con el codigo que declara la seccion "Autenticacion".
@@ -226,13 +246,27 @@ export class BattleRoomRealtimeGateway
    * PERSISTIDOS a los participantes de la sala que hicieron `resume`. El
    * mensaje se serializa UNA vez: todos los clientes reciben exactamente los
    * mismos bytes (misma cola, mismo `seq`).
+   *
+   * Una conexion con un `resume` EN CURSO para esa sala no recibe el evento en
+   * caliente: se retiene y se entrega despues de la recuperacion, en orden. Sin
+   * esto, un evento publicado entre la lectura del estado y la suscripcion se
+   * perderia para ese socket mientras `resume.ok` le diria que esta al dia.
    */
   publish(roomId: string, events: readonly BattleEvent[]): void {
-    const payloads = events.map((event) => JSON.stringify(toBattleEventWire(roomId, event)))
+    const wire = events.map((event) => ({
+      seq: event.seq,
+      payload: JSON.stringify(toBattleEventWire(roomId, event)),
+    }))
 
     for (const [client, state] of this.connections) {
-      if (state.battleRoomId === roomId && client.readyState === OPEN_STATE) {
-        for (const payload of payloads) {
+      if (client.readyState !== OPEN_STATE) {
+        continue
+      }
+
+      if (state.pendingResume?.roomId === roomId) {
+        state.pendingResume.buffered.push(...wire)
+      } else if (state.battleRoomId === roomId) {
+        for (const { payload } of wire) {
           client.send(payload)
         }
       }
@@ -262,7 +296,11 @@ export class BattleRoomRealtimeGateway
     }
 
     if (message.type === 'resume') {
-      await this.handleResume(client, state, message)
+      // Serializado por conexion: dos `resume` no comparten ventana de recuperacion.
+      const run = state.resumeChain.then(() => this.handleResume(client, state, message))
+
+      state.resumeChain = run
+      await run
       return
     }
 
@@ -351,13 +389,20 @@ export class BattleRoomRealtimeGateway
       return
     }
 
+    // La ventana se abre ANTES de leer el estado: todo evento que se persista y
+    // publique desde este punto queda retenido y no puede perderse. Un no
+    // participante nunca recibe nada: si el caso de uso falla, la ventana se
+    // descarta sin enviarse.
+    const pending: PendingResume = { roomId, buffered: [] }
+
+    state.pendingResume = pending
+
     try {
       const result = await this.resumeBattle.execute(roomId, state.subject, message.lastSeq)
 
-      // Se suscribe a los eventos de batalla y, en el mismo tick, recibe la
-      // recuperacion: los eventos posteriores llegan por `publish` ya en orden.
-      state.roomId = roomId
-      state.battleRoomId = roomId
+      // Desde aqui TODO es sincrono: ningun `publish` puede intercalarse entre la
+      // entrega de la recuperacion, la del bufer y la suscripcion.
+      let delivered = result.seq
 
       if (result.kind === 'replay') {
         for (const event of result.events) {
@@ -367,7 +412,28 @@ export class BattleRoomRealtimeGateway
         sendJson(client, result.snapshot)
       }
 
-      sendJson(client, { type: 'resume.ok', roomId, seq: result.seq })
+      // Lo retenido: se descarta lo que la lectura ya incluia (`seq` <= leido) y
+      // se entrega en orden estricto. Ante un hueco (no deberia ocurrir con un
+      // unico proceso) se detiene: el cliente lo detecta por `seq` y pide otro
+      // `resume`, nunca se le presenta un estado inventado.
+      for (const entry of pending.buffered) {
+        if (entry.seq <= delivered) {
+          continue
+        }
+
+        if (entry.seq !== delivered + 1) {
+          break
+        }
+
+        if (client.readyState === OPEN_STATE) {
+          client.send(entry.payload)
+        }
+        delivered = entry.seq
+      }
+
+      state.roomId = roomId
+      state.battleRoomId = roomId
+      sendJson(client, { type: 'resume.ok', roomId, seq: delivered })
     } catch (error: unknown) {
       if (error instanceof RoomAccessForbiddenError) {
         sendJson(client, { type: 'command.rejected', code: 'NOT_A_PARTICIPANT' })
@@ -384,6 +450,10 @@ export class BattleRoomRealtimeGateway
         error: error instanceof Error ? error.name : 'desconocido',
       })
       sendJson(client, { type: 'command.rejected', code: 'INTERNAL_ERROR' })
+    } finally {
+      if (state.pendingResume === pending) {
+        state.pendingResume = null
+      }
     }
   }
 }
