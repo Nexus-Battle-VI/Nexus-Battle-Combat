@@ -6,11 +6,17 @@ import type { RandomEffectType } from './RandomEffectType'
  * el efecto aplicado y su magnitud RELATIVA segun la tabla vigente.
  *
  * Es exactamente lo que HU-25 conoce. No trae dano numerico, vida ni ninguna
- * decision posterior: eso lo calculara el motor de combate (HU-20) a partir de
+ * decision posterior: eso lo calcula el motor de combate (HU-18) a partir de
  * este resultado. Tampoco trae el indice, la fila ni la semilla: son datos del
  * servidor que no deben salir de el.
+ *
+ * `magnitude` conserva lo que dice la tabla (un valor o el intervalo del
+ * critico) y `percent` es el porcentaje concreto que se aplica: el fijo, o el
+ * materializado dentro del intervalo por `materializePercent`.
  */
 export interface ResolvedRandomEffect {
   readonly effect: RandomEffectType
   readonly magnitude: EffectMagnitude
+  /** Porcentaje entero de dano que se aplica (0..180). */
+  readonly percent: number
 }

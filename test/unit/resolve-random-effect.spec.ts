@@ -53,12 +53,14 @@ describe('ResolveRandomEffect', () => {
     expect(sequence.calls).toBe(3)
   })
 
-  it('devuelve efecto y magnitud, y nada mas', () => {
+  it('devuelve efecto, magnitud y porcentaje concreto, y nada mas', () => {
     const resolved = useCase.execute({ sequence: new ScriptedSequence([4801]), table })
 
+    // Fila 4801 = primera del critico: el intervalo 120..180 se materializa en 120.
     expect(resolved).toEqual({
       effect: RandomEffectType.CriticalDamage,
       magnitude: { kind: 'PERCENT_RANGE', minPercent: 120, maxPercent: 180 },
+      percent: 120,
     })
   })
 

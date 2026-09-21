@@ -38,18 +38,6 @@ export class IncompleteEffectDistributionError extends DomainError {
 }
 
 /**
- * El documento oficial no entrega para este tipo de heroe una distribucion
- * valida de 8000 filas (Chaman y Medico: la Tabla 21 da 0 % en todos los
- * efectos, que suma 0 % y no 100 %). No se inventa ninguna distribucion.
- */
-export class UnsupportedHeroEffectProfileError extends DomainError {
-  constructor(subtype: string, reason: string) {
-    super(`El tipo de heroe "${subtype}" no tiene tabla de efectos aleatorios: ${reason}`)
-    this.name = 'UnsupportedHeroEffectProfileError'
-  }
-}
-
-/**
  * El modificador de probabilidad no es aplicable tal como esta definido:
  * efecto desconocido, `NO_DAMAGE` como objetivo (no hay regla de compensacion
  * para el), cantidad negativa o no entera, o una cantidad de puntos basicos que

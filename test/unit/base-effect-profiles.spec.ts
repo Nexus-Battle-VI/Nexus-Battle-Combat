@@ -1,4 +1,3 @@
-import { UnsupportedHeroEffectProfileError } from '../../src/domain/errors/RandomEffectErrors'
 import {
   BASE_EFFECT_PERCENTAGES,
   ROWS_PER_PERCENT,
@@ -90,7 +89,11 @@ const EXPECTED_RANGES: readonly (readonly [HeroSubtype, Expected])[] = [
   ],
 ]
 
-/** Tabla 21, transcripcion LITERAL: [Causar, Critico, Evaden, Resisten, Escapan, No causar]. */
+/**
+ * Tabla 21, transcripcion LITERAL de los seis heroes que atacan:
+ * [Causar, Critico, Evaden, Resisten, Escapan, No causar]. Los sanadores tienen
+ * su propio bloque mas abajo: el documento imprime 0 % en todas sus filas.
+ */
 const TABLE_21: readonly (readonly [HeroSubtype, readonly number[]])[] = [
   [HeroSubtype.GuerreroTanque, [40, 0, 5, 0, 5, 50]],
   [HeroSubtype.GuerreroArmas, [60, 5, 3, 0, 2, 30]],
@@ -98,8 +101,6 @@ const TABLE_21: readonly (readonly [HeroSubtype, readonly number[]])[] = [
   [HeroSubtype.MagoHielo, [70, 6, 0, 4, 0, 20]],
   [HeroSubtype.PicaroVeneno, [55, 10, 0, 0, 0, 35]],
   [HeroSubtype.PicaroMachete, [60, 8, 0, 0, 2, 30]],
-  [HeroSubtype.Chaman, [0, 0, 0, 0, 0, 0]],
-  [HeroSubtype.Medico, [0, 0, 0, 0, 0, 0]],
 ]
 
 describe('Configuraciones base (Tabla 21)', () => {
@@ -174,27 +175,65 @@ describe('Configuraciones base (Tabla 21)', () => {
     })
   })
 
-  describe('Sanadores (Chaman y Medico): configuracion incompleta en el documento', () => {
-    it.each([HeroSubtype.Chaman, HeroSubtype.Medico])(
-      '%s no tiene tabla: la Tabla 21 suma 0 % y no 100 %',
+  /**
+   * DECISION DE DISENO (no transcripcion): el documento imprime 0 % en las seis
+   * filas de Chaman y Medico (Tabla 21), que no suma 100 %, y su nota del proyecto
+   * pide disenar las tablas de todos los personajes sin desequilibrar el juego.
+   * Sin Ataque ni Dano (Tabla 6: «-») la unica distribucion que respeta todo lo que
+   * el documento dice de ellos es «no causar dano» = 100 %.
+   */
+  describe('Sanadores (Chaman y Medico): «no causar dano» = 100 % (decision de diseno)', () => {
+    const SANADORES = [HeroSubtype.Chaman, HeroSubtype.Medico] as const
+
+    it.each(SANADORES)(
+      '%s: 0 % en los cinco efectos que danan y 100 % en «no causar dano»',
       (subtype) => {
-        expect(() => baseEffectTableFor(subtype)).toThrow(UnsupportedHeroEffectProfileError)
-        expect(() => baseEffectTableFor(subtype)).toThrow(/0 % en total y no 100 %/)
-        expect(() => baseEffectTableFor(subtype)).toThrow(/no se inventa una distribucion/)
+        expect(
+          RANDOM_EFFECT_ORDER.map((effect) => BASE_EFFECT_PERCENTAGES[subtype][effect]),
+        ).toEqual([0, 0, 0, 0, 0, 100])
       },
     )
 
-    it('sus valores se transcriben tal cual (0 % en todo) y NO se completan en silencio', () => {
-      for (const subtype of [HeroSubtype.Chaman, HeroSubtype.Medico]) {
-        for (const effect of RANDOM_EFFECT_ORDER) {
-          expect(BASE_EFFECT_PERCENTAGES[subtype][effect]).toBe(0)
-        }
+    it.each(SANADORES)('%s: la tabla existe y sus 8000 filas son «no causar dano»', (subtype) => {
+      const table = baseEffectTableFor(subtype)
+
+      expect(table.ranges.map((range) => [range.effect, range.firstRow, range.lastRow])).toEqual([
+        [N, 1, EFFECT_TABLE_ROWS],
+      ])
+      expect(table.rowsOf(N)).toBe(EFFECT_TABLE_ROWS)
+
+      for (const effect of [D, C, E, R, S]) {
+        expect(table.rowsOf(effect)).toBe(0)
       }
+
+      expect(at(table, 1)).toBe(N)
+      expect(at(table, 4000)).toBe(N)
+      expect(at(table, EFFECT_TABLE_ROWS)).toBe(N)
     })
+
+    it.each(SANADORES)(
+      '%s no gana ninguna capacidad ofensiva: ningun indice produce dano',
+      (subtype) => {
+        const table = baseEffectTableFor(subtype)
+
+        for (let row = 1; row <= EFFECT_TABLE_ROWS; row += 1) {
+          expect(table.resolve(RandomIndex.create(row)).percent).toBe(0)
+        }
+      },
+    )
   })
 
-  it('todos los subtipos del registro tienen una entrada en la Tabla 21', () => {
+  it('todos los subtipos del registro tienen un perfil y cada uno suma exactamente 100 %', () => {
     expect(Object.keys(BASE_EFFECT_PERCENTAGES).sort()).toEqual(Object.values(HeroSubtype).sort())
+
+    for (const subtype of Object.values(HeroSubtype)) {
+      const total = RANDOM_EFFECT_ORDER.reduce(
+        (sum, effect) => sum + BASE_EFFECT_PERCENTAGES[subtype][effect],
+        0,
+      )
+
+      expect({ subtype, total }).toEqual({ subtype, total: 100 })
+    }
   })
 
   it('cada llamada devuelve una tabla equivalente e independiente', () => {

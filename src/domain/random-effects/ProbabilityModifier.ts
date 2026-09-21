@@ -13,16 +13,17 @@ const ROWS_PER_TEN_THOUSAND_BASIS_POINTS = 8000
 /**
  * Modificador de probabilidad del equipamiento (HU-25, CA-04 y CA-06).
  *
- * UNICA regla que HU-25 define, y la unica que se implementa: "todo incremento
- * de probabilidad en un efecto debe restarse de la probabilidad de 'no causar
- * dano'" (Tabla 23: +6 % de critico deja el critico en 11 % y 'no causar dano'
- * en 24 %). Por eso un modificador es SOLO un incremento de un efecto distinto
- * de `NO_DAMAGE`.
+ * Regla que HU-25 define: "todo incremento de probabilidad en un efecto debe
+ * restarse de la probabilidad de 'no causar dano'" (Tabla 23: +6 % de critico
+ * deja el critico en 11 % y 'no causar dano' en 24 %). Un modificador es una
+ * CANTIDAD de filas de un efecto distinto de `NO_DAMAGE`: `withModifiers` la
+ * suma (a costa de `NO_DAMAGE`) y `withReductions` la resta (devolviendola a
+ * `NO_DAMAGE`, para «-2 % de critico al ataque del oponente»).
  *
- * Lo que NO se define y por tanto NO existe: decrementos, cantidades
- * negativas, aumentar `NO_DAMAGE`, repartir la compensacion entre varios
- * efectos, ni un orden de apilamiento. Esos casos fallan de forma explicita
- * (`InvalidProbabilityModifierError`) en lugar de adivinar una semantica.
+ * Lo que NO se define y por tanto NO existe: cantidades negativas, aumentar o
+ * reducir `NO_DAMAGE` ni repartir la compensacion entre varios efectos. Esos
+ * casos fallan de forma explicita (`InvalidProbabilityModifierError`) en lugar
+ * de adivinar una semantica.
  *
  * La cantidad se guarda en FILAS enteras, que es la representacion autoritativa
  * de la tabla. Nunca se redondea: un valor que no equivale a un numero exacto

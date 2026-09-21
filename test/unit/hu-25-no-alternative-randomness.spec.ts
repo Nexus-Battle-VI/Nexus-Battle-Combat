@@ -2,10 +2,10 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 /**
- * Guarda estatica de RF-25 / CA-07: HU-25 no puede seleccionar efectos con una
- * fuente de aleatoriedad distinta del generador centralizado (HU-24), ni
- * conocer su interior. Se comprueba sobre el CODIGO FUENTE de HU-25 (sin
- * comentarios) para que un uso accidental futuro falle en CI.
+ * Guarda estatica de RF-25 / CA-07: HU-25 y HU-20 no pueden seleccionar efectos
+ * (ni lanzar el dado de Ataque) con una fuente de aleatoriedad distinta del
+ * generador centralizado (HU-24), ni conocer su interior. Se comprueba sobre el
+ * CODIGO FUENTE (sin comentarios) para que un uso accidental futuro falle en CI.
  */
 const ROOT = join(__dirname, '..', '..', 'src')
 
@@ -17,6 +17,12 @@ const HU_25_SOURCES = [
   join(ROOT, 'domain', 'value-objects', 'HeroSubtype.ts'),
   join(ROOT, 'application', 'use-cases', 'ResolveRandomEffect.ts'),
   join(ROOT, 'application', 'use-cases', 'BuildHeroEffectTable.ts'),
+  // HU-20: la resolucion de un golpe (dado de Ataque incluido) tampoco puede tener otra fuente.
+  join(ROOT, 'application', 'use-cases', 'PrepareAttack.ts'),
+  join(ROOT, 'application', 'use-cases', 'ResolveAttack.ts'),
+  join(ROOT, 'domain', 'errors', 'AttackResolutionErrors.ts'),
+  join(ROOT, 'domain', 'policies', 'AttackProfile.ts'),
+  join(ROOT, 'domain', 'policies', 'AttackResolutionPolicy.ts'),
 ]
 
 const withoutComments = (source: string): string =>
@@ -42,14 +48,19 @@ const FORBIDDEN: readonly (readonly [string, RegExp])[] = [
   ['NestJS', /@nestjs\//],
 ]
 
-describe('HU-25 no usa ni conoce otra fuente de aleatoriedad', () => {
-  it('vigila exactamente el codigo de HU-25 (si aparece un archivo nuevo, se revisa aqui)', () => {
+describe('HU-25 y HU-20 no usan ni conocen otra fuente de aleatoriedad', () => {
+  it('vigila exactamente el codigo de HU-25 y HU-20 (si aparece un archivo nuevo, se revisa aqui)', () => {
     const relative = HU_25_SOURCES.map((file) => file.slice(ROOT.length + 1).replaceAll('\\', '/'))
 
     expect(relative.sort()).toEqual([
       'application/use-cases/BuildHeroEffectTable.ts',
+      'application/use-cases/PrepareAttack.ts',
+      'application/use-cases/ResolveAttack.ts',
       'application/use-cases/ResolveRandomEffect.ts',
+      'domain/errors/AttackResolutionErrors.ts',
       'domain/errors/RandomEffectErrors.ts',
+      'domain/policies/AttackProfile.ts',
+      'domain/policies/AttackResolutionPolicy.ts',
       'domain/random-effects/BaseEffectProfiles.ts',
       'domain/random-effects/EffectControlTable.ts',
       'domain/random-effects/EffectMagnitude.ts',
@@ -60,7 +71,7 @@ describe('HU-25 no usa ni conoce otra fuente de aleatoriedad', () => {
     ])
   })
 
-  it.each(FORBIDDEN)('ningun archivo de HU-25 referencia %s', (_label, pattern) => {
+  it.each(FORBIDDEN)('ningun archivo de HU-25 ni de HU-20 referencia %s', (_label, pattern) => {
     for (const file of HU_25_SOURCES) {
       const code = withoutComments(readFileSync(file, 'utf8'))
 
@@ -75,5 +86,17 @@ describe('HU-25 no usa ni conoce otra fuente de aleatoriedad', () => {
 
     expect(code).toMatch(/nextIndex\(\)/)
     expect(code).toMatch(/RandomSequencePort/)
+  })
+
+  it('el dado de Ataque y el efecto de HU-20 salen SOLO de RandomSequencePort.nextIndex()', () => {
+    const code = withoutComments(
+      readFileSync(join(ROOT, 'application', 'use-cases', 'ResolveAttack.ts'), 'utf8'),
+    )
+
+    expect(code).toMatch(/sequence\.nextIndex\(\)/)
+    expect(code).toMatch(/RandomSequencePort/)
+    expect(code).toMatch(/ResolveRandomEffect/)
+    // Ninguna otra llamada a un generador: el dado usa el indice, no un aleatorio propio.
+    expect(code).not.toMatch(/random\s*\(/i)
   })
 })
