@@ -111,8 +111,8 @@ El cliente no aporta Ataque, Defensa, Daño, Vida, efecto, porcentaje, semilla n
 - **HU-20:** se **reutilizan** `prepareAttack`, `ResolveAttack` y `ResolveRandomEffect` sin reescribirlos. Solo se relajaron los tipos de entrada de `prepareAttack`/`buildHeroEffectTable` a una interfaz local mínima (`AttackParticipant`, `EffectTableSource`) que `EquippedHero` y el perfil congelado cumplen por estructura; todas las pruebas de HU-20 siguen verdes. HU-20 ya tiene su consumidor de producción.
 - **HU-12 (abierta):** el ataque básico **rechaza** objetivos del mismo equipo, incluido él mismo (`SAME_TEAM_TARGET`). Es una validación local coherente con RF-12; **no** cierra HU-12 ni implementa excepciones de habilidades.
 - **HU-21 (abierta):** una Vida en 0 **no** finaliza la batalla, no declara ganador ni salta turnos. Un participante sin Vida no puede ser objetivo (`TARGET_UNAVAILABLE`) ni atacar (`ACTOR_UNAVAILABLE`); hasta que HU-21 defina la finalización, esa batalla queda sin más acciones válidas del caído. Los temporizadores tampoco son de HU-18.
-- **HU-19:** habilidades, épica, costo de Poder y recarga quedan fuera.
-- **Poder:** Combat todavía **no modela un Poder de batalla** (HU-11 define la política y el medidor; falta el agregado que lo guarde y HU-19 que lo consuma). El ataque básico **no lee ni escribe Poder**: no hay puerta de Poder que pueda deshabilitarlo (guarda estática). CA-03 y CA-04 se demuestran por construcción, no comparando un `currentPower` antes y después.
+- **HU-19:** habilidades, costo de Poder y recarga llegaron con HU-19 (ver [hu-19-skills.md](hu-19-skills.md)); la épica sigue fuera (HU-31). Este ataque básico es también el destino de la degradación por Poder insuficiente (`degradedFrom`).
+- **Poder:** desde HU-19 Combat modela el Poder de batalla, pero el ataque básico **sigue sin leerlo ni escribirlo**: no hay puerta de Poder que pueda deshabilitarlo (guarda estática). Solo la habilidad lo consume.
 
 ## Pruebas
 

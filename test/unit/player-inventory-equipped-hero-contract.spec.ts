@@ -13,6 +13,8 @@ import {
   equippedHeroContractBody,
   equippedHeroFixture,
   opponentDamageDiceEffect,
+  shieldStrikeAbility,
+  stoneHandAbility,
 } from '../fixtures/equipped-hero'
 
 /**
@@ -240,6 +242,7 @@ describe('PlayerInventoryHttpClient — lista blanca (contrato aditivo)', () => 
         'effectiveStats',
         'maxPower',
         'activeEffects',
+        'abilities',
         'ready',
         'blockers',
         'loadoutVersion',
@@ -347,6 +350,157 @@ describe('PlayerInventoryHttpClient — blockers y loadoutVersion (HU-16.1/HU-16
     ],
   ])('%s -> respuesta invalida (503)', async (_case, change) => {
     await expectRejected(equippedHeroContractBody(change))
+  })
+})
+
+const bodyWithAbilities = (abilities: unknown): Record<string, unknown> =>
+  equippedHeroContractBody({ abilities })
+
+/** Una habilidad valida con un campo cambiado (o retirado si el valor es `undefined`). */
+const abilityWith = (change: Record<string, unknown>): Record<string, unknown> => ({
+  ...shieldStrikeAbility,
+  ...change,
+})
+
+describe('PlayerInventoryHttpClient — abilities (HU-19, Tabla 7)', () => {
+  it('las habilidades llegan al puerto en el orden del contrato, con costo, recarga y efectos', async () => {
+    const hero = await fetchHero(equippedHeroContractBody())
+
+    expect(hero?.abilities).toEqual([shieldStrikeAbility, stoneHandAbility])
+  })
+
+  it('un heroe sin habilidades (lista vacia) es valido y se conserva vacio', async () => {
+    const hero = await fetchHero(bodyWithAbilities([]))
+
+    expect(hero?.abilities).toEqual([])
+  })
+
+  it('ALL_AVAILABLE («todos los puntos de poder») no lleva monto y se conserva', async () => {
+    const hero = await fetchHero(
+      bodyWithAbilities([abilityWith({ powerCost: { mode: 'ALL_AVAILABLE' } })]),
+    )
+
+    expect(hero?.abilities[0]?.powerCost).toEqual({ mode: 'ALL_AVAILABLE' })
+  })
+
+  it('dados y duracion de un efecto se conservan sin interpretarlos', async () => {
+    const effect = {
+      kind: 'STAT_MODIFIER',
+      target: 'SELF',
+      statistic: 'DAMAGE',
+      operation: 'INCREASE',
+      magnitude: { mode: 'DICE', count: 3, sides: 9 },
+      durationTurns: 2,
+      hasActivationCondition: true,
+    }
+    const hero = await fetchHero(bodyWithAbilities([abilityWith({ effects: [effect] })]))
+
+    expect(hero?.abilities[0]?.effects).toEqual([effect])
+  })
+
+  it('un efecto sin statistic, operation ni magnitude (una inmunidad) es valido y no los inventa', async () => {
+    const effect = { kind: 'IMMUNITY', target: 'SELF', hasActivationCondition: false }
+    const hero = await fetchHero(bodyWithAbilities([abilityWith({ effects: [effect] })]))
+
+    expect(hero?.abilities[0]?.effects).toEqual([effect])
+  })
+
+  it('un kind o target que Combat no conoce NO se rechaza al ingresar: se rechaza al ejecutar', async () => {
+    const effect = { kind: 'REVIVE', target: 'ALLY', hasActivationCondition: false }
+    const hero = await fetchHero(bodyWithAbilities([abilityWith({ effects: [effect] })]))
+
+    expect(hero?.abilities[0]?.effects[0]).toMatchObject({ kind: 'REVIVE', target: 'ALLY' })
+  })
+
+  it('la lista blanca: campos extra de la habilidad y de sus efectos NO llegan al puerto', async () => {
+    const hero = await fetchHero(
+      bodyWithAbilities([
+        abilityWith({
+          raw: { secreto: true },
+          sku: 'no-debe-pasar',
+          effects: [{ ...shieldStrikeAbility.effects[0], raw: 'no', immunityCode: 'DANIO_FISICO' }],
+        }),
+      ]),
+    )
+
+    expect(JSON.stringify(hero?.abilities)).not.toMatch(/raw|secreto|no-debe-pasar|immunityCode/)
+    expect(Object.keys(hero?.abilities[0] ?? {}).sort()).toEqual([
+      'abilityId',
+      'chargeTurns',
+      'effects',
+      'name',
+      'powerCost',
+      'reference',
+    ])
+  })
+
+  it('abilities es OBLIGATORIO: ausente es 503 (Player-Inventory aun no lo publica), no []', async () => {
+    const body = equippedHeroContractBody()
+
+    delete body.abilities
+    await expectRejected(body)
+  })
+
+  it.each([
+    ['null', null],
+    ['un objeto', {}],
+    ['una cadena', 'golpe'],
+  ])('abilities que es %s es 503', async (_label, value) => {
+    await expectRejected(bodyWithAbilities(value))
+  })
+
+  it.each([
+    ['sin abilityId', abilityWith({ abilityId: undefined })],
+    ['abilityId vacio', abilityWith({ abilityId: '' })],
+    ['sin reference', abilityWith({ reference: undefined })],
+    ['sin name', abilityWith({ name: undefined })],
+    ['name en blanco', abilityWith({ name: '   ' })],
+    ['sin powerCost', abilityWith({ powerCost: undefined })],
+    ['powerCost sin modo', abilityWith({ powerCost: {} })],
+    ['powerCost con modo desconocido', abilityWith({ powerCost: { mode: 'PERCENT', amount: 2 } })],
+    ['FIXED sin monto', abilityWith({ powerCost: { mode: 'FIXED' } })],
+    ['FIXED con monto 0', abilityWith({ powerCost: { mode: 'FIXED', amount: 0 } })],
+    ['FIXED con monto decimal', abilityWith({ powerCost: { mode: 'FIXED', amount: 2.5 } })],
+    ['FIXED con monto negativo', abilityWith({ powerCost: { mode: 'FIXED', amount: -1 } })],
+    ['sin chargeTurns', abilityWith({ chargeTurns: undefined })],
+    ['chargeTurns 0', abilityWith({ chargeTurns: 0 })],
+    ['chargeTurns decimal', abilityWith({ chargeTurns: 1.5 })],
+    ['sin effects', abilityWith({ effects: undefined })],
+    ['effects que no es lista', abilityWith({ effects: {} })],
+    [
+      'un efecto sin kind',
+      abilityWith({ effects: [{ target: 'SELF', hasActivationCondition: false }] }),
+    ],
+    [
+      'un efecto sin target',
+      abilityWith({ effects: [{ kind: 'IMMUNITY', hasActivationCondition: false }] }),
+    ],
+    [
+      'un efecto sin hasActivationCondition',
+      abilityWith({ effects: [{ kind: 'IMMUNITY', target: 'SELF' }] }),
+    ],
+    [
+      'un efecto con durationTurns 0',
+      abilityWith({
+        effects: [
+          { kind: 'IMMUNITY', target: 'SELF', durationTurns: 0, hasActivationCondition: false },
+        ],
+      }),
+    ],
+    [
+      'un efecto con statistic null (los opcionales solo pueden ausentarse)',
+      abilityWith({
+        effects: [
+          { kind: 'IMMUNITY', target: 'SELF', statistic: null, hasActivationCondition: false },
+        ],
+      }),
+    ],
+  ])('una habilidad %s es 503, nunca un valor inventado', async (_label, ability) => {
+    await expectRejected(bodyWithAbilities([ability]))
+  })
+
+  it('UNA habilidad mal formada rechaza toda la respuesta: no se descarta en silencio', async () => {
+    await expectRejected(bodyWithAbilities([shieldStrikeAbility, abilityWith({ chargeTurns: 0 })]))
   })
 })
 

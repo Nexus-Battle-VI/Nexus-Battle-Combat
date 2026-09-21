@@ -28,6 +28,7 @@ import { LOGGER } from '../../../infrastructure/observability/logger-token'
 import { CONSUME_REALTIME_TICKET, RESUME_BATTLE } from '../http/tokens'
 import { BASIC_ATTACK_COMMAND, BasicAttackRealtimeHandler } from './BasicAttackRealtimeHandler'
 import { CHAT_MESSAGE_TYPES, ChatRealtimeHandler } from './ChatRealtimeHandler'
+import { SkillRealtimeHandler, USE_SKILL_COMMAND } from './SkillRealtimeHandler'
 import type { RealtimeSocket, RealtimeSocketData } from './RealtimeSocket'
 import { SerialQueue } from './SerialQueue'
 
@@ -163,6 +164,7 @@ export class BattleRoomRealtimeGateway
     @Inject(LOGGER) private readonly logger: Logger,
     @Inject(ChatRealtimeHandler) private readonly chat: ChatRealtimeHandler,
     @Inject(BasicAttackRealtimeHandler) private readonly basicAttack: BasicAttackRealtimeHandler,
+    @Inject(SkillRealtimeHandler) private readonly skill: SkillRealtimeHandler,
     @Optional() @Inject(REALTIME_GATEWAY_OPTIONS) options: RealtimeGatewayOptions = {},
   ) {
     this.authTimeoutMs = options.authTimeoutMs ?? AUTH_TIMEOUT_MS
@@ -348,7 +350,12 @@ export class BattleRoomRealtimeGateway
       return
     }
 
-    // Tipo de mensaje no reconocido en este protocolo (`useSkill` es HU-19).
+    if (message.type === USE_SKILL_COMMAND) {
+      this.handleSkill(client, state, message)
+      return
+    }
+
+    // Tipo de mensaje no reconocido en este protocolo.
     client.close(CLOSE_BAD_MESSAGE, 'tipo_no_reconocido')
   }
 
@@ -372,6 +379,36 @@ export class BattleRoomRealtimeGateway
 
     const accepted = state.commandQueue.push(() =>
       this.basicAttack.handle(client, subject, message, (roomId, events) => {
+        this.publish(roomId, events)
+      }),
+    )
+
+    if (!accepted) {
+      client.close(CLOSE_POLICY_VIOLATION, 'demasiados_mensajes')
+    }
+  }
+
+  /**
+   * Habilidad especial (HU-19). Comparte la cola de comandos de combate con `attack`: se atienden
+   * de uno en uno y en el orden en que llegaron, asi que un `attack` y un `useSkill` seguidos de
+   * una misma conexion nunca se pisan. El actor es el `sub` de la conexion (fijado por el ticket)
+   * y el turno vigente; el cliente solo aporta la habilidad y el objetivo.
+   */
+  private handleSkill(
+    client: RealtimeSocket,
+    state: ConnectionState,
+    message: Record<string, unknown>,
+  ): void {
+    const subject = state.subject
+
+    if (subject === null) {
+      // Igual que `attack`, `subscribe`, `resume` y el chat: nunca se atiende sin autenticar antes.
+      client.close(CLOSE_UNAUTHENTICATED, 'no_autenticado')
+      return
+    }
+
+    const accepted = state.commandQueue.push(() =>
+      this.skill.handle(client, subject, message, (roomId, events) => {
         this.publish(roomId, events)
       }),
     )

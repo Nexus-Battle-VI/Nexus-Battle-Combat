@@ -25,6 +25,20 @@ const HU_18_SOURCES = [
   'adapters/inbound/ws/BasicAttackRealtimeHandler.ts',
 ].map(file)
 
+/**
+ * HU-19 amplia `CombatProfile`, `Combatant` y `CombatProfileFactory` con el Poder maximo, el Poder
+ * actual, las recargas y las habilidades (contrato `hu-19-skills-v1`, §5): dejan de poder afirmar
+ * que no mencionan Poder. La regla que esta guarda protege -- el ataque basico NO consume Poder --
+ * sigue intacta para todo lo que ES el ataque basico, y ademas se comprueba por comportamiento
+ * (`hu-19-skills.behavior.spec.ts`: el Poder del atacante no cambia tras un `attack`).
+ */
+const HU_18_ATTACK_SOURCES = [
+  'domain/policies/BasicAttackDamagePolicy.ts',
+  'application/use-cases/ExecuteBasicAttack.ts',
+  'application/ports/RoomCommandLockPort.ts',
+  'adapters/inbound/ws/BasicAttackRealtimeHandler.ts',
+].map(file)
+
 const withoutComments = (source: string): string =>
   source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
@@ -70,7 +84,7 @@ describe('HU-18 — el ataque basico NO consume Poder', () => {
     (token) => {
       const pattern = new RegExp(`\\b${token}\\b`, 'i')
 
-      for (const source of HU_18_SOURCES) {
+      for (const source of HU_18_ATTACK_SOURCES) {
         expect({ source, matches: pattern.test(code(source)) }).toEqual({ source, matches: false })
       }
     },

@@ -150,6 +150,66 @@ export class UnsupportedCombatProfileError extends DomainError {
 }
 
 /**
+ * Codigos estables de `useSkill` (HU-19, contrato `hu-19-skills-v1`, §9). Se AÑADEN a los
+ * de HU-18; Web decide por `code`, nunca por el texto. El Poder insuficiente NO es un
+ * codigo: la accion se degrada a ataque basico (HU-11).
+ */
+export const SkillErrorCode = Object.freeze({
+  SkillsNotAvailable: 'SKILLS_NOT_AVAILABLE',
+  UnknownSkill: 'UNKNOWN_SKILL',
+  UnsupportedSkillEffect: 'UNSUPPORTED_SKILL_EFFECT',
+  SkillOnCooldown: 'SKILL_ON_COOLDOWN',
+} as const)
+
+/**
+ * La batalla no tiene estado de habilidades (Poder y habilidades congelados): se inicio
+ * antes de HU-19. No se rellena ni se consulta Player-Inventory al restaurar; el ataque
+ * basico sigue funcionando.
+ */
+export class SkillsNotAvailableError extends DomainError {
+  readonly code = SkillErrorCode.SkillsNotAvailable
+
+  constructor() {
+    super('La batalla no tiene estado de habilidades: se inicio antes de habilitarlas.')
+    this.name = 'SkillsNotAvailableError'
+  }
+}
+
+/** `abilityId` no es una habilidad del heroe del actor (incluye las de otra clase, CA-02). */
+export class UnknownSkillError extends DomainError {
+  readonly code = SkillErrorCode.UnknownSkill
+
+  constructor() {
+    super('La habilidad no pertenece al heroe de este participante.')
+    this.name = 'UnknownSkillError'
+  }
+}
+
+/**
+ * Algun efecto de la habilidad no esta formalmente soportado (duracion, condicion,
+ * sanacion, reanimacion, inmunidad, reflejo, efectos sobre el oponente...). No se ejecuta
+ * nada ni se degrada: `reason` es solo para el registro y las pruebas, nunca viaja.
+ */
+export class UnsupportedSkillEffectError extends DomainError {
+  readonly code = SkillErrorCode.UnsupportedSkillEffect
+
+  constructor(readonly reason: string) {
+    super(`La habilidad no se puede ejecutar: ${reason}`)
+    this.name = 'UnsupportedSkillEffectError'
+  }
+}
+
+/** La habilidad sigue en recarga (HU-19, CA-04 y CA-07). */
+export class SkillOnCooldownError extends DomainError {
+  readonly code = SkillErrorCode.SkillOnCooldown
+
+  constructor() {
+    super('La habilidad sigue en recarga.')
+    this.name = 'SkillOnCooldownError'
+  }
+}
+
+/**
  * El perfil que publico Player-Inventory al iniciar no cumple el contrato (un
  * valor no entero o negativo): el snapshot no se puede congelar. Es un dato
  * upstream mal formado, no una decision del jugador.

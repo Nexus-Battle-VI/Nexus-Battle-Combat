@@ -81,6 +81,14 @@ const accounts: AccountBattleProfilePort = {
 /** Cuenta cuantas veces se consulta Player-Inventory: debe ser UNA por jugador y solo al iniciar. */
 const inventoryCalls: string[] = []
 
+/**
+ * HU-19 amplio la vista de cada combatiente con `power` y `skills`. Los tests de HU-18 comprueban la
+ * Vida y el turno, asi que se proyecta lo que HU-18 publica; la forma completa (y su hermetismo) la
+ * cubre el test de privacidad de este archivo y `skills.e2e.spec.ts`.
+ */
+const lifeOf = (combatants: readonly any[]): unknown[] =>
+  combatants.map(({ teamLabel, seat, health }) => ({ teamLabel, seat, health }))
+
 const armasHero = (playerId: string): EquippedHero =>
   equippedHeroFixture({
     playerId,
@@ -410,7 +418,7 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
     it('la Vida inicial sale del snapshot congelado: 44 / 44 para los dos, sin volver a Player-Inventory', () => {
       const started = a.ofType('battleStarted')[0] as any
 
-      expect(started.battle.combatants).toEqual([
+      expect(lifeOf(started.battle.combatants)).toEqual([
         { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 } },
         { teamLabel: 'B', seat: 0, health: { current: 44, max: 44 } },
       ])
@@ -453,7 +461,7 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
         },
         targetHealth: { before: 44, after: 38 },
       })
-      expect(eventA.battle.combatants).toEqual([
+      expect(lifeOf(eventA.battle.combatants)).toEqual([
         { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 } },
         { teamLabel: 'B', seat: 0, health: { current: 38, max: 44 } },
       ])
@@ -488,12 +496,38 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
       expect(room.body.battle).toEqual(event.battle)
     })
 
-    it('el mensaje no contiene semilla, indices, estadisticas, efectos ni Poder', () => {
+    it('el mensaje no contiene semilla, indices, estadisticas ni efectos; el Poder solo con la forma que publica HU-19', () => {
       const raw = a.raw.join('\n')
 
+      // HU-19 publica el Poder y las habilidades de cada combatiente (HU-11: medidor de Poder), asi
+      // que `power` ya no esta prohibido: lo que sigue vetado es todo lo demas.
       expect(raw).not.toMatch(
-        /seed|semilla|mt19937|activeEffects|power|poder|jwt|ticket|maxHealth|"defense"|"damage"/i,
+        /seed|semilla|mt19937|activeEffects|jwt|ticket|maxHealth|"defense"|"damage"/i,
       )
+
+      const started = a.ofType('battleStarted')[0] as any
+
+      for (const combatant of started.battle.combatants) {
+        expect(Object.keys(combatant).sort()).toEqual([
+          'health',
+          'power',
+          'seat',
+          'skills',
+          'teamLabel',
+        ])
+        expect(Object.keys(combatant.power).sort()).toEqual(['current', 'max'])
+
+        for (const skill of combatant.skills) {
+          expect(Object.keys(skill).sort()).toEqual([
+            'abilityId',
+            'chargeTurns',
+            'cooldownRemaining',
+            'name',
+            'powerCost',
+            'status',
+          ])
+        }
+      }
     })
 
     it('IDEMPOTENCIA: repetir el MISMO commandId devuelve el mismo evento solo a quien lo repite, sin sorteos ni dano', async () => {
@@ -700,7 +734,7 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
       const room = await call('GET', `/rooms/${roomId}`, 'token-b')
 
       expect(snapshot).toMatchObject({ roomId, seq: 2, status: 'IN_BATTLE' })
-      expect(snapshot.battle.combatants).toEqual([
+      expect(lifeOf(snapshot.battle.combatants)).toEqual([
         { teamLabel: 'A', seat: 0, health: { current: 44, max: 44 } },
         { teamLabel: 'B', seat: 0, health: { current: 41, max: 44 } },
       ])

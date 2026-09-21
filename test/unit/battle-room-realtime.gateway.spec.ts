@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 
 import type { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicAttackRealtimeHandler'
+import type { SkillRealtimeHandler } from '../../src/adapters/inbound/ws/SkillRealtimeHandler'
 import {
   AUTH_TIMEOUT_MS,
   BattleRoomRealtimeGateway,
@@ -117,6 +118,9 @@ const noChat = {
 /** El ataque basico (HU-18) tiene su propia suite: aqui el gateway no lo ejerce. */
 const noAttack = { handle: jest.fn() } as unknown as BasicAttackRealtimeHandler
 
+/** La habilidad (HU-19) tiene su propia suite: aqui el gateway no la ejerce. */
+const noSkill = { handle: jest.fn() } as unknown as SkillRealtimeHandler
+
 const world = (resume?: (repo: InMemoryBattleRoomRepository) => ResumeBattle) => {
   const repo = new InMemoryBattleRoomRepository()
   const store = new InMemoryRealtimeTicketStore()
@@ -128,6 +132,7 @@ const world = (resume?: (repo: InMemoryBattleRoomRepository) => ResumeBattle) =>
     silentLogger,
     noChat,
     noAttack,
+    noSkill,
   )
 
   const connect = async (subject: string | null): Promise<FakeSocket> => {
@@ -204,6 +209,7 @@ describe('BattleRoomRealtimeGateway — autenticacion por ticket (ADR-020)', () 
       silentLogger,
       noChat,
       noAttack,
+      noSkill,
     )
     const { ticket } = new IssueRealtimeTicket(codec, store, past).execute('a1')
     const socket = new FakeSocket()
@@ -286,8 +292,8 @@ describe('BattleRoomRealtimeGateway — autenticacion por ticket (ADR-020)', () 
     const { connect } = world()
     const socket = await connect('a1')
 
-    // `attack` (HU-18) ya es un comando conocido; `useSkill` es de HU-19 y sigue sin reconocerse.
-    socket.emit({ type: 'useSkill', commandId: 'x' })
+    // `attack` (HU-18) y `useSkill` (HU-19) ya son comandos conocidos: este no lo es.
+    socket.emit({ type: 'castSpell', commandId: 'x' })
     await flush()
 
     expect(socket.closeCalls[0]?.code).toBe(4400)

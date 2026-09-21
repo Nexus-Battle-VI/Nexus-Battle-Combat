@@ -329,7 +329,7 @@ describe('ExecuteBasicAttack — flujo principal (CA-01, CA-05, CA-06, CA-07)', 
     expect(after.battleView()?.round).toBe(2)
   })
 
-  it('el ataque basico no consume ni toca Poder: ni el evento ni la sala lo mencionan', async () => {
+  it('el ataque basico no aporta Poder al evento (sin estado de habilidades, la vista lo deja en null)', async () => {
     const { useCase, room } = await setup({}, [
       attackDie(5),
       effect(RandomEffectType.Damage),
@@ -338,8 +338,15 @@ describe('ExecuteBasicAttack — flujo principal (CA-01, CA-05, CA-06, CA-07)', 
 
     const { event } = await useCase.execute(command())
 
-    expect(JSON.stringify(event)).not.toMatch(/power|poder/i)
-    expect(JSON.stringify((await room()).battleView())).not.toMatch(/power|poder/i)
+    const powerKeys = Object.keys(event.payload).filter((key) =>
+      /power|cooldown|skill|bonus/i.test(key),
+    )
+
+    expect(powerKeys).toEqual([])
+    expect((await room()).battleView()?.combatants.map((combatant) => combatant.power)).toEqual([
+      null,
+      null,
+    ])
   })
 
   it('el objetivo elegido es el unico que cambia (2v2)', async () => {

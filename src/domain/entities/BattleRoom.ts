@@ -8,8 +8,12 @@ import {
   NotYourTurnError,
   RoomNotStartableError,
   SameTeamTargetError,
+  SkillOnCooldownError,
+  SkillsNotAvailableError,
   TargetUnavailableError,
+  UnknownSkillError,
   UnsupportedCombatProfileError,
+  UnsupportedSkillEffectError,
 } from '../errors/BattleErrors'
 import {
   applyDamage,
@@ -17,6 +21,8 @@ import {
   calculateDamage,
   type SupportedDamage,
 } from '../policies/BasicAttackDamagePolicy'
+import { spendPower } from '../policies/HeroPowerPolicy'
+import { evaluateSkill, type SkillBonus } from '../policies/SkillEffectPolicy'
 import {
   DuplicateDisplayNameError,
   InvalidModeCompositionError,
@@ -41,10 +47,15 @@ import {
   type ParticipantInput,
 } from './Participant'
 import { Team, type TeamSnapshot } from './Team'
-import { BattleEventType, type BattleEvent, type HandledCommand } from './BattleEvent'
+import {
+  BattleEventType,
+  type BattleEvent,
+  type DegradedFrom,
+  type HandledCommand,
+} from './BattleEvent'
 import { BattleState, type BattleStateSnapshot, type BattleView } from './BattleState'
 import type { Combatant, CombatantKey } from './Combatant'
-import type { CombatProfile } from './CombatProfile'
+import type { CombatAbility, CombatProfile } from './CombatProfile'
 import { memberKey, type TeamRoster, type TurnOrderEntry } from './TurnOrder'
 
 /**
@@ -83,6 +94,42 @@ export interface BasicAttackOutcome {
   readonly percent: number | null
   /** `null` si el golpe no fue efectivo o si el efecto (0 %) no requirio tirar el dano. */
   readonly baseDamage: number | null
+}
+
+/** Una habilidad ya VALIDADA (HU-19), lista para resolverse: 0 sorteos hasta aqui. */
+export interface SkillReadyPlan {
+  readonly kind: 'skill'
+  readonly attackerEntry: TurnOrderEntry
+  readonly targetEntry: TurnOrderEntry
+  readonly attacker: Combatant
+  readonly target: Combatant
+  readonly attackerProfile: CombatProfile
+  readonly targetProfile: CombatProfile
+  readonly targetHealth: number
+  readonly damage: SupportedDamage
+  readonly ability: CombatAbility
+  /** Bonos de la habilidad al Ataque y al Dano, ya agregados por `evaluateSkill`. */
+  readonly attackBonus: SkillBonus
+  readonly damageBonus: SkillBonus
+  /** Poder del actor antes de pagar y el que le queda despues (`spendPower`). */
+  readonly powerBefore: number
+  readonly powerAfter: number
+}
+
+/** El Poder no alcanza: la accion se degrada a un ataque basico contra el mismo objetivo (HU-11). */
+export interface SkillDegradedPlan {
+  readonly kind: 'degraded'
+  readonly abilityId: string
+}
+
+export type SkillPlan = SkillReadyPlan | SkillDegradedPlan | BasicAttackReplay
+
+/** Lo que HU-20, HU-25 y el sorteo de dano produjeron para una habilidad. */
+export interface SkillOutcome extends BasicAttackOutcome {
+  /** Bono de Ataque de la habilidad (fijo + dados), ya incluido en `attackValue`. */
+  readonly attackBonus: number
+  /** Bono de Dano (fijo + dados), ya incluido en `baseDamage`; `null` si no se tiro. */
+  readonly damageBonus: number | null
 }
 
 export interface TeamConfigInput {
@@ -710,18 +757,59 @@ export class BattleRoom {
   planBasicAttack(actorPlayerId: string, commandId: string, target: CombatantKey): BasicAttackPlan {
     BattleRoom.assertValidCommandId(commandId)
 
-    const handled = this.handledCommands.find((candidate) => candidate.commandId === commandId)
+    const replay = this.replayOf(commandId)
 
-    if (handled !== undefined) {
-      const event = this.events.find((candidate) => candidate.seq === handled.seq)
-
-      if (event === undefined) {
-        throw new DomainError('El comando procesado no tiene su evento en la bitacora de la sala.')
-      }
-
-      return { kind: 'replay', event }
+    if (replay !== null) {
+      return replay
     }
 
+    const context = this.requireCombatContext(actorPlayerId, target)
+
+    if (context.attackerProfile.attack === null) {
+      throw new UnsupportedCombatProfileError('el heroe no tiene un valor de Ataque numerico.')
+    }
+
+    return {
+      kind: 'ready',
+      ...context,
+      damage: assertSupportedDamage(context.attackerProfile.damage),
+    }
+  }
+
+  /** El evento ya persistido de un `commandId` procesado, o `null` si es un comando nuevo. */
+  private replayOf(commandId: string): BasicAttackReplay | null {
+    const handled = this.handledCommands.find((candidate) => candidate.commandId === commandId)
+
+    if (handled === undefined) {
+      return null
+    }
+
+    const event = this.events.find((candidate) => candidate.seq === handled.seq)
+
+    if (event === undefined) {
+      throw new DomainError('El comando procesado no tiene su evento en la bitacora de la sala.')
+    }
+
+    return { kind: 'replay', event }
+  }
+
+  /**
+   * Lo que comparten el ataque basico y la habilidad (HU-18/HU-19), en este orden y sin
+   * sortear: batalla en curso, turno del solicitante, objetivo existente y enemigo,
+   * snapshot de combate, perfiles y Vida de ambos. Cualquier fallo lanza y no cambia nada.
+   */
+  private requireCombatContext(
+    actorPlayerId: string,
+    target: CombatantKey,
+  ): {
+    readonly attackerEntry: TurnOrderEntry
+    readonly targetEntry: TurnOrderEntry
+    readonly attacker: Combatant
+    readonly target: Combatant
+    readonly attackerProfile: CombatProfile
+    readonly targetProfile: CombatProfile
+    readonly targetHealth: number
+  } {
     if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
       throw new BattleNotInProgressError(this.id, this.status)
     }
@@ -773,12 +861,7 @@ export class BattleRoom {
       throw new TargetUnavailableError()
     }
 
-    if (attacker.profile.attack === null) {
-      throw new UnsupportedCombatProfileError('el heroe no tiene un valor de Ataque numerico.')
-    }
-
     return {
-      kind: 'ready',
       attackerEntry,
       targetEntry,
       attacker,
@@ -786,7 +869,6 @@ export class BattleRoom {
       attackerProfile: attacker.profile,
       targetProfile: targetCombatant.profile,
       targetHealth: targetCombatant.currentHealth,
-      damage: assertSupportedDamage(attacker.profile.damage),
     }
   }
 
@@ -807,6 +889,7 @@ export class BattleRoom {
     outcome: BasicAttackOutcome,
     commandId: string,
     at: Date,
+    degradedFrom?: DegradedFrom,
   ): BattleRoom {
     BattleRoom.assertValidCommandId(commandId)
 
@@ -840,6 +923,180 @@ export class BattleRoom {
         completedPosition,
         attacker: { teamLabel: plan.attackerEntry.teamLabel, seat: plan.attackerEntry.seat },
         target: { teamLabel: plan.targetEntry.teamLabel, seat: plan.targetEntry.seat },
+        resolution: {
+          attackValue: outcome.attackValue,
+          defenseValue: outcome.defenseValue,
+          effective: outcome.effective,
+          effect: outcome.effect,
+          percent: outcome.percent,
+          baseDamage: outcome.baseDamage,
+          calculatedDamage: applied.calculatedDamage,
+          appliedDamage: applied.appliedDamage,
+        },
+        targetHealth: { before: applied.healthBefore, after: applied.healthAfter },
+        ...(degradedFrom === undefined ? {} : { degradedFrom }),
+        battle: battle.toView(this.id),
+      },
+    }
+
+    return new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        handledCommands: [...this.handledCommands, { commandId, seq }],
+      },
+    )
+  }
+
+  /**
+   * Valida una habilidad especial (HU-19, contrato `hu-19-skills-v1`, §3) ANTES de consumir
+   * un solo sorteo. Orden: `commandId` (forma), repeticion, batalla, turno, objetivo,
+   * perfiles y Vida (los mismos de `attack`), estado de habilidades, habilidad del heroe
+   * (CA-02), efectos soportados, recarga (CA-04, CA-07) y, al final, el Poder (CA-03).
+   *
+   * Poder insuficiente NO es un error: HU-11 exige forzar el ataque basico en ese turno, asi
+   * que se devuelve `degraded` y el llamador ejecuta un ataque basico contra el mismo
+   * objetivo, con el Poder y la recarga intactos. Una habilidad que el sistema no sabe
+   * ejecutar se rechaza ANTES de hablar de Poder: no se fuerza un ataque por ella.
+   *
+   * La identidad del actor es SIEMPRE `actorPlayerId` (el `sub` autenticado) y el turno
+   * vigente; la habilidad y su costo salen del snapshot congelado, nunca del cliente.
+   */
+  planSkill(
+    actorPlayerId: string,
+    commandId: string,
+    abilityId: string,
+    target: CombatantKey,
+  ): SkillPlan {
+    BattleRoom.assertValidCommandId(commandId)
+
+    const replay = this.replayOf(commandId)
+
+    if (replay !== null) {
+      return replay
+    }
+
+    const context = this.requireCombatContext(actorPlayerId, target)
+    const { attacker, attackerProfile } = context
+    const maxPower = attackerProfile.maxPower
+
+    if (maxPower === undefined || attacker.currentPower === null || !attacker.hasSkillState) {
+      throw new SkillsNotAvailableError()
+    }
+
+    const ability = attacker.abilities.find((candidate) => candidate.abilityId === abilityId)
+
+    if (ability === undefined) {
+      throw new UnknownSkillError()
+    }
+
+    const support = evaluateSkill(ability)
+
+    if (!support.supported) {
+      throw new UnsupportedSkillEffectError(support.reason)
+    }
+
+    if (attacker.cooldownOf(abilityId) > 0) {
+      throw new SkillOnCooldownError()
+    }
+
+    const payment = spendPower(
+      { heroId: memberKey(context.attackerEntry), current: attacker.currentPower, max: maxPower },
+      ability.powerCost,
+    )
+
+    if (!payment.ok) {
+      return { kind: 'degraded', abilityId }
+    }
+
+    if (attackerProfile.attack === null) {
+      throw new UnsupportedCombatProfileError('el heroe no tiene un valor de Ataque numerico.')
+    }
+
+    return {
+      kind: 'skill',
+      ...context,
+      damage: assertSupportedDamage(attackerProfile.damage),
+      ability,
+      attackBonus: support.attackBonus,
+      damageBonus: support.damageBonus,
+      powerBefore: attacker.currentPower,
+      powerAfter: payment.state.current,
+    }
+  }
+
+  /**
+   * Aplica una habilidad ya resuelta como UNA sola transicion del agregado (HU-19, mismo
+   * criterio que `applyBasicAttack`): Vida del objetivo + Poder del actor + recarga + evento
+   * con su `seq` + `commandId` procesado + turno avanzado, en una unica version nueva.
+   * Quien la persiste hace UNA escritura: no puede quedar el Poder descontado sin el golpe,
+   * ni la recarga marcada sin el evento.
+   *
+   * La recarga se marca con `chargeTurns + 1` y el cierre del turno propio (`completeTurn`)
+   * descuenta uno: tras la accion queda `chargeTurns`, y con el turno siguiente del actor
+   * sigue bloqueada (`hu-19-skills-v1` §5.3). El siguiente participante recibe +2 de Poder
+   * en esa misma transicion.
+   */
+  applySkill(plan: SkillReadyPlan, outcome: SkillOutcome, commandId: string, at: Date): BattleRoom {
+    BattleRoom.assertValidCommandId(commandId)
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    if (
+      !outcome.effective &&
+      (outcome.effect !== null ||
+        outcome.percent !== null ||
+        outcome.baseDamage !== null ||
+        outcome.damageBonus !== null)
+    ) {
+      throw new DomainError('Un golpe no efectivo no produce efecto, porcentaje ni dano base.')
+    }
+
+    const calculatedDamage =
+      outcome.effective && outcome.percent !== null && outcome.baseDamage !== null
+        ? calculateDamage(outcome.baseDamage, outcome.percent)
+        : 0
+    const applied = applyDamage(plan.targetHealth, calculatedDamage)
+    const completedPosition = this.battle.currentPosition
+    const actor = plan.attacker
+      .withPower(plan.powerAfter)
+      .withCooldown(plan.ability.abilityId, plan.ability.chargeTurns + 1)
+    const battle = this.battle
+      .withCombatant(actor)
+      .withCombatant(plan.target.withHealth(applied.healthAfter))
+      .completeTurn()
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.SkillUsed,
+      occurredAt: at,
+      payload: {
+        commandId,
+        completedPosition,
+        actor: { teamLabel: plan.attackerEntry.teamLabel, seat: plan.attackerEntry.seat },
+        target: { teamLabel: plan.targetEntry.teamLabel, seat: plan.targetEntry.seat },
+        skill: {
+          abilityId: plan.ability.abilityId,
+          name: plan.ability.name,
+          powerCost: plan.ability.powerCost,
+          chargeTurns: plan.ability.chargeTurns,
+        },
+        power: { before: plan.powerBefore, after: plan.powerAfter },
+        cooldown: {
+          remainingTurns:
+            battle.combatantFor(plan.attackerEntry)?.cooldownOf(plan.ability.abilityId) ?? 0,
+        },
+        bonus: { attack: outcome.attackBonus, damage: outcome.damageBonus },
         resolution: {
           attackValue: outcome.attackValue,
           defenseValue: outcome.defenseValue,

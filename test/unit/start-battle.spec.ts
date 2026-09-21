@@ -224,12 +224,14 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       heroSubtype: 'GUERRERO_ARMAS',
       heroId: 'hero-a1',
     })
-    // HU-18: la vista lleva la Vida (`combatants[].health`) pero NUNCA Ataque, Defensa, Dano,
-    // Poder, efectos ni equipamiento.
-    expect(JSON.stringify(dto.battle)).not.toMatch(/attack|defense|damage|power|loadout|effects/i)
-    expect(dto.battle?.combatants).toEqual([
-      { teamLabel: 'A', seat: 0, health: { current: 40, max: 40 } },
-      { teamLabel: 'B', seat: 0, health: { current: 40, max: 40 } },
+    // HU-18/HU-19: la vista lleva la Vida y el Poder (`combatants[]`) y las habilidades por
+    // participante, pero NUNCA Ataque, Defensa, Dano, efectos ni equipamiento.
+    expect(JSON.stringify(dto.battle)).not.toMatch(
+      /attack|defense|damage|loadout|"effects"|activeEffects|hasActivationCondition/i,
+    )
+    expect(dto.battle?.combatants).toMatchObject([
+      { teamLabel: 'A', seat: 0, health: { current: 40, max: 40 }, power: { current: 8, max: 8 } },
+      { teamLabel: 'B', seat: 0, health: { current: 40, max: 40 }, power: { current: 8, max: 8 } },
     ])
   })
 

@@ -2,6 +2,8 @@ import type {
   BasicAttackResolution,
   BasicAttackResolvedPayload,
   BattleEvent,
+  DegradedFrom,
+  SkillUsedPayload,
 } from '../../domain/entities/BattleEvent'
 import type { BattleView } from '../../domain/entities/BattleState'
 import type { CombatantKey } from '../../domain/entities/Combatant'
@@ -40,6 +42,26 @@ export type BattleEventWire =
       readonly target: CombatantKey
       readonly resolution: BasicAttackResolution
       readonly targetHealth: { readonly before: number; readonly after: number }
+      /** HU-19 (opcional): este ataque basico sustituyo a una habilidad por Poder insuficiente. */
+      readonly degradedFrom?: DegradedFrom
+      readonly battle: BattleView
+    }
+  | {
+      /** HU-19: una habilidad ejecutada, con Vida, Poder, recargas y turno YA actualizados en `battle`. */
+      readonly type: 'skillUsed'
+      readonly seq: number
+      readonly roomId: string
+      readonly occurredAt: string
+      readonly commandId: string
+      readonly completedPosition: number
+      readonly actor: SkillUsedPayload['actor']
+      readonly target: SkillUsedPayload['target']
+      readonly skill: SkillUsedPayload['skill']
+      readonly power: SkillUsedPayload['power']
+      readonly cooldown: SkillUsedPayload['cooldown']
+      readonly bonus: SkillUsedPayload['bonus']
+      readonly resolution: BasicAttackResolution
+      readonly targetHealth: { readonly before: number; readonly after: number }
       readonly battle: BattleView
     }
 
@@ -70,7 +92,30 @@ export const toBattleEventWire = (roomId: string, event: BattleEvent): BattleEve
       target: attack.target,
       resolution: attack.resolution,
       targetHealth: attack.targetHealth,
+      ...(attack.degradedFrom === undefined ? {} : { degradedFrom: attack.degradedFrom }),
       battle: attack.battle,
+    }
+  }
+
+  if (event.type === 'skillUsed') {
+    const skill = event.payload as SkillUsedPayload
+
+    return {
+      type: 'skillUsed',
+      seq: event.seq,
+      roomId,
+      occurredAt,
+      commandId: skill.commandId,
+      completedPosition: skill.completedPosition,
+      actor: skill.actor,
+      target: skill.target,
+      skill: skill.skill,
+      power: skill.power,
+      cooldown: skill.cooldown,
+      bonus: skill.bonus,
+      resolution: skill.resolution,
+      targetHealth: skill.targetHealth,
+      battle: skill.battle,
     }
   }
 
