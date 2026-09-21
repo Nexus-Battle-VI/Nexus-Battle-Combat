@@ -78,6 +78,89 @@ export class NotYourTurnError extends DomainError {
   }
 }
 
+/**
+ * Codigos estables de las acciones de combate (HU-18, contrato v1 de
+ * Infrastructure). Web decide por `code`, nunca por el texto del mensaje.
+ */
+export const BasicAttackErrorCode = Object.freeze({
+  InvalidTarget: 'INVALID_TARGET',
+  SameTeamTarget: 'SAME_TEAM_TARGET',
+  TargetUnavailable: 'TARGET_UNAVAILABLE',
+  ActorUnavailable: 'ACTOR_UNAVAILABLE',
+  UnsupportedCombatProfile: 'UNSUPPORTED_COMBAT_PROFILE',
+} as const)
+
+/** El objetivo no es un participante de la batalla (HU-18). */
+export class InvalidTargetError extends DomainError {
+  readonly code = BasicAttackErrorCode.InvalidTarget
+
+  constructor(roomId: string) {
+    super(`El objetivo no es un participante de la batalla de la sala "${roomId}".`)
+    this.name = 'InvalidTargetError'
+  }
+}
+
+/**
+ * El objetivo es del mismo equipo que el atacante (incluido el propio atacante).
+ * Validacion local coherente con RF-12: NO cierra HU-12 ni implementa excepciones
+ * de habilidades (HU-12/HU-19).
+ */
+export class SameTeamTargetError extends DomainError {
+  readonly code = BasicAttackErrorCode.SameTeamTarget
+
+  constructor() {
+    super('El ataque basico no puede dirigirse a un aliado ni a uno mismo.')
+    this.name = 'SameTeamTargetError'
+  }
+}
+
+/** El objetivo ya no tiene Vida: no se muta un participante caido (la finalizacion es de HU-21). */
+export class TargetUnavailableError extends DomainError {
+  readonly code = BasicAttackErrorCode.TargetUnavailable
+
+  constructor() {
+    super('El objetivo ya no tiene Vida.')
+    this.name = 'TargetUnavailableError'
+  }
+}
+
+/** El atacante ya no tiene Vida: un participante caido no ataca. */
+export class ActorUnavailableError extends DomainError {
+  readonly code = BasicAttackErrorCode.ActorUnavailable
+
+  constructor() {
+    super('El atacante ya no tiene Vida.')
+    this.name = 'ActorUnavailableError'
+  }
+}
+
+/**
+ * No se puede resolver un ataque basico con el perfil de combate disponible:
+ * participante `AI` (sin fuente autoritativa de su perfil), batalla anterior a
+ * HU-18 (sin snapshot), sanador sin Ataque ni Dano, o un Dano `PERCENTAGE` que
+ * ninguna fuente formal define. Nunca se inventan valores para que pase.
+ */
+export class UnsupportedCombatProfileError extends DomainError {
+  readonly code = BasicAttackErrorCode.UnsupportedCombatProfile
+
+  constructor(reason: string) {
+    super(`No se puede resolver un ataque basico con este perfil de combate: ${reason}`)
+    this.name = 'UnsupportedCombatProfileError'
+  }
+}
+
+/**
+ * El perfil que publico Player-Inventory al iniciar no cumple el contrato (un
+ * valor no entero o negativo): el snapshot no se puede congelar. Es un dato
+ * upstream mal formado, no una decision del jugador.
+ */
+export class InvalidCombatProfileError extends DomainError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidCombatProfileError'
+  }
+}
+
 /** El identificador de comando (`commandId`, ADR-020) no es una cadena util. 400. */
 export class InvalidCommandIdError extends DomainError {
   constructor() {

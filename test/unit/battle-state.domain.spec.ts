@@ -71,6 +71,7 @@ describe('BattleState — cola inmutable y unico contador de progreso (HU-17)', 
     expect(state.currentPosition).toBe(1)
     expect(state.round).toBe(4)
     expect(Object.keys(state.toSnapshot()).sort()).toEqual([
+      'combatants',
       'startedAt',
       'turnOrder',
       'turnsCompleted',
@@ -85,6 +86,7 @@ describe('BattleState — cola inmutable y unico contador de progreso (HU-17)', 
     expect(view.currentTurn.position).toBe(0)
     expect(Object.keys(view).sort()).toEqual([
       'battleId',
+      'combatants',
       'currentTurn',
       'round',
       'startedAt',

@@ -1,5 +1,6 @@
 import 'reflect-metadata'
 
+import type { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicAttackRealtimeHandler'
 import {
   AUTH_TIMEOUT_MS,
   BattleRoomRealtimeGateway,
@@ -113,6 +114,9 @@ const noChat = {
   onRoomUpdated: jest.fn().mockResolvedValue(undefined),
 } as unknown as ChatRealtimeHandler
 
+/** El ataque basico (HU-18) tiene su propia suite: aqui el gateway no lo ejerce. */
+const noAttack = { handle: jest.fn() } as unknown as BasicAttackRealtimeHandler
+
 const world = (resume?: (repo: InMemoryBattleRoomRepository) => ResumeBattle) => {
   const repo = new InMemoryBattleRoomRepository()
   const store = new InMemoryRealtimeTicketStore()
@@ -123,6 +127,7 @@ const world = (resume?: (repo: InMemoryBattleRoomRepository) => ResumeBattle) =>
     resume?.(repo) ?? new ResumeBattle(repo),
     silentLogger,
     noChat,
+    noAttack,
   )
 
   const connect = async (subject: string | null): Promise<FakeSocket> => {
@@ -198,6 +203,7 @@ describe('BattleRoomRealtimeGateway — autenticacion por ticket (ADR-020)', () 
       new ResumeBattle(repo),
       silentLogger,
       noChat,
+      noAttack,
     )
     const { ticket } = new IssueRealtimeTicket(codec, store, past).execute('a1')
     const socket = new FakeSocket()
@@ -280,7 +286,8 @@ describe('BattleRoomRealtimeGateway — autenticacion por ticket (ADR-020)', () 
     const { connect } = world()
     const socket = await connect('a1')
 
-    socket.emit({ type: 'attack', commandId: 'x' })
+    // `attack` (HU-18) ya es un comando conocido; `useSkill` es de HU-19 y sigue sin reconocerse.
+    socket.emit({ type: 'useSkill', commandId: 'x' })
     await flush()
 
     expect(socket.closeCalls[0]?.code).toBe(4400)

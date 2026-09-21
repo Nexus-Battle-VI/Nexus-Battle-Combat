@@ -12,6 +12,7 @@ import {
   loadConfig,
 } from '../../src/infrastructure/config/env'
 import { inBattleRoom, preparingRoom } from '../fixtures/battle'
+import { battleWithCombat } from '../fixtures/basic-attack'
 
 const LATER = new Date('2026-09-21T10:05:00.000Z')
 
@@ -113,4 +114,99 @@ describe('configuracion de la semilla de arranque (HU-17, semilla validada por H
       expect(() => loadConfig({ COMBAT_RANDOM_SEED: value })).toThrow(ConfigurationError)
     },
   )
+})
+
+describe('battle-room-mapping — snapshot de combate y ataque basico (HU-18, migracion 007)', () => {
+  const played = () => {
+    const room = battleWithCombat()
+    const plan = room.planBasicAttack('a1', 'cmd-1', { teamLabel: 'B', seat: 0 })
+
+    if (plan.kind !== 'ready') {
+      throw new Error('se esperaba un plan listo')
+    }
+
+    return room.applyBasicAttack(
+      plan,
+      {
+        attackValue: 15,
+        defenseValue: 11,
+        effective: true,
+        effect: 'CRITICAL_DAMAGE',
+        percent: 137,
+        baseDamage: 5,
+      },
+      'cmd-1',
+      LATER,
+    )
+  }
+
+  it('el documento guarda el snapshot y la Vida actual junto a la cola', () => {
+    const document = toDocument(battleWithCombat().toSnapshot())
+
+    expect(Object.keys(document.battle ?? {}).sort()).toEqual([
+      'combatants',
+      'startedAt',
+      'turnOrder',
+      'turnsCompleted',
+    ])
+    expect(document.battle?.combatants).toHaveLength(2)
+    expect(document.battle?.combatants?.[0]).toMatchObject({
+      teamLabel: 'A',
+      seat: 0,
+      currentHealth: 44,
+      profile: { maxHealth: 44, attack: 10, defense: 11 },
+    })
+  })
+
+  it('tras un ataque: snapshot -> documento -> snapshot conserva Vida, evento, comando y turno', () => {
+    const after = played()
+    const document = toDocument(after.toSnapshot())
+    const restored = BattleRoom.restore(toSnapshot(document))
+
+    expect(document.battle?.combatants?.[1]?.currentHealth).toBe(38)
+    expect(document.events?.map((event) => [event.seq, event.type])).toEqual([
+      [1, 'battleStarted'],
+      [2, 'basicAttackResolved'],
+    ])
+    expect(document.handledCommands).toEqual([{ commandId: 'cmd-1', seq: 2 }])
+    expect(restored.toSnapshot()).toEqual(after.toSnapshot())
+    expect(restored.battleView()).toEqual(after.battleView())
+  })
+
+  it('un documento de HU-17 (sin combatants) se restaura SIN error, sin Vida y sin consultar a nadie', () => {
+    const document = { ...toDocument(inBattleRoom().toSnapshot()) }
+    const restored = BattleRoom.restore(toSnapshot(document))
+
+    expect(restored.status).toBe('IN_BATTLE')
+    expect(restored.battle?.combatants).toBeNull()
+    expect(restored.battleView()?.combatants).toEqual([])
+  })
+
+  it('una batalla anterior a HU-18 NO se reescribe con combatants inventados al guardar', () => {
+    const document = toDocument(inBattleRoom().toSnapshot())
+
+    expect(document.battle).not.toHaveProperty('combatants')
+  })
+
+  it('un snapshot corrupto (Vida mayor que la maxima) se rechaza al restaurar', () => {
+    const document = toDocument(battleWithCombat().toSnapshot())
+    const corrupt = {
+      ...document,
+      battle: {
+        ...document.battle,
+        combatants: (document.battle?.combatants ?? []).map((combatant, index) =>
+          index === 0 ? { ...combatant, currentHealth: 999 } : combatant,
+        ),
+      },
+    }
+
+    expect(() => BattleRoom.restore(toSnapshot(corrupt as unknown as BattleRoomDocument))).toThrow()
+  })
+
+  it('el documento es JSON puro y no guarda inventario, nombre del heroe ni fecha de seleccion', () => {
+    const serialized = JSON.stringify(toDocument(played().toSnapshot()).battle?.combatants)
+
+    expect(serialized).not.toMatch(/selectedAt|baseStats|blockers|loadoutVersion|seed|semilla/i)
+    expect(() => JSON.parse(serialized) as unknown).not.toThrow()
+  })
 })

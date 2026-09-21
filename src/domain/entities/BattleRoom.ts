@@ -1,11 +1,22 @@
 import { DomainError } from '../errors/DomainError'
 import {
+  ActorUnavailableError,
   BattleNotInProgressError,
   InvalidBattleRosterError,
   InvalidCommandIdError,
+  InvalidTargetError,
   NotYourTurnError,
   RoomNotStartableError,
+  SameTeamTargetError,
+  TargetUnavailableError,
+  UnsupportedCombatProfileError,
 } from '../errors/BattleErrors'
+import {
+  applyDamage,
+  assertSupportedDamage,
+  calculateDamage,
+  type SupportedDamage,
+} from '../policies/BasicAttackDamagePolicy'
 import {
   DuplicateDisplayNameError,
   InvalidModeCompositionError,
@@ -32,7 +43,47 @@ import {
 import { Team, type TeamSnapshot } from './Team'
 import { BattleEventType, type BattleEvent, type HandledCommand } from './BattleEvent'
 import { BattleState, type BattleStateSnapshot, type BattleView } from './BattleState'
+import type { Combatant, CombatantKey } from './Combatant'
+import type { CombatProfile } from './CombatProfile'
 import { memberKey, type TeamRoster, type TurnOrderEntry } from './TurnOrder'
+
+/**
+ * Ataque basico ya VALIDADO (HU-18), listo para resolverse: todas las
+ * comprobaciones que no necesitan aleatoriedad ocurren antes, asi que una
+ * peticion invalida consume 0 sorteos.
+ */
+export interface BasicAttackReadyPlan {
+  readonly kind: 'ready'
+  readonly attackerEntry: TurnOrderEntry
+  readonly targetEntry: TurnOrderEntry
+  readonly attacker: Combatant
+  readonly target: Combatant
+  readonly attackerProfile: CombatProfile
+  readonly targetProfile: CombatProfile
+  /** Vida actual del objetivo, leida del estado persistido (nunca del cliente). */
+  readonly targetHealth: number
+  /** Dano del atacante ya comprobado como soportado (`DICE` o `FIXED`). */
+  readonly damage: SupportedDamage
+}
+
+/** El `commandId` ya se proceso: se devuelve el evento persistido, sin volver a sortear ni mutar. */
+export interface BasicAttackReplay {
+  readonly kind: 'replay'
+  readonly event: BattleEvent
+}
+
+export type BasicAttackPlan = BasicAttackReadyPlan | BasicAttackReplay
+
+/** Lo que HU-20 y el sorteo de dano produjeron para este golpe. */
+export interface BasicAttackOutcome {
+  readonly attackValue: number
+  readonly defenseValue: number
+  readonly effective: boolean
+  readonly effect: string | null
+  readonly percent: number | null
+  /** `null` si el golpe no fue efectivo o si el efecto (0 %) no requirio tirar el dano. */
+  readonly baseDamage: number | null
+}
 
 export interface TeamConfigInput {
   readonly capacity: number
@@ -549,7 +600,11 @@ export class BattleRoom {
    * Devuelve un agregado nuevo con la MISMA version: quien la incrementa es el
    * repositorio al guardar con `expectedVersion`.
    */
-  startBattle(turnOrder: readonly TurnOrderEntry[], at: Date): BattleRoom {
+  startBattle(
+    turnOrder: readonly TurnOrderEntry[],
+    at: Date,
+    combatants: readonly Combatant[] | null = null,
+  ): BattleRoom {
     if (this.status !== BattleRoomStatus.Preparing) {
       throw new RoomNotStartableError(this.id, this.status)
     }
@@ -560,7 +615,7 @@ export class BattleRoom {
 
     BattleRoom.assertQueueMatchesRoster(this.roster(), turnOrder)
 
-    const battle = BattleState.start(turnOrder, at)
+    const battle = BattleState.start(turnOrder, at, combatants)
     const event: BattleEvent = {
       seq: 1,
       type: BattleEventType.BattleStarted,
@@ -592,13 +647,7 @@ export class BattleRoom {
    * el llamante lo detecta y no persiste ni difunde nada (ADR-020).
    */
   completeTurn(actorPlayerId: string | null, commandId: string, at: Date): BattleRoom {
-    if (
-      typeof commandId !== 'string' ||
-      commandId.trim().length === 0 ||
-      commandId.length > MAX_COMMAND_ID_LENGTH
-    ) {
-      throw new InvalidCommandIdError()
-    }
+    BattleRoom.assertValidCommandId(commandId)
 
     if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
       throw new BattleNotInProgressError(this.id, this.status)
@@ -643,6 +692,194 @@ export class BattleRoom {
         handledCommands: [...this.handledCommands, { commandId, seq }],
       },
     )
+  }
+
+  /**
+   * Valida un ataque basico SIN aleatoriedad (HU-18, contrato v1 §3). El orden es el
+   * del contrato: `commandId` -> repeticion -> batalla activa -> turno -> objetivo
+   * existe -> objetivo de otro equipo -> perfiles y Vida -> Ataque y Dano soportados.
+   * Cualquier fallo lanza y no cambia nada; ninguno consume un solo sorteo.
+   *
+   * Un `commandId` ya procesado devuelve `replay` con el evento persistido: se
+   * comprueba ANTES del turno porque tras el ataque el turno ya no es del atacante
+   * y el reintento no debe fallar por eso.
+   *
+   * La identidad del atacante es SIEMPRE `actorPlayerId` (el `sub` autenticado) y
+   * el turno vigente; nunca un dato del cliente.
+   */
+  planBasicAttack(actorPlayerId: string, commandId: string, target: CombatantKey): BasicAttackPlan {
+    BattleRoom.assertValidCommandId(commandId)
+
+    const handled = this.handledCommands.find((candidate) => candidate.commandId === commandId)
+
+    if (handled !== undefined) {
+      const event = this.events.find((candidate) => candidate.seq === handled.seq)
+
+      if (event === undefined) {
+        throw new DomainError('El comando procesado no tiene su evento en la bitacora de la sala.')
+      }
+
+      return { kind: 'replay', event }
+    }
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const attackerEntry = this.battle.currentEntry
+
+    if (attackerEntry.kind !== ParticipantKind.Human || attackerEntry.playerId !== actorPlayerId) {
+      throw new NotYourTurnError(this.id)
+    }
+
+    const targetEntry = this.battle.turnOrder.find(
+      (entry) => entry.teamLabel === target.teamLabel && entry.seat === target.seat,
+    )
+
+    if (targetEntry === undefined) {
+      throw new InvalidTargetError(this.id)
+    }
+
+    if (targetEntry.teamLabel === attackerEntry.teamLabel) {
+      throw new SameTeamTargetError()
+    }
+
+    if (this.battle.combatants === null) {
+      throw new UnsupportedCombatProfileError(
+        'la batalla comenzo antes de habilitar el ataque basico y no tiene snapshot de combate.',
+      )
+    }
+
+    const attacker = this.battle.combatantFor(attackerEntry)
+    const targetCombatant = this.battle.combatantFor(targetEntry)
+
+    if (attacker === undefined || targetCombatant === undefined) {
+      throw new DomainError('El snapshot de combate no contiene a los participantes del golpe.')
+    }
+
+    if (attacker.profile === null || attacker.currentHealth === null) {
+      throw new UnsupportedCombatProfileError('el atacante no tiene perfil de combate.')
+    }
+
+    if (targetCombatant.profile === null || targetCombatant.currentHealth === null) {
+      throw new UnsupportedCombatProfileError('el objetivo no tiene perfil de combate.')
+    }
+
+    if (!attacker.alive) {
+      throw new ActorUnavailableError()
+    }
+
+    if (!targetCombatant.alive) {
+      throw new TargetUnavailableError()
+    }
+
+    if (attacker.profile.attack === null) {
+      throw new UnsupportedCombatProfileError('el heroe no tiene un valor de Ataque numerico.')
+    }
+
+    return {
+      kind: 'ready',
+      attackerEntry,
+      targetEntry,
+      attacker,
+      target: targetCombatant,
+      attackerProfile: attacker.profile,
+      targetProfile: targetCombatant.profile,
+      targetHealth: targetCombatant.currentHealth,
+      damage: assertSupportedDamage(attacker.profile.damage),
+    }
+  }
+
+  /**
+   * Aplica un ataque basico ya resuelto como UNA sola transicion del agregado
+   * (HU-18): Vida del objetivo + evento con su `seq` + `commandId` procesado + turno
+   * avanzado, en una unica version nueva. Quien la persiste hace UNA escritura:
+   * nunca puede quedar la Vida bajada con el turno sin avanzar, ni el turno
+   * avanzado sin resultado.
+   *
+   * `dano calculado = floor(dano base x porcentaje / 100)` (aclaracion formal,
+   * Management #62) y `dano aplicado = min(dano calculado, Vida)`: la Vida no baja
+   * de 0. Un golpe no efectivo o con efecto 0 % no cambia la Vida y el turno
+   * igualmente avanza. La regla de avance es la de HU-17 (`BattleState.completeTurn`).
+   */
+  applyBasicAttack(
+    plan: BasicAttackReadyPlan,
+    outcome: BasicAttackOutcome,
+    commandId: string,
+    at: Date,
+  ): BattleRoom {
+    BattleRoom.assertValidCommandId(commandId)
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    if (
+      !outcome.effective &&
+      (outcome.effect !== null || outcome.percent !== null || outcome.baseDamage !== null)
+    ) {
+      throw new DomainError('Un golpe no efectivo no produce efecto, porcentaje ni dano base.')
+    }
+
+    const calculatedDamage =
+      outcome.effective && outcome.percent !== null && outcome.baseDamage !== null
+        ? calculateDamage(outcome.baseDamage, outcome.percent)
+        : 0
+    const applied = applyDamage(plan.targetHealth, calculatedDamage)
+    const completedPosition = this.battle.currentPosition
+    const battle = this.battle
+      .withCombatant(plan.target.withHealth(applied.healthAfter))
+      .completeTurn()
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.BasicAttackResolved,
+      occurredAt: at,
+      payload: {
+        commandId,
+        completedPosition,
+        attacker: { teamLabel: plan.attackerEntry.teamLabel, seat: plan.attackerEntry.seat },
+        target: { teamLabel: plan.targetEntry.teamLabel, seat: plan.targetEntry.seat },
+        resolution: {
+          attackValue: outcome.attackValue,
+          defenseValue: outcome.defenseValue,
+          effective: outcome.effective,
+          effect: outcome.effect,
+          percent: outcome.percent,
+          baseDamage: outcome.baseDamage,
+          calculatedDamage: applied.calculatedDamage,
+          appliedDamage: applied.appliedDamage,
+        },
+        targetHealth: { before: applied.healthBefore, after: applied.healthAfter },
+        battle: battle.toView(this.id),
+      },
+    }
+
+    return new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        handledCommands: [...this.handledCommands, { commandId, seq }],
+      },
+    )
+  }
+
+  private static assertValidCommandId(commandId: string): void {
+    if (
+      typeof commandId !== 'string' ||
+      commandId.trim().length === 0 ||
+      commandId.length > MAX_COMMAND_ID_LENGTH
+    ) {
+      throw new InvalidCommandIdError()
+    }
   }
 
   private static assertConsistentEvents(events: readonly BattleEvent[]): void {

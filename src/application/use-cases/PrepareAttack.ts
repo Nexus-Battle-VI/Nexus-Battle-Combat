@@ -5,6 +5,7 @@ import type { EquippedHero } from '../ports/PlayerInventoryEquippedHeroPort'
 import {
   assessEquipmentEffect,
   buildHeroEffectTable,
+  type EffectTableSource,
   type EquipmentEffectAssessment,
   type HeroEffectTable,
 } from './BuildHeroEffectTable'
@@ -60,7 +61,19 @@ export interface PreparedAttack {
  *
  * Pura y sin E/S: no toca la aleatoriedad (HU-24); solo prepara los datos.
  */
-export const prepareAttack = (attacker: EquippedHero, target: EquippedHero): PreparedAttack => {
+/**
+ * Lo que `prepareAttack` lee de un heroe: sus efectos, su subtipo y sus estadisticas
+ * efectivas de Ataque y Defensa. `EquippedHero` lo cumple por estructura, y tambien
+ * el perfil de combate congelado de HU-18 (adaptado con `toAttackParticipant`).
+ */
+export interface AttackParticipant extends EffectTableSource {
+  readonly effectiveStats: Pick<EquippedHero['effectiveStats'], 'attack' | 'defense'>
+}
+
+export const prepareAttack = (
+  attacker: AttackParticipant,
+  target: AttackParticipant,
+): PreparedAttack => {
   const attackerEffects = buildHeroEffectTable(attacker)
   const effectiveAttack = attacker.effectiveStats.attack
 

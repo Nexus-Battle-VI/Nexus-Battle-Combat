@@ -1,7 +1,9 @@
 import type { BattleRoom } from '../../domain/entities/BattleRoom'
+import { Combatant } from '../../domain/entities/Combatant'
+import { createCombatProfile } from '../../domain/entities/CombatProfile'
 import { ParticipantKind } from '../../domain/entities/Participant'
 import type { RosterMember, TeamRoster } from '../../domain/entities/TurnOrder'
-import { RoomNotStartableError } from '../../domain/errors/BattleErrors'
+import { InvalidCombatProfileError, RoomNotStartableError } from '../../domain/errors/BattleErrors'
 import {
   assessPrecombatEligibility,
   isIndividualFormat,
@@ -20,7 +22,7 @@ import {
   RoomNotFoundError,
 } from '../errors/ApplicationError'
 import { PrecombatEligibilityBlockedError } from '../errors/PrecombatEligibilityError'
-import { PlayerWithoutEquippedHeroError } from '../errors/UpstreamErrors'
+import { PlayerWithoutEquippedHeroError, UpstreamServiceError } from '../errors/UpstreamErrors'
 import type { BattleEventPublisherPort } from '../ports/BattleEventPublisherPort'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../ports/ClockPort'
@@ -28,6 +30,7 @@ import type {
   EquippedHero,
   PlayerInventoryEquippedHeroPort,
 } from '../ports/PlayerInventoryEquippedHeroPort'
+import { combatProfileFrom } from '../services/CombatProfileFactory'
 
 /** El heroe equipado ya no es el que se aprobo al unirse (HU-16, TOCTOU). */
 export const HERO_CHANGED_SINCE_JOIN = 'HERO_CHANGED_SINCE_JOIN'
@@ -95,9 +98,9 @@ export class StartBattle {
     // una composicion que HU-17 no sabe ordenar no puede iniciar batalla.
     assertBalancedTeams(room.roster())
 
-    const rosters = await this.revalidate(room)
+    const { rosters, combatants } = await this.revalidate(room)
     const order = generateTurnOrder(rosters, this.random)
-    const started = room.startBattle(order, this.clock.now())
+    const started = room.startBattle(order, this.clock.now(), combatants)
 
     let saved
     try {
@@ -119,8 +122,16 @@ export class StartBattle {
     return toBattleRoomDto(saved)
   }
 
-  /** Revalida a cada HUMAN y devuelve la lista definitiva con el subtipo de presentacion. */
-  private async revalidate(room: BattleRoom): Promise<readonly [TeamRoster, TeamRoster]> {
+  /**
+   * Revalida a cada HUMAN y devuelve la lista definitiva con el subtipo de
+   * presentacion y el SNAPSHOT DE COMBATE congelado (HU-18): con la misma respuesta de
+   * Player-Inventory que ya se pidio para revalidar HU-16, sin una segunda llamada.
+   * Los `AI` no tienen perfil (no hay fuente autoritativa de sus estadisticas).
+   */
+  private async revalidate(room: BattleRoom): Promise<{
+    readonly rosters: readonly [TeamRoster, TeamRoster]
+    readonly combatants: readonly Combatant[]
+  }> {
     const individualFormat = isIndividualFormat(room.teams)
     const rosters = room.roster()
     const humans = rosters.flatMap((roster) =>
@@ -139,6 +150,7 @@ export class StartBattle {
     )
 
     const enriched = new Map<string, RosterMember>()
+    const profiles = new Map<string, Combatant>()
 
     for (const { member, playerId } of humans) {
       const hero = heroes.get(playerId) ?? null
@@ -193,6 +205,7 @@ export class StartBattle {
         heroId: member.heroId ?? hero.heroId,
         heroSubtype: hero.subtype,
       })
+      profiles.set(playerId, this.freeze(member, hero))
     }
 
     const withSubtype = (roster: TeamRoster): TeamRoster => ({
@@ -202,7 +215,32 @@ export class StartBattle {
       ),
     })
 
-    return [withSubtype(rosters[0]), withSubtype(rosters[1])]
+    const finalRosters: readonly [TeamRoster, TeamRoster] = [
+      withSubtype(rosters[0]),
+      withSubtype(rosters[1]),
+    ]
+    const combatants = finalRosters
+      .flatMap((roster) => roster.members)
+      .map((member) =>
+        member.playerId === null
+          ? Combatant.start(member, null)
+          : (profiles.get(member.playerId) ?? Combatant.start(member, null)),
+      )
+
+    return { rosters: finalRosters, combatants }
+  }
+
+  /** Congela el perfil de un HUMAN; un dato upstream mal formado es un fallo del servicio, no del jugador. */
+  private freeze(member: RosterMember, hero: EquippedHero): Combatant {
+    try {
+      return Combatant.start(member, createCombatProfile(combatProfileFrom(hero)))
+    } catch (error: unknown) {
+      if (error instanceof InvalidCombatProfileError) {
+        throw new UpstreamServiceError('player-inventory', 'respuesta_invalida')
+      }
+
+      throw error
+    }
   }
 
   /** La difusion nunca revienta la operacion: el estado ya esta persistido (`resume` lo recupera). */

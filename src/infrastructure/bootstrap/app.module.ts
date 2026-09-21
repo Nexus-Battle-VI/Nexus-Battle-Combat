@@ -8,23 +8,28 @@ import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
 import {
   BATTLE_RANDOM,
+  BATTLE_RANDOM_SEQUENCE,
   CANCEL_BATTLE_ROOM,
   COMPLETE_BATTLE_TURN,
   CONSUME_REALTIME_TICKET,
   CREATE_BATTLE_ROOM,
+  EXECUTE_BASIC_ATTACK,
   GET_BATTLE_ROOM,
   ISSUE_REALTIME_TICKET,
   JOIN_BATTLE_ROOM,
   LEAVE_BATTLE_ROOM,
   LIST_AVAILABLE_BATTLE_ROOMS,
   RESUME_BATTLE,
+  ROOM_COMMAND_LOCK,
   START_BATTLE,
 } from '../../adapters/inbound/http/tokens'
 import { AnonymousIdentityGuard } from '../../adapters/inbound/http/auth/anonymous.guard'
 import { InternalServiceGuard } from '../../adapters/inbound/http/auth/internal-service.guard'
 import { JwtAuthGuard } from '../../adapters/inbound/http/auth/jwt-auth.guard'
 import { RolesGuard } from '../../adapters/inbound/http/auth/roles.guard'
+import { BasicAttackRealtimeHandler } from '../../adapters/inbound/ws/BasicAttackRealtimeHandler'
 import { BattleRoomRealtimeGateway } from '../../adapters/inbound/ws/BattleRoomRealtimeGateway'
+import { ChannelLock } from '../../adapters/inbound/ws/ChannelLock'
 import { ChatRealtimeHandler } from '../../adapters/inbound/ws/ChatRealtimeHandler'
 import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTokenVerifier'
 import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClient'
@@ -60,7 +65,9 @@ import {
 import {
   RANDOM_SEQUENCE_FACTORY,
   type RandomSequenceFactoryPort,
+  type RandomSequencePort,
 } from '../../application/ports/RandomSequencePort'
+import type { RoomCommandLockPort } from '../../application/ports/RoomCommandLockPort'
 import {
   BATTLE_EVENT_PUBLISHER,
   type BattleEventPublisherPort,
@@ -76,6 +83,7 @@ import { createBoundedRandom } from '../../application/services/BoundedRandom'
 import { RandomSeed } from '../../domain/value-objects/RandomSeed'
 import type { BoundedRandom } from '../../domain/policies/TurnOrderPolicy'
 import { CompleteBattleTurn } from '../../application/use-cases/CompleteBattleTurn'
+import { ExecuteBasicAttack } from '../../application/use-cases/ExecuteBasicAttack'
 import { GetBattleRoom } from '../../application/use-cases/GetBattleRoom'
 import { ResumeBattle } from '../../application/use-cases/ResumeBattle'
 import { StartBattle } from '../../application/use-cases/StartBattle'
@@ -478,17 +486,25 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     // batalla produciria siempre el mismo equipo inicial). No es una politica
     // de semilla por batalla ni persiste el cursor: ver docs/hu-17-turn-order.md.
     {
-      provide: BATTLE_RANDOM,
+      provide: BATTLE_RANDOM_SEQUENCE,
       useFactory: (
         factory: RandomSequenceFactoryPort,
         config: AppConfig,
         logger: Logger,
-      ): BoundedRandom => {
+      ): RandomSequencePort => {
         logger.info('battle_random_sequence_ready', { source: 'HU-24' })
 
-        return createBoundedRandom(factory.create(RandomSeed.create(config.randomSeed)))
+        return factory.create(RandomSeed.create(config.randomSeed))
       },
       inject: [RANDOM_SEQUENCE_FACTORY, APP_CONFIG, LOGGER],
+    },
+    // HU-18: la cola de turnos (HU-17) y los golpes (Ataque, efecto y Dano) consumen
+    // la MISMA secuencia de proceso: dos secuencias con la misma semilla producirian
+    // las mismas tiradas en dos sitios distintos.
+    {
+      provide: BATTLE_RANDOM,
+      useFactory: (sequence: RandomSequencePort): BoundedRandom => createBoundedRandom(sequence),
+      inject: [BATTLE_RANDOM_SEQUENCE],
     },
     // IMPORTANTE: el gateway se registra como CLASE, no con `useFactory`. Nest solo
     // descubre y monta un `@WebSocketGateway` cuando el proveedor es la propia
@@ -531,6 +547,29 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         publisher: BattleEventPublisherPort,
       ): CompleteBattleTurn => new CompleteBattleTurn(rooms, clock, publisher),
       inject: [BATTLE_ROOM_REPOSITORY, CLOCK, BATTLE_EVENT_PUBLISHER],
+    },
+    // HU-18 (RF-18): ataque basico. Es la unica accion de juego expuesta por el
+    // WebSocket (`attack`); no hay ruta HTTP. Los comandos de una sala se serializan
+    // (una replica, ADR-020).
+    {
+      provide: ROOM_COMMAND_LOCK,
+      useFactory: (): RoomCommandLockPort => new ChannelLock(),
+    },
+    {
+      provide: EXECUTE_BASIC_ATTACK,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        clock: ClockPort,
+        sequence: RandomSequencePort,
+        lock: RoomCommandLockPort,
+      ): ExecuteBasicAttack => new ExecuteBasicAttack(rooms, clock, sequence, lock),
+      inject: [BATTLE_ROOM_REPOSITORY, CLOCK, BATTLE_RANDOM_SEQUENCE, ROOM_COMMAND_LOCK],
+    },
+    {
+      provide: BasicAttackRealtimeHandler,
+      useFactory: (attack: ExecuteBasicAttack, logger: Logger): BasicAttackRealtimeHandler =>
+        new BasicAttackRealtimeHandler(attack, logger),
+      inject: [EXECUTE_BASIC_ATTACK, LOGGER],
     },
     {
       provide: READINESS_CHECKS,
