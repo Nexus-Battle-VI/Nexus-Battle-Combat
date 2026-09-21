@@ -20,6 +20,17 @@ export class RoomNotFoundError extends Error {
 }
 
 /**
+ * Quien pide no es participante de la sala (HU-17): ni el estado de la batalla
+ * ni sus eventos son visibles para un tercero. 403.
+ */
+export class RoomAccessForbiddenError extends Error {
+  constructor(roomId: string) {
+    super(`No eres participante de la sala "${roomId}".`)
+    this.name = 'RoomAccessForbiddenError'
+  }
+}
+
+/**
  * Otra escritura modifico la sala entre la lectura y el guardado (bloqueo
  * optimista). 409: la peticion es correcta y puede reintentarse.
  */

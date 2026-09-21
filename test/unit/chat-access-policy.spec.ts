@@ -12,6 +12,7 @@ describe('ChatAccessPolicy', () => {
     it.each([
       [BattleRoomStatus.WaitingForPlayers, true],
       [BattleRoomStatus.Preparing, true],
+      [BattleRoomStatus.InBattle, true],
       [BattleRoomStatus.Cancelled, false],
     ])('%s -> chat abierto: %s', (status, open) => {
       expect(isRoomChatOpen(status)).toBe(open)

@@ -29,7 +29,9 @@ import { equippedHeroFixture } from '../fixtures/equipped-hero'
  * completo de Nest con el adaptador `ws`, clientes `ws` de verdad y las rutas
  * HTTP de salas. Es la unica prueba donde los mensajes viajan por una conexion
  * WebSocket: comprueba lo que un socket falso no puede (tramas reales, orden de
- * llegada de `auth` y `subscribe`, tamano maximo, cierre por el servidor).
+ * llegada de los mensajes seguidos, tamano maximo, cierre por el servidor).
+ * La conexion se autentica como en produccion (HU-17, ADR-020): un ticket de un
+ * solo uso pedido por HTTP con el JWT, enviado como primer mensaje.
  *
  * Persistencia en memoria: el adaptador de MongoDB lo prueba `test/db`.
  */
@@ -196,7 +198,7 @@ describe('chat de Jugar Online sobre WebSocket real (HU-13)', () => {
   ): Promise<Client> => {
     const client = await connect()
 
-    client.send({ type: 'auth', token: `token-${name}` })
+    client.send(await authMessage(name))
     client.send({ type: 'chat.subscribe', ...channel })
     await client.waitForType('chat.subscribed')
 
@@ -205,6 +207,23 @@ describe('chat de Jugar Online sobre WebSocket real (HU-13)', () => {
 
   const authed = (name: string) => (req: request.Test) =>
     req.set('Authorization', `Bearer token-${name}`)
+
+  /** Ticket de un solo uso de `name`, pedido por HTTP con su JWT (nadie lo pide para otro). */
+  const ticketFor = async (name: string): Promise<string> => {
+    const response = await authed(name)(
+      request(app.getHttpServer()).post('/api/v1/combat/realtime/tickets'),
+    )
+
+    expect(response.status).toBe(201)
+
+    return (response.body as { ticket: string }).ticket
+  }
+
+  /** Primer mensaje del socket. El ticket se pide ANTES: el envio de los mensajes sigue siendo seguido. */
+  const authMessage = async (name: string): Promise<{ type: string; ticket: string }> => ({
+    type: 'auth',
+    ticket: await ticketFor(name),
+  })
 
   const createRoomOverHttp = async (creator = 'creador'): Promise<string> => {
     const response = await authed(creator)(
@@ -275,12 +294,12 @@ describe('chat de Jugar Online sobre WebSocket real (HU-13)', () => {
     restore()
   })
 
-  describe('carrera auth + suscripcion sobre el transporte real', () => {
+  describe('mensajes seguidos sobre el transporte real', () => {
     it('auth, chat.subscribe y chat.send en el MISMO instante funcionan y llegan en orden', async () => {
       const client = await connect()
       const id = commandId()
 
-      client.send({ type: 'auth', token: 'token-ana' })
+      client.send(await authMessage('ana'))
       client.send({ type: 'chat.subscribe', channel: 'lobby' })
       client.send({ type: 'chat.send', channel: 'lobby', commandId: id, text: 'hola' })
 
@@ -295,11 +314,11 @@ describe('chat de Jugar Online sobre WebSocket real (HU-13)', () => {
       ])
     })
 
-    it('el subscribe de HU-15.2 (battle-room.updated) tambien sobrevive a ir pegado al auth', async () => {
+    it('el subscribe de HU-15.2 (battle-room.updated) tambien funciona pegado al auth', async () => {
       const roomId = await createRoomOverHttp()
       const client = await connect()
 
-      client.send({ type: 'auth', token: 'token-ana' })
+      client.send(await authMessage('ana'))
       client.send({ type: 'subscribe', roomId })
 
       await client.waitForType('subscribe.ok')
@@ -319,10 +338,38 @@ describe('chat de Jugar Online sobre WebSocket real (HU-13)', () => {
       expect(client.closed?.code).toBe(4401)
     })
 
-    it('un token invalido cierra con 4401 y no llega a suscribirse', async () => {
+    it('el esquema anterior (JWT en el primer mensaje) ya no autentica: 4401', async () => {
       const client = await connect()
 
-      client.send({ type: 'auth', token: 'token-falso' })
+      client.send({ type: 'auth', token: 'token-ana' })
+      client.send({ type: 'chat.subscribe', channel: 'lobby' })
+      await client.waitForClose()
+
+      expect(client.closed?.code).toBe(4401)
+      expect(client.of('chat.subscribed')).toHaveLength(0)
+    })
+
+    it('un ticket ya usado no vuelve a autenticar: 4401 y no llega a suscribirse', async () => {
+      const ticket = await ticketFor('ana')
+      const first = await connect()
+
+      first.send({ type: 'auth', ticket })
+      await first.waitForType('auth.ok')
+
+      const second = await connect()
+
+      second.send({ type: 'auth', ticket })
+      second.send({ type: 'chat.subscribe', channel: 'lobby' })
+      await second.waitForClose()
+
+      expect(second.closed?.code).toBe(4401)
+      expect(second.of('chat.subscribed')).toHaveLength(0)
+    })
+
+    it('un ticket invalido cierra con 4401 y no llega a suscribirse', async () => {
+      const client = await connect()
+
+      client.send({ type: 'auth', ticket: 'ticket-inventado' })
       client.send({ type: 'chat.subscribe', channel: 'lobby' })
       await client.waitForClose()
 
@@ -419,7 +466,7 @@ describe('chat de Jugar Online sobre WebSocket real (HU-13)', () => {
       await joinOverHttp(roomId, 'ana')
       const intruso = await connect()
 
-      intruso.send({ type: 'auth', token: 'token-dora' })
+      intruso.send(await authMessage('dora'))
       intruso.send({ type: 'chat.subscribe', channel: 'room', roomId })
       await intruso.waitForType('command.rejected')
 
@@ -543,7 +590,7 @@ describe('chat de Jugar Online sobre WebSocket real (HU-13)', () => {
       await ana.waitForType('chat.accepted', 4)
 
       const second = await connect()
-      second.send({ type: 'auth', token: 'token-beto' })
+      second.send(await authMessage('beto'))
       second.send({ type: 'chat.subscribe', channel: 'lobby', lastSeq: lastSeen })
       await second.waitForType('chat.subscribed')
 
@@ -558,7 +605,7 @@ describe('chat de Jugar Online sobre WebSocket real (HU-13)', () => {
     it('un mensaje entrante de mas de 16 KiB cierra la conexion (1009)', async () => {
       const client = await connect()
 
-      client.send({ type: 'auth', token: 'token-ana' })
+      client.send(await authMessage('ana'))
       client.socket.send(
         JSON.stringify({
           type: 'chat.subscribe',

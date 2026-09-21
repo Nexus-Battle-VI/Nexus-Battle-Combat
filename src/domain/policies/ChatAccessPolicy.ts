@@ -13,13 +13,21 @@ import { BattleRoomStatus } from '../value-objects/BattleRoomStatus'
  * - solo mientras la sala esta ACTIVA.
  *
  * «Activa» se decide con una tabla EXHAUSTIVA por estado (`Record`), no con
- * «distinto de CANCELLED»: cuando HU-17 anada `IN_BATTLE` o HU-21 anada un
- * estado final, el compilador obliga a decidir aqui si su chat esta abierto.
- * Una lista de excepciones cerraria o abriria el chat en silencio.
+ * «distinto de CANCELLED»: cuando se anade un estado, el compilador obliga a
+ * decidir aqui si su chat esta abierto. Una lista de excepciones cerraria o
+ * abriria el chat en silencio. Ya funciono asi: al llegar `IN_BATTLE` (HU-17) la
+ * compilacion fallo hasta decidirlo.
+ *
+ * `IN_BATTLE` queda ABIERTO: es la sala mas activa que existe, y cerrar el chat
+ * al empezar la batalla dejaria sin sentido «chat en sala de batalla». Ningun
+ * documento lo fija (el oficial no trata el chat de sala): es una decision
+ * tecnica derivada de «sala activa», pendiente de confirmar por el PO. Cuando
+ * HU-21 anada el estado de batalla terminada, decidira ahi si su chat se cierra.
  */
 const ROOM_CHAT_OPEN: Readonly<Record<BattleRoomStatus, boolean>> = {
   [BattleRoomStatus.WaitingForPlayers]: true,
   [BattleRoomStatus.Preparing]: true,
+  [BattleRoomStatus.InBattle]: true,
   [BattleRoomStatus.Cancelled]: false,
 }
 

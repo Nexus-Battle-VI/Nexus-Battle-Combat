@@ -8,6 +8,7 @@ import { Test } from '@nestjs/testing'
 import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb'
 import request from 'supertest'
 
+import { ISSUE_REALTIME_TICKET } from '../../src/adapters/inbound/http/tokens'
 import {
   ACCOUNT_BATTLE_PROFILE,
   type AccountBattleProfilePort,
@@ -22,6 +23,7 @@ import {
   TokenVerificationError,
   type TokenVerifierPort,
 } from '../../src/application/ports/TokenVerifierPort'
+import type { IssueRealtimeTicket } from '../../src/application/use-cases/RealtimeTickets'
 import { AppModule, DATABASE } from '../../src/infrastructure/bootstrap/app.module'
 import {
   createMongoClient,
@@ -43,6 +45,11 @@ import { equippedHeroFixture } from '../fixtures/equipped-hero'
  * porque ADR-020 obliga a persistir antes de difundir. Se usa la configuracion
  * de PRODUCCION del chat (5 mensajes cada 10 s por remitente y canal) y la
  * reserva de conexiones por defecto del servicio (`maxPoolSize` 5).
+ *
+ * AUTENTICACION. Cada conexion se autentica como en produccion (HU-17, ADR-020):
+ * un ticket de un solo uso como primer mensaje. Los tickets salen del caso de uso
+ * real (`IssueRealtimeTicket`) y no de 1000 llamadas HTTP: el endpoint no es lo
+ * que se mide, y se emiten justo antes de conectar (caducan a los 30 s).
  *
  * QUE NO MIDE (declarado, no oculto):
  * - Los clientes corren en un hilo aparte del MISMO proceso y la misma maquina:
@@ -151,7 +158,7 @@ const WORKER_SOURCE = [
   '  peer.socket = socket',
   "  socket.on('error', reject)",
   "  socket.on('open', () => {",
-  "    socket.send(JSON.stringify({ type: 'auth', token: peer.spec.token }))",
+  "    socket.send(JSON.stringify({ type: 'auth', ticket: peer.spec.ticket }))",
   "    socket.send(JSON.stringify(peer.spec.roomId === null ? { type: 'chat.subscribe', channel: 'lobby' } : { type: 'chat.subscribe', channel: 'room', roomId: peer.spec.roomId }))",
   '  })',
   "  socket.on('message', (data) => {",
@@ -195,6 +202,7 @@ const WORKER_SOURCE = [
 ].join('\n')
 
 interface PeerSpec {
+  /** JWT de prueba, del que sale el `sub`. El ticket se emite en `runScenario`, justo antes de conectar. */
   readonly token: string
   readonly roomId: string | null
   /** Mensajes que debe recibir este cliente en total. */
@@ -225,13 +233,24 @@ interface WorkerResult {
 
 /** Ejecuta un escenario completo con los clientes en un hilo aparte y devuelve lo medido. */
 const runScenario = async (
-  url: string,
+  running: RunningApp,
   peers: readonly PeerSpec[],
   schedule: readonly ScheduledSend[],
 ): Promise<WorkerResult> => {
+  // Un ticket por cliente, emitido AHORA: caduca a los 30 s y solo sirve una vez.
+  // El `sub` es el que el verificador de prueba da a ese JWT (`sub-<token>`).
+  const authenticated = peers.map((peer) => ({
+    ...peer,
+    ticket: running.issueTicket.execute(`sub-${peer.token}`).ticket,
+  }))
   const worker = new Worker(WORKER_SOURCE, {
     eval: true,
-    workerData: { url, peers, schedule, wsPath: require.resolve('ws') },
+    workerData: {
+      url: running.url,
+      peers: authenticated,
+      schedule,
+      wsPath: require.resolve('ws'),
+    },
   })
 
   return new Promise<WorkerResult>((resolve, reject) => {
@@ -249,6 +268,7 @@ const runScenario = async (
 
 interface RunningApp {
   readonly app: INestApplication
+  readonly issueTicket: IssueRealtimeTicket
   readonly url: string
   readonly baseUrl: string
 }
@@ -305,6 +325,7 @@ describe('latencia del chat (HU-13) sobre conexiones WebSocket reales y MongoDB 
 
     return {
       app,
+      issueTicket: moduleRef.get<IssueRealtimeTicket>(ISSUE_REALTIME_TICKET, { strict: false }),
       baseUrl: `http://127.0.0.1:${String(address.port)}`,
       url: `ws://127.0.0.1:${String(address.port)}/api/v1/combat/realtime`,
     }
@@ -441,7 +462,7 @@ describe('latencia del chat (HU-13) sobre conexiones WebSocket reales y MongoDB 
         text: `mensaje ${String(i)}`,
       }))
 
-      const result = await runScenario(running.url, specs, schedule)
+      const result = await runScenario(running, specs, schedule)
       const pair = summarize(
         `Lobby: ${String(connections)} conexiones, ${String(MESSAGES)} mensajes${assertTarget ? '' : ' (limite observado)'}`,
         result,
@@ -475,7 +496,7 @@ describe('latencia del chat (HU-13) sobre conexiones WebSocket reales y MongoDB 
         })),
       )
 
-      const result = await runScenario(running.url, specs, schedule)
+      const result = await runScenario(running, specs, schedule)
       const pair = summarize(
         `Salas, FLUJO SOSTENIDO: ${String(ROOMS)} salas x 4 jugadores, ${String(PLAYERS * PER_PLAYER)} mensajes (~80 msg/s), reserva Mongo 5`,
         result,
@@ -506,7 +527,7 @@ describe('latencia del chat (HU-13) sobre conexiones WebSocket reales y MongoDB 
             }
           }
 
-          const result = await runScenario(running.url, specs, schedule)
+          const result = await runScenario(running, specs, schedule)
           const pair = summarize(
             `Salas, RAFAGA SINCRONIZADA: ${String(PLAYERS * PER_PLAYER)} mensajes en ~0,4 s (~2000 msg/s), reserva Mongo ${String(poolSize)}`,
             result,

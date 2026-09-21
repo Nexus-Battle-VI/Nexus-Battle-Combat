@@ -3,7 +3,8 @@
 - **Historia:** [HU-13 #22](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/22) · **RF-13** · [EPIC-06 #6](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/6) · Team Alfa · milestone «M2 – Sprint 2 Review» (vence el 2026-09-27).
 - **Arquitectura aplicada, sin reabrirla:** [ADR-019](https://github.com/Nexus-Battle-VI/Nexus-Battle-Infrastructure/blob/develop/docs/adr/ADR-019-sprint-2-bounded-contexts.md) (Combat posee los mensajes de chat) y [ADR-020](https://github.com/Nexus-Battle-VI/Nexus-Battle-Infrastructure/blob/develop/docs/adr/ADR-020-realtime-combat.md) (`Accepted`: WebSocket nativo, `commandId`, `seq`). **No hay ADR nuevo.**
 - **Contrato del protocolo:** [`docs/contracts/hu-13-chat-v1.md`](https://github.com/Nexus-Battle-VI/Nexus-Battle-Infrastructure/blob/develop/docs/contracts/hu-13-chat-v1.md) en Infrastructure (si aún no está en `develop`, está en su PR de documentación).
-- **Estado:** implementado en Combat, **sin caller de producción propio**: los clientes son Web (PR aparte) y cualquier cliente WebSocket autenticado. **No está desplegado**: `main` de Combat va por detrás de `develop` y el chat exige `npm run migrate` (migración `005`) al desplegar.
+- **Estado:** implementado en Combat, **sin caller de producción propio**: los clientes son Web (PR aparte) y cualquier cliente WebSocket autenticado. **No está desplegado**: `main` de Combat va por detrás de `develop` y el chat exige `npm run migrate` (migración `006`, que va después de la `005` de HU-17) al desplegar.
+- **Integrado con HU-17 el 2026-09-21.** Este trabajo se abrió antes de que HU-17 llegara a `develop`; al integrarlo (merge de `develop` en la rama) hubo que adaptar el chat a lo que HU-17 cambió: la autenticación por ticket, el latido, la migración (renumerada a `006`) y el estado `IN_BATTLE`. Ver «Relación con HU-17».
 
 ## Qué exige la Historia y de dónde sale
 
@@ -32,11 +33,13 @@
 | Moderación                | Fuera de HU-13 (§7.3.3 habla de comentarios, no del chat de juego); se conserva el remitente en el servidor para no cerrar esa puerta | —                                         |
 | Persistencia              | Se persiste con caducidad configurable                                                                                                | `CHAT_RETENTION_HOURS`                    |
 
-**Sin ninguna fuente, elegido por quien implementó** (el PO debe fijarlo o confirmarlo): **retención de 7 días** (`CHAT_RETENTION_HOURS=168`); historial de 50 mensajes al suscribirse (`CHAT_HISTORY_LIMIT`); umbral de consumidor lento de 1 MiB; 64 mensajes en cola por conexión; formato exacto de los mensajes y códigos de rechazo.
+**Sin ninguna fuente, elegido por quien implementó** (el PO debe fijarlo o confirmarlo): **retención de 7 días** (`CHAT_RETENTION_HOURS=168`); historial de 50 mensajes al suscribirse (`CHAT_HISTORY_LIMIT`); umbral de consumidor lento de 1 MiB; 64 comandos de chat en cola por conexión; formato exacto de los mensajes y códigos de rechazo; **chat abierto también durante la batalla (`IN_BATTLE`)**, derivado de «sala activa» (ningún documento trata el chat de sala en batalla; el estado de batalla terminada lo decidirá HU-21).
 
 ## Protocolo
 
-Sobre el WebSocket existente (`/api/v1/combat/realtime`). La autenticación es la de HU-15.2 (`{"type":"auth","token"}`); el chat solo usa el `sub` de la conexión, así que hereda el ticket de un solo uso cuando HU-17 lo implemente. Todos los mensajes son JSON. **Ningún mensaje puede declarar otro jugador**: la identidad es el `sub` verificado.
+Sobre el WebSocket existente (`/api/v1/combat/realtime`). La autenticación es la de HU-17 (ADR-020): el cliente pide un **ticket de un solo uso** por HTTP (`POST /api/v1/combat/realtime/tickets`, con su JWT; responde `{ticket, expiresInSeconds: 30}`) y lo envía como **primer mensaje**, `{"type":"auth","ticket"}`; el servidor responde `auth.ok`. El JWT no viaja por el socket ni por la URL. El chat solo usa el `sub` del ticket. Todos los mensajes son JSON. **Ningún mensaje puede declarar otro jugador**: la identidad es el `sub` del ticket.
+
+Los comandos de chat de una conexión se atienden **de uno en uno y en el orden en que llegaron**: `chat.subscribe` lee la sala y el historial (es asíncrono), y un cliente que envía `chat.subscribe` y `chat.send` seguidos espera que el segundo vea la suscripción del primero. La cola es solo de chat; `auth`, `subscribe` y `resume` de HU-17 no pasan por ella.
 
 ### Cliente → servidor
 
@@ -71,13 +74,13 @@ El cliente aplica solo `seq` mayor que el último aplicado; uno repetido o anter
 
 | Regla del issue                                             | Mecanismo                                                                                                                                                                                  | Pruebas principales                                                                                        |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| Chat disponible en el lobby y en la sala activa             | Dos canales (`lobby`, `room:<uuid>`); tabla exhaustiva `isRoomChatOpen` por estado                                                                                                         | `chat-access-policy`, `authorize-chat-channel`, `chat-realtime` (lobby y sala)                             |
+| Chat disponible en el lobby y en la sala activa             | Dos canales (`lobby`, `room:<uuid>`); tabla exhaustiva `isRoomChatOpen` por estado: abierto en `WAITING_FOR_PLAYERS`, `PREPARING` e `IN_BATTLE`, cerrado en `CANCELLED`                                                                                                         | `chat-access-policy`, `authorize-chat-channel`, `chat-realtime` (lobby y sala)                             |
 | Enviar mensajes de texto desde el contexto en que se está   | `chat.send` al canal al que la conexión está suscrita (`NOT_SUBSCRIBED` si no)                                                                                                             | `send-chat-message`, `chat-realtime-handler`                                                               |
 | Mensajes del lobby a los participantes de ese lobby         | Difusión solo a los suscritos a `lobby`                                                                                                                                                    | `chat-realtime-handler` (CA-01), `chat-realtime` (CA-01: lobby)                                            |
 | Mensajes de una sala activa a los participantes de esa sala | Acceso solo a participantes HUMANOS, comprobado contra la sala **persistida** al suscribirse, al enviar y en cada actualización de la sala                                                 | `authorize-chat-channel`, `chat-realtime` (CA-01: sala, abandonar, cancelar)                               |
 | Entrega en tiempo real por el mecanismo de la arquitectura  | WebSocket nativo de ADR-020, dentro del gateway existente                                                                                                                                  | `chat-realtime` (transporte `ws` real)                                                                     |
 | Los mensajes de una sala no llegan a otra                   | La clave del canal indexa las suscripciones: difundir recorre SOLO los suscriptores de esa clave                                                                                           | `chat-realtime-handler` (aislamiento), `chat-realtime` (2 salas + lobby), latencia (40 salas)              |
-| Operar sobre el canal WebSocket definido para el sistema    | El chat vive en el gateway de HU-15.2 (una ruta, un gateway) y hereda su autenticación                                                                                                     | `chat-gateway`, `chat-realtime`                                                                            |
+| Operar sobre el canal WebSocket definido para el sistema    | El chat vive en el gateway (una ruta, un gateway) y usa la autenticación por ticket de HU-17                                                                                                     | `chat-gateway`, `chat-realtime`                                                                            |
 | Un mensaje se procesa una sola vez; sin duplicados visibles | Índice único (`senderId`, `commandId`); el reintento devuelve `chat.accepted` con el mismo `seq` y **no se difunde de nuevo**; el cliente ignora `seq` repetido                            | `send-chat-message`, `chat-realtime-handler`, `mongo-chat-message-repository`, `chat-realtime`             |
 | Un mensaje aceptado no se pierde                            | Persistir **antes** de difundir; `seq` por canal; recuperación con `lastSeq`; cerrojo por canal (una suscripción no se intercala con una difusión); consumidor lento cerrado y recuperable | `chat-realtime-handler` (orden, persistir→difundir, suscripción concurrente), `chat-realtime` (reconexión) |
 | Aislamiento entre contextos                                 | Lo anterior + un jugador no puede escribir en un canal al que no está suscrito                                                                                                             | `chat-realtime-handler`                                                                                    |
@@ -87,7 +90,7 @@ El cliente aplica solo `seq` mayor que el último aplicado; uno repetido o anter
 
 ## Persistencia
 
-Migración `005-chat-messages` (aditiva; `battle-rooms` no se toca), con validadores `$jsonSchema` (`additionalProperties: false`):
+Migración `006-chat-messages` (aditiva; `battle-rooms` no se toca; la `005` es la de HU-17), con validadores `$jsonSchema` (`additionalProperties: false`):
 
 - **`chat-messages`**: un documento por mensaje aceptado. Índices: (`channelKey`, `seq`) **único**; (`senderId`, `commandId`) **único** (idempotencia); `expiresAt` **TTL** con `expireAfterSeconds: 0`. El instante de caducidad lo fija cada mensaje al crearse a partir de `CHAT_RETENTION_HOURS`, así que cambiar la retención no exige tocar el índice. El TTL de MongoDB purga con retraso (su monitor corre cada minuto): la lectura filtra `expiresAt > now` y no espera a la purga.
 - **`chat-channels`**: contador de `seq` por canal. Aparte porque la purga de mensajes no debe reiniciar la numeración (un cliente que recuerda `lastSeq = 200` no puede encontrarse con un canal que vuelve a empezar en 1).
@@ -96,30 +99,38 @@ Migración `005-chat-messages` (aditiva; `battle-rooms` no se toca), con validad
 
 **El nodo de datos no es un replica set**, así que no hay transacciones: la idempotencia descansa en el índice único, no en «leer y luego escribir».
 
-## Dos defectos heredados que había que corregir
+## Dos defectos de HU-15.2 hallados al empezar (y qué quedó tras integrar HU-17)
 
-Ambos afectan a **HU-15.2** (lo entregado antes de esta Historia) y ambos dejan sin funcionar cualquier cosa que viaje por el WebSocket, chat incluido. Los encontró la primera prueba con el transporte real (`test/integration/chat-realtime.spec.ts`); ninguna prueba anterior usaba un socket de verdad.
+Los encontró la primera prueba con el transporte real (`test/integration/chat-realtime.spec.ts`); ninguna prueba anterior usaba un socket de verdad. Ambos dejaban sin funcionar todo lo que viajara por el WebSocket, chat incluido.
 
-1. **El gateway nunca se registraba.** `app.module.ts` lo creaba con `useFactory`, y `@nestjs/websockets` **ignora los proveedores de fábrica** al buscar gateways (`socket-module.js` filtra `isNotMetatype`). Resultado: `/api/v1/combat/realtime` respondía **404** a la actualización a WebSocket. Corrección: proveedor de clase con `@Inject` (`adapters/inbound/ws/tokens.ts`). **Control:** con el registro antiguo, las 17 pruebas de transporte fallan con 404. Consecuencia en las pruebas: las cuatro suites que arrancan `AppModule` necesitan `app.useWebSocketAdapter(new WsAdapter(app))`, como ya hace `main.ts`.
-2. **Carrera entre `auth` y el mensaje siguiente.** El gateway atendía cada mensaje sin esperar al anterior; un cliente que enviaba `auth` y `subscribe` seguidos —lo que hace `useBattleRoomRealtime` en Web— recibía `4401 no_autenticado`, porque `subscribe` se comprobaba antes de que terminara la verificación asíncrona del token. Medido contra el gateway de `develop` compilado y un cliente `ws` real: cierre con `auth` y `subscribe` seguidos (con verificador instantáneo y con uno lento); funcionaba con 100 ms de separación. Corrección: cola secuencial por conexión (`SerialQueue`).
+1. **El gateway nunca se registraba.** `app.module.ts` lo creaba con `useFactory`, y `@nestjs/websockets` **ignora los proveedores de fábrica** al buscar gateways (`socket-module.js` filtra `isNotMetatype`). Resultado: `/api/v1/combat/realtime` respondía **404** a la actualización a WebSocket. **HU-17 lo encontró por su cuenta y lo corrigió igual** (proveedor de clase con `@Inject`) en su PR #26, que llegó a `develop` antes; al integrar no hubo nada que reconciliar salvo retirar mi versión duplicada. **Control que sigue vigente:** con el registro por fábrica, las 19 pruebas de transporte de chat fallan con 404 (mutación M45). Consecuencia en las pruebas: las suites que arrancan `AppModule` necesitan `app.useWebSocketAdapter(new WsAdapter(app))`, como ya hace `main.ts` (HU-17 lo añadió también).
+2. **Carrera entre `auth` y el mensaje siguiente.** Con la autenticación por JWT en el primer mensaje, la verificación del token era asíncrona y el gateway atendía cada mensaje sin esperar al anterior: un cliente que enviaba `auth` y `subscribe` seguidos recibía `4401 no_autenticado`. Lo medí contra el gateway de `develop` de entonces, compilado, con un cliente `ws` real (cierre con `auth` y `subscribe` seguidos; funcionaba con 100 ms de separación). **HU-17 lo elimina de raíz:** consumir el ticket es **síncrono**, así que `auth` deja la identidad fijada antes de que llegue el mensaje siguiente. Mi cola por conexión ya no hace falta para la autenticación; se conservó **solo para los comandos de chat**, donde el orden sigue importando (`chat.subscribe` es asíncrono). Sobre el código integrado se comprobó con un cliente `ws` real que `auth`, `chat.subscribe` y `chat.send` enviados en el mismo instante funcionan y llegan en orden; el control (mutación M39) es quitar esa cola.
 
-**Lo que no se comprobó:** ninguno de los dos defectos se probó contra un Combat desplegado (el gateway ni siquiera está en `main`) ni en un navegador real.
+**Lo que no se comprobó:** ninguna de estas cosas se probó contra un Combat desplegado ni en un navegador real.
 
 ## Relación con HU-17
 
-El contrato de HU-17 (Infrastructure #116) define el ticket de un solo uso, `seq` por sala, `resume`, `commandId` y el latido, y retira la autenticación con JWT en el primer mensaje. HU-13 **no implementa el ticket**: el chat solo usa el `sub` de la conexión y hereda el cambio sin tocar nada. Solapes que quien aterrice segundo debe conciliar:
+HU-17 (PR #26, ya en `develop`) implementó el ticket de un solo uso, `seq` por sala, `resume`, la orden de turnos y el latido, y retiró la autenticación con JWT en el primer mensaje. **Antes de integrar** este trabajo había un solape declarado en el contrato (`docs/contracts/hu-13-chat-v1.md`, §7); así se resolvió al integrar:
 
-- **Latido (ADR-020, 25 s).** HU-13 lo implementa (sin él, una conexión a medio abrir sigue «suscrita» y el chat le difunde a un socket muerto). El contrato de HU-17 también lo asigna a HU-17.2: debe quedar **una** implementación.
-- **Un solo gateway por ruta.** El chat es un manejador dentro de `BattleRoomRealtimeGateway`; HU-17.2 debe enrutar sus mensajes por el mismo sitio.
-- **`seq`.** El de chat es por canal y separado del de batalla.
+| Punto | Resolución |
+| ----- | ---------- |
+| Autenticación | Es la de HU-17 (ticket). El chat solo usa el `sub` del ticket; se eliminó el manejo de JWT en el socket que yo había heredado de HU-15.2. |
+| Latido (ADR-020, 25 s) | **Es el de HU-17** (por conexión, con `terminate()`). Retiré el mío: debía quedar **una** implementación. Sigue protegido por su spec y por una prueba mía que comprueba que una conexión cortada por el latido se da de baja del chat. |
+| `maxPayload` de 16 KiB | El de HU-17 (misma opción, mismo valor). |
+| Un solo gateway por ruta | El chat es un manejador dentro de `BattleRoomRealtimeGateway`; sus mensajes `chat.*` se enrutan ahí. |
+| `seq` | El de chat es **por canal** y no comparte numeración con el de batalla. |
+| Migración | La de HU-17 es `005-battle-rooms-battle-state`; la del chat pasó a `006-chat-messages`. Ambas eran «la 005». El registro (`_migrations`) identifica cada migración por su **nombre completo**, así que con nombres distintos se habrían aplicado igual en el orden de la lista de `database.ts`; se renumeró para conservar una secuencia única y evitar la confusión de dos «005». |
+| Estados de sala | HU-17 añadió `IN_BATTLE`. La tabla exhaustiva de `ChatAccessPolicy` **impidió compilar** hasta decidirlo: queda abierto (ver «Clasificación»). |
+
+**Lo que sigue pendiente de coordinar con quien lleva HU-17:** (a) `docs/contracts/hu-13-chat-v1.md` en Infrastructure describe todavía la autenticación con JWT en el primer mensaje; hay que alinearlo con el ticket (PR de documentación aparte); (b) HU-21 (fin de batalla) añadirá un estado final y decidirá si su chat se cierra; (c) HU-18/HU-19 añadirán comandos de combate por este mismo gateway y por la misma vía de enrutado.
 
 ## Seguridad y privacidad
 
-- Identidad = `sub` verificado; el cliente no elige remitente, sala ni nombre. El nombre visible sale del snapshot de la sala (si el participante lo tiene) o de Account, una vez por conexión.
+- Identidad = `sub` del ticket (emitido por HTTP tras verificar el JWT); el cliente no elige remitente, sala ni nombre. El nombre visible sale del snapshot de la sala (si el participante lo tiene) o de Account, una vez por conexión.
 - El `sub` no viaja a otros clientes. **El texto del mensaje no se registra** en los logs (solo canal, código y `commandId`).
 - El texto se guarda y se envía **tal cual**; no se escapa HTML. Web debe pintarlo como texto, nunca como HTML.
 - **Persistir mensajes asociados a un `sub` crea una categoría de dato nueva** que EN-011 no clasificó: su pendiente P2 pregunta si el chat entra en la exportación y en la eliminación de cuenta (HU-43). Esta Historia **no lo resuelve**: los mensajes caducan solos, pero mientras existen están asociados al remitente. Decisión del PO pendiente.
-- Sin moderación en esta Historia: un jugador con un testimonio aún válido puede escribir hasta que expire, aunque su cuenta esté sancionada (HU-42).
+- Sin moderación en esta Historia: un jugador con un testimonio aún válido puede pedir un ticket, conectarse y escribir hasta que expire el testimonio, aunque su cuenta esté sancionada (HU-42).
 
 ## Rendimiento (p95 < 500 ms)
 
@@ -175,4 +186,4 @@ Todo ejecutado en local con el código de este PR:
 - **Sin moderación ni reportes.**
 - **La frecuencia se consume en `prepare`:** si la escritura falla después, el remitente ya gastó un hueco. Es inocuo (el reintento con el mismo `commandId` no cuenta si ya se aceptó) y se prefiere a cobrar el hueco después de persistir, que permitiría una ráfaga concurrente por encima del límite.
 - **Un jugador sin cuenta en Account** no puede escribir en el lobby (no hay nombre visible que mostrar) y recibe `ACCOUNT_PROFILE_NOT_FOUND`.
-- **Despliegue.** No está en `main`; requiere `npm run migrate` (migración `005`) y promover `develop` a `main`. Combat corre con una sola identidad de AWS y sin cambios de infraestructura: Caddy ya enruta `/api/v1/combat*` al servicio.
+- **Despliegue.** No está en `main`; requiere `npm run migrate` (migración `006`) y promover `develop` a `main`. El almacén de tickets de HU-17 también vive en la memoria del proceso: una réplica (ADR-020). Combat corre con una sola identidad de AWS y sin cambios de infraestructura: Caddy ya enruta `/api/v1/combat*` al servicio.

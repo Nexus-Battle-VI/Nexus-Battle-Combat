@@ -1,12 +1,19 @@
 import 'reflect-metadata'
 
-import { BattleRoomRealtimeGateway } from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
-import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
 import {
-  TokenVerificationError,
-  type TokenVerifierPort,
-  type VerifiedIdentity,
-} from '../../src/application/ports/TokenVerifierPort'
+  BattleRoomRealtimeGateway,
+  type RealtimeGatewayOptions,
+} from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
+import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
+import type { RealtimeSocket } from '../../src/adapters/inbound/ws/RealtimeSocket'
+import { InMemoryRealtimeTicketStore } from '../../src/adapters/outbound/realtime/InMemoryRealtimeTicketStore'
+import type { ClockPort } from '../../src/application/ports/ClockPort'
+import type { RealtimeTicketCodecPort } from '../../src/application/ports/RealtimeTicketPort'
+import {
+  ConsumeRealtimeTicket,
+  IssueRealtimeTicket,
+} from '../../src/application/use-cases/RealtimeTickets'
+import { ResumeBattle } from '../../src/application/use-cases/ResumeBattle'
 import {
   buildChatHarness,
   createRoom,
@@ -18,26 +25,23 @@ import {
 import { FakeSocket, flush } from '../fixtures/fake-socket'
 
 /**
- * El gateway con el chat (HU-13). Integra: autenticacion, cola secuencial por
- * conexion, enrutado de `chat.*`, expulsion al cambiar la sala y latido.
+ * El chat dentro del gateway (HU-13). El gateway y su autenticacion por ticket
+ * son de HU-17 (`battle-room-realtime.gateway.spec.ts`); aqui se prueba lo que
+ * el chat anade: el enrutado de `chat.*`, el orden de los comandos de una
+ * conexion, la baja al desconectar y la reaccion a los cambios de la sala.
  */
-const IDENTITY: VerifiedIdentity = { subject: 'ana', email: null, roles: new Set() }
+const ticketing = (clock: ClockPort) => {
+  const store = new InMemoryRealtimeTicketStore()
+  let counter = 0
+  const codec: RealtimeTicketCodecPort = {
+    generate: () => `ticket-${String((counter += 1))}`,
+    hash: (ticket) => `h:${ticket}`,
+  }
 
-/** Verificador que tarda una macrotarea, como la primera descarga del JWKS de Cognito. */
-const slowVerifier: TokenVerifierPort = {
-  verify: (token: string): Promise<VerifiedIdentity> =>
-    token === 'ok'
-      ? new Promise((resolve) => {
-          setTimeout(() => {
-            resolve(IDENTITY)
-          }, 20)
-        })
-      : Promise.reject(new TokenVerificationError()),
-}
-
-const instantVerifier: TokenVerifierPort = {
-  verify: (token: string): Promise<VerifiedIdentity> =>
-    token === 'ok' ? Promise.resolve(IDENTITY) : Promise.reject(new TokenVerificationError()),
+  return {
+    consume: new ConsumeRealtimeTicket(codec, store, clock),
+    issue: new IssueRealtimeTicket(codec, store, clock),
+  }
 }
 
 describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
@@ -50,42 +54,56 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
     return uuid(80_000 + cmd)
   }
 
-  const build = (verifier: TokenVerifierPort = instantVerifier) => {
+  const build = (chat?: ChatRealtimeHandler, options?: RealtimeGatewayOptions) => {
     const harness = buildChatHarness()
     const { logger, logs } = recordingLogger()
-    const gateway = new BattleRoomRealtimeGateway(verifier, harness.rooms, logger, harness.handler)
+    const { consume, issue } = ticketing(harness.clock)
+    const gateway = new BattleRoomRealtimeGateway(
+      consume,
+      harness.rooms,
+      new ResumeBattle(harness.rooms),
+      logger,
+      chat ?? harness.handler,
+      options,
+    )
 
-    return { harness, gateway, logs }
+    /** Conecta y se autentica con un ticket real del almacen (consumirlo es sincrono). */
+    const connect = (subject = 'ana'): FakeSocket => {
+      const socket = new FakeSocket()
+
+      gateway.handleConnection(socket)
+      socket.emit({ type: 'auth', ticket: issue.execute(subject).ticket })
+
+      return socket
+    }
+
+    return { harness, gateway, logs, connect }
   }
 
-  describe('carrera auth + subscribe (defecto medido en develop)', () => {
-    it.each([
-      ['verificador instantaneo (JWKS ya en cache)', instantVerifier],
-      ['verificador lento (primera descarga del JWKS)', slowVerifier],
-    ])('auth y subscribe enviados SEGUIDOS: subscribe funciona - %s', async (_label, verifier) => {
-      const { harness, gateway } = build(verifier)
-      await createRoom(harness.rooms, ROOM, 'creador')
-      const socket = new FakeSocket()
+  /** Doble del manejador de chat: registra cada comando y lo resuelve como indique `outcome`. */
+  const recordingChat = (outcome: (subject: string, count: number) => Promise<void>) => {
+    const handled: { client: RealtimeSocket; subject: string; type: unknown }[] = []
+    const chat = {
+      handle: (client: RealtimeSocket, subject: string, message: Record<string, unknown>) => {
+        handled.push({ client, subject, type: message.type })
 
-      gateway.handleConnection(socket)
-      socket.emit({ type: 'auth', token: 'ok' })
-      socket.emit({ type: 'subscribe', roomId: ROOM })
-      await new Promise((resolve) => setTimeout(resolve, 60))
+        return outcome(subject, handled.length)
+      },
+      onDisconnect: () => undefined,
+      onRoomUpdated: () => Promise.resolve(),
+    } as unknown as ChatRealtimeHandler
 
-      expect(socket.closeCalls).toEqual([])
-      expect(socket.frames().map((f) => f.type)).toEqual(['auth.ok', 'subscribe.ok'])
-    })
+    return { chat, handled }
+  }
 
-    it('auth + chat.subscribe + chat.send seguidos se atienden EN ORDEN', async () => {
-      const { gateway } = build(slowVerifier)
-      const socket = new FakeSocket()
-      const id = commandId()
+  describe('orden de los comandos de chat de una conexion', () => {
+    it('auth, chat.subscribe y chat.send emitidos en el MISMO instante se atienden EN ORDEN', async () => {
+      const { connect } = build()
+      const socket = connect()
 
-      gateway.handleConnection(socket)
-      socket.emit({ type: 'auth', token: 'ok' })
       socket.emit({ type: 'chat.subscribe', ...lobby })
-      socket.emit({ type: 'chat.send', ...lobby, commandId: id, text: 'hola' })
-      await new Promise((resolve) => setTimeout(resolve, 80))
+      socket.emit({ type: 'chat.send', ...lobby, commandId: commandId(), text: 'hola' })
+      await flush()
 
       expect(socket.closeCalls).toEqual([])
       expect(socket.frames().map((f) => f.type)).toEqual([
@@ -96,20 +114,86 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
       ])
     })
 
-    it('conexiones distintas no se esperan entre si', async () => {
-      const { gateway } = build(slowVerifier)
-      const slow = new FakeSocket()
-      const fast = new FakeSocket()
+    it('el comando siguiente espera a que termine el anterior de la MISMA conexion', async () => {
+      let release: () => void = () => undefined
+      const { chat, handled } = recordingChat((_subject, count) =>
+        count === 1
+          ? new Promise<void>((resolve) => {
+              release = resolve
+            })
+          : Promise.resolve(),
+      )
+      const { connect } = build(chat)
+      const socket = connect()
 
-      gateway.handleConnection(slow)
-      slow.emit({ type: 'auth', token: 'ok' })
-      gateway.handleConnection(fast)
-      fast.emit({ type: 'auth', token: 'malo' })
+      socket.emit({ type: 'chat.subscribe', ...lobby })
+      socket.emit({ type: 'chat.send', ...lobby, commandId: commandId(), text: 'hola' })
       await flush()
 
-      // La rapida ya fue rechazada aunque la lenta siga verificando.
-      expect(fast.closeCalls[0]?.code).toBe(4401)
-      expect(slow.closeCalls).toEqual([])
+      expect(handled.map((h) => h.type)).toEqual(['chat.subscribe'])
+
+      release()
+      await flush()
+
+      expect(handled.map((h) => h.type)).toEqual(['chat.subscribe', 'chat.send'])
+    })
+
+    it('conexiones distintas NO se esperan entre si', async () => {
+      const { chat, handled } = recordingChat((subject) =>
+        subject === 'ana' ? new Promise<void>(() => undefined) : Promise.resolve(),
+      )
+      const { connect } = build(chat)
+      const stuck = connect('ana')
+      const free = connect('beto')
+
+      stuck.emit({ type: 'chat.subscribe', ...lobby })
+      stuck.emit({ type: 'chat.send', ...lobby, commandId: commandId(), text: 'espera' })
+      free.emit({ type: 'chat.subscribe', ...lobby })
+      await flush()
+
+      expect(handled.filter((h) => h.client === free)).toHaveLength(1)
+      expect(handled.filter((h) => h.client === stuck)).toHaveLength(1)
+    })
+
+    it('un comando que falla se registra y NO detiene los siguientes de la conexion', async () => {
+      const { chat, handled } = recordingChat((_subject, count) =>
+        count === 1 ? Promise.reject(new Error('base caida')) : Promise.resolve(),
+      )
+      const { connect, logs } = build(chat)
+      const socket = connect()
+
+      socket.emit({ type: 'chat.subscribe', ...lobby })
+      socket.emit({ type: 'chat.send', ...lobby, commandId: commandId(), text: 'sigue' })
+      await flush()
+
+      expect(handled.map((h) => h.type)).toEqual(['chat.subscribe', 'chat.send'])
+      expect(logs.some((l) => l.message === 'realtime_chat_fallo')).toBe(true)
+    })
+  })
+
+  describe('identidad', () => {
+    it('el remitente es el `sub` del ticket: ningun campo del mensaje lo cambia', async () => {
+      const { connect, harness } = build()
+      const socket = connect('ana')
+
+      socket.emit({ type: 'chat.subscribe', ...lobby })
+      socket.emit({
+        type: 'chat.send',
+        ...lobby,
+        commandId: commandId(),
+        text: 'soy ana',
+        senderId: 'intruso',
+        sub: 'intruso',
+        subject: 'intruso',
+        playerId: 'intruso',
+      })
+      await flush()
+
+      expect(harness.accountCalls).toEqual(['ana'])
+      expect(socket.framesOfType('chat.message')[0]).toMatchObject({
+        sender: { displayName: 'nombre-de-ana' },
+        text: 'soy ana',
+      })
     })
   })
 
@@ -130,23 +214,21 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
     )
 
     it('un chat.* que no existe cierra con 4400', async () => {
-      const { gateway } = build()
-      const socket = new FakeSocket()
+      const { connect } = build()
+      const socket = connect()
 
-      gateway.handleConnection(socket)
-      socket.emit({ type: 'auth', token: 'ok' })
       socket.emit({ type: 'chat.editar', ...lobby })
       await flush()
 
       expect(socket.closeCalls[0]).toEqual({ code: 4400, reason: 'tipo_no_reconocido' })
     })
 
-    it('un token invalido cierra con 4401 y los mensajes en cola no se atienden', async () => {
+    it('un ticket invalido cierra con 4401 y el chat.subscribe que le sigue no se atiende', async () => {
       const { harness, gateway } = build()
       const socket = new FakeSocket()
 
       gateway.handleConnection(socket)
-      socket.emit({ type: 'auth', token: 'malo' })
+      socket.emit({ type: 'auth', ticket: 'inventado' })
       socket.emit({ type: 'chat.subscribe', ...lobby })
       await flush()
 
@@ -155,17 +237,14 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
     })
   })
 
-  describe('limite de mensajes en espera por conexion', () => {
-    it('frontera: 64 en espera se aceptan y el 65 cierra con 1008', () => {
-      // La verificacion nunca termina: `auth` ocupa la cola y todo lo demas espera.
-      const stuck: TokenVerifierPort = { verify: () => new Promise(() => undefined) }
-      const { gateway } = build(stuck)
-      const socket = new FakeSocket()
+  describe('limite de comandos de chat en espera por conexion', () => {
+    it('frontera: 1 en curso + 64 en espera se aceptan y el siguiente cierra con 1008', () => {
+      const { chat } = recordingChat(() => new Promise<void>(() => undefined))
+      const { connect } = build(chat)
+      const socket = connect()
 
-      gateway.handleConnection(socket)
-      socket.emit({ type: 'auth', token: 'ok' })
-
-      for (let i = 0; i < 64; i += 1) {
+      // El primero empieza a atenderse (no cuenta como «en espera»): y se quedan 64 detras.
+      for (let i = 0; i < 65; i += 1) {
         socket.emit({ type: 'chat.subscribe', ...lobby })
       }
 
@@ -179,14 +258,12 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
 
   describe('el chat reacciona a los cambios de la sala', () => {
     it('notifyRoomUpdated expulsa del chat a quien salio de la sala', async () => {
-      const { harness, gateway } = build()
+      const { harness, connect, gateway } = build()
       await createRoom(harness.rooms, ROOM, 'creador')
       await joinRoom(harness.rooms, ROOM, 'ana', 'Ana')
       await joinRoom(harness.rooms, ROOM, 'beto', 'Beto')
-      const socket = new FakeSocket()
+      const socket = connect('ana')
 
-      gateway.handleConnection(socket)
-      socket.emit({ type: 'auth', token: 'ok' })
       socket.emit({ type: 'chat.subscribe', channel: 'room', roomId: ROOM })
       await flush()
       expect(harness.handler.subscriberCount(`room:${ROOM}`)).toBe(1)
@@ -202,19 +279,12 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
     })
 
     it('un fallo del chat al revalidar se registra y NO rompe notifyRoomUpdated', async () => {
-      const { logger, logs } = recordingLogger()
-      const harness = buildChatHarness()
       const failingChat = {
         onRoomUpdated: () => Promise.reject(new Error('base caida')),
         onDisconnect: () => undefined,
         handle: () => Promise.resolve(),
       } as unknown as ChatRealtimeHandler
-      const gateway = new BattleRoomRealtimeGateway(
-        instantVerifier,
-        harness.rooms,
-        logger,
-        failingChat,
-      )
+      const { gateway, logs } = build(failingChat)
 
       expect(() => {
         gateway.notifyRoomUpdated({ roomId: ROOM, status: 'PREPARING', version: 2 })
@@ -225,11 +295,9 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
     })
 
     it('al cerrarse la conexion el chat la da de baja', async () => {
-      const { harness, gateway } = build()
-      const socket = new FakeSocket()
+      const { harness, connect } = build()
+      const socket = connect()
 
-      gateway.handleConnection(socket)
-      socket.emit({ type: 'auth', token: 'ok' })
       socket.emit({ type: 'chat.subscribe', ...lobby })
       await flush()
       expect(harness.handler.subscriberCount('lobby')).toBe(1)
@@ -238,178 +306,20 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
 
       expect(harness.handler.subscriberCount('lobby')).toBe(0)
     })
-  })
 
-  describe('latido (ADR-020: ping cada 25 s, cierre si no hay pong)', () => {
-    beforeEach(() => {
-      jest.useFakeTimers()
-    })
+    it('una conexion cortada por el latido de HU-17 tambien se da de baja del chat', async () => {
+      // Latido corto: el primer periodo envia el ping y, sin pong, el segundo la termina.
+      const { harness, connect } = build(undefined, { heartbeatIntervalMs: 30 })
+      const socket = connect()
 
-    afterEach(() => {
-      jest.useRealTimers()
-    })
-
-    const buildWithHeartbeat = (intervalMs: number) => {
-      const harness = buildChatHarness()
-      const { logger } = recordingLogger()
-
-      return new BattleRoomRealtimeGateway(
-        instantVerifier,
-        harness.rooms,
-        logger,
-        harness.handler,
-        intervalMs,
-      )
-    }
-
-    it('envia un ping en cada periodo', () => {
-      const gateway = buildWithHeartbeat(1_000)
-      const socket = new FakeSocket()
-
-      gateway.handleConnection(socket)
-      jest.advanceTimersByTime(999)
-      expect(socket.pingCount).toBe(0)
-
-      jest.advanceTimersByTime(1)
-      expect(socket.pingCount).toBe(1)
-
-      gateway.onModuleDestroy()
-    })
-
-    it('una conexion que responde con pong sigue abierta', () => {
-      const gateway = buildWithHeartbeat(1_000)
-      const socket = new FakeSocket()
-
-      gateway.handleConnection(socket)
-      jest.advanceTimersByTime(1_000)
-      socket.emitPong()
-      jest.advanceTimersByTime(1_000)
-      socket.emitPong()
-      jest.advanceTimersByTime(1_000)
-
-      expect(socket.terminated).toBe(false)
-      expect(socket.pingCount).toBe(3)
-
-      gateway.onModuleDestroy()
-    })
-
-    it('la que NO responde al ping anterior se termina en el periodo siguiente', () => {
-      const gateway = buildWithHeartbeat(1_000)
-      const socket = new FakeSocket()
-
-      gateway.handleConnection(socket)
-      jest.advanceTimersByTime(1_000) // primer ping
-      expect(socket.terminated).toBe(false)
-
-      jest.advanceTimersByTime(1_000) // sin pong: se corta
-      expect(socket.terminated).toBe(true)
-
-      gateway.onModuleDestroy()
-    })
-
-    it('la conexion terminada se da de baja del chat (queda desconectada, no suscrita)', async () => {
-      jest.useRealTimers()
-      const harness = buildChatHarness()
-      const { logger } = recordingLogger()
-      const gateway = new BattleRoomRealtimeGateway(
-        instantVerifier,
-        harness.rooms,
-        logger,
-        harness.handler,
-        30,
-      )
-      const socket = new FakeSocket()
-
-      gateway.handleConnection(socket)
-      socket.emit({ type: 'auth', token: 'ok' })
       socket.emit({ type: 'chat.subscribe', ...lobby })
-      await new Promise((resolve) => setTimeout(resolve, 25))
+      await flush()
       expect(harness.handler.subscriberCount('lobby')).toBe(1)
 
-      // Sin pong: el segundo periodo la termina.
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      await new Promise((resolve) => setTimeout(resolve, 150))
 
       expect(socket.terminated).toBe(true)
       expect(harness.handler.subscriberCount('lobby')).toBe(0)
-
-      gateway.onModuleDestroy()
-    })
-
-    it('cada conexion se evalua por separado', () => {
-      const gateway = buildWithHeartbeat(1_000)
-      const alive = new FakeSocket()
-      const dead = new FakeSocket()
-
-      gateway.handleConnection(alive)
-      gateway.handleConnection(dead)
-      jest.advanceTimersByTime(1_000)
-      alive.emitPong()
-      jest.advanceTimersByTime(1_000)
-
-      expect(alive.terminated).toBe(false)
-      expect(dead.terminated).toBe(true)
-
-      gateway.onModuleDestroy()
-    })
-
-    it('onModuleDestroy detiene el latido', () => {
-      const gateway = buildWithHeartbeat(1_000)
-      const socket = new FakeSocket()
-
-      gateway.handleConnection(socket)
-      gateway.onModuleDestroy()
-      jest.advanceTimersByTime(10_000)
-
-      expect(socket.pingCount).toBe(0)
-    })
-
-    it('un unico temporizador para todas las conexiones', () => {
-      const gateway = buildWithHeartbeat(1_000)
-
-      gateway.handleConnection(new FakeSocket())
-      gateway.handleConnection(new FakeSocket())
-      gateway.handleConnection(new FakeSocket())
-
-      expect(jest.getTimerCount()).toBe(1 + 3) // 1 latido + 3 plazos de autenticacion
-
-      gateway.onModuleDestroy()
-    })
-
-    it('por defecto el periodo es de 25 s (ADR-020)', async () => {
-      const harness = buildChatHarness()
-      const { logger } = recordingLogger()
-      const gateway = new BattleRoomRealtimeGateway(
-        instantVerifier,
-        harness.rooms,
-        logger,
-        harness.handler,
-      )
-      const socket = new FakeSocket()
-
-      gateway.handleConnection(socket)
-      // Se autentica: sin ello el plazo de 5 s de ADR-020 la cierra antes del primer ping.
-      socket.emit({ type: 'auth', token: 'ok' })
-      for (let i = 0; i < 5; i += 1) {
-        await Promise.resolve()
-      }
-      jest.advanceTimersByTime(24_999)
-      expect(socket.pingCount).toBe(0)
-
-      jest.advanceTimersByTime(1)
-      expect(socket.pingCount).toBe(1)
-
-      gateway.onModuleDestroy()
-    })
-  })
-
-  describe('configuracion del transporte', () => {
-    it('declara la ruta de ADR-020 y el maximo de mensaje entrante de 16 KiB', () => {
-      const options = Reflect.getMetadata(
-        'websockets:gateway_options',
-        BattleRoomRealtimeGateway,
-      ) as Record<string, unknown> | undefined
-
-      expect(options).toMatchObject({ path: '/api/v1/combat/realtime', maxPayload: 16 * 1024 })
     })
   })
 })

@@ -4,7 +4,8 @@ import * as battleRoomsMigration from '../../adapters/outbound/persistence/migra
 import * as battleRoomsPreparingStatusMigration from '../../adapters/outbound/persistence/migrations/002-battle-rooms-preparing-status'
 import * as battleRoomsDisplayNameMigration from '../../adapters/outbound/persistence/migrations/003-battle-rooms-participant-display-name'
 import * as battleRoomsHeroLoadoutVersionMigration from '../../adapters/outbound/persistence/migrations/004-battle-rooms-participant-hero-loadout-version'
-import * as chatMessagesMigration from '../../adapters/outbound/persistence/migrations/005-chat-messages'
+import * as battleRoomsBattleStateMigration from '../../adapters/outbound/persistence/migrations/005-battle-rooms-battle-state'
+import * as chatMessagesMigration from '../../adapters/outbound/persistence/migrations/006-chat-messages'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -60,7 +61,8 @@ export const MIGRATIONS: readonly MongoMigration[] = [
     name: '004-battle-rooms-participant-hero-loadout-version',
     up: battleRoomsHeroLoadoutVersionMigration.up,
   },
-  { name: '005-chat-messages', up: chatMessagesMigration.up },
+  { name: '005-battle-rooms-battle-state', up: battleRoomsBattleStateMigration.up },
+  { name: '006-chat-messages', up: chatMessagesMigration.up },
 ]
 
 const REGISTRY = '_migrations'

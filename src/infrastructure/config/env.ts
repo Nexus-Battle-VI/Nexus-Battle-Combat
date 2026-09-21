@@ -72,7 +72,17 @@ export interface AppConfig {
   /** Tiempo de espera de las llamadas HTTP internas salientes (Account, Player-Inventory). */
   readonly internalHttpTimeoutMs: number
   readonly chat: ChatConfig
+  /**
+   * Semilla con la que se inicializa la secuencia pseudoaleatoria de Combat al
+   * arrancar (HU-17). Entero sin signo de 32 bits. Por defecto la semilla
+   * validada por HU-26 (3.000.000). NO es una politica de semilla por batalla:
+   * ver `docs/hu-17-turn-order.md`.
+   */
+  readonly randomSeed: number
 }
+
+/** Semilla de referencia validada por HU-26 (Management #362-#364). */
+export const DEFAULT_RANDOM_SEED = 3_000_000
 
 type RawEnv = Readonly<Record<string, string | undefined>>
 
@@ -246,12 +256,13 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     internalHttpTimeoutMs: readInteger(env, 'INTERNAL_HTTP_TIMEOUT_MS', 3_000, 100, 30_000),
     chat: {
       // El tope 2000 acota lo que el validador del motor admite (8000 unidades,
-      // hasta 4 bytes por punto de codigo): ver migracion 005.
+      // hasta 4 bytes por punto de codigo): ver migracion 006.
       maxMessageLength: readInteger(env, 'CHAT_MAX_MESSAGE_LENGTH', 500, 1, 2_000),
       rateLimitMessages: readInteger(env, 'CHAT_RATE_LIMIT_MESSAGES', 5, 1, 100),
       rateLimitWindowMs: readInteger(env, 'CHAT_RATE_LIMIT_WINDOW_MS', 10_000, 1_000, 600_000),
       retentionMs: readInteger(env, 'CHAT_RETENTION_HOURS', 168, 1, 8_760) * 3_600_000,
       historyLimit: readInteger(env, 'CHAT_HISTORY_LIMIT', 50, 1, 200),
     },
+    randomSeed: readInteger(env, 'COMBAT_RANDOM_SEED', DEFAULT_RANDOM_SEED, 0, 4_294_967_295),
   }
 }

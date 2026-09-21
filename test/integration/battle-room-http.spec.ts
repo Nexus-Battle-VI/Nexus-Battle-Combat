@@ -209,9 +209,7 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       .compile()
 
     app = moduleRef.createNestApplication()
-    // HU-13: el gateway de tiempo real ya se registra de verdad (antes Nest lo ignoraba por
-    // ser un proveedor de fabrica); su adaptador es `ws`, como en `main.ts`. Sin el, Nest
-    // intenta cargar Socket.IO, que no esta instalado.
+
     app.useWebSocketAdapter(new WsAdapter(app))
     app.setGlobalPrefix('api')
     app.useGlobalPipes(

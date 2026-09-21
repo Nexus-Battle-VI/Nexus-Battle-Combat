@@ -27,7 +27,7 @@ Motor: **MongoDB**, base lógica `combat` con usuario y credenciales propios en 
 - **Player/Inventory** (síncrono, `operationId`): perfil de combate del héroe y compromiso `BATTLE`.
 - **Wallet** (síncrono, `operationId`): reservar apuestas, transferir al ganador, liberar al cancelar.
 - **Entrada interna** (`/api/internal/v1/combat/simulations`, HMAC): Missions ejecuta simulaciones.
-- **Tiempo real** (ADR-020, `Accepted`): WebSocket en `/api/v1/combat/realtime` a través de Caddy. Implementado: aviso de cambios de sala (HU-15.2) y chat (HU-13), con autenticación por JWT en el primer mensaje. Pendiente (HU-17): ticket de un solo uso, `seq` de batalla y `resume`.
+- **Tiempo real** (ADR-020, `Accepted`): WebSocket en `/api/v1/combat/realtime` a través de Caddy. Implementado: aviso de cambios de sala (HU-15.2); ticket de un solo uso, `seq` de batalla y `resume` (HU-17); y chat (HU-13, con su propio `seq` por canal).
 
 Todas las llamadas salientes que mueven créditos o productos siguen el patrón de ADR-019:
 
@@ -57,7 +57,8 @@ Manejador (`adapters/inbound/ws/ChatRealtimeHandler`) dentro del gateway existen
 - `POST /api/v1/combat/rooms` y `GET /api/v1/combat/rooms` — crear y listar salas (HU-14, implementado).
 - `POST /api/v1/combat/rooms/{roomId}/cancel` — el creador cancela una sala propia en `WAITING_FOR_PLAYERS` (HU-14, implementado; ver `HU-14.1-Contrato-Creacion-Sala.md`, sección 3, para la justificación del verbo/ruta).
 - `POST /api/v1/combat/rooms/{roomId}/participants` — unirse (HU-15, no implementado).
-- `POST /api/v1/combat/realtime/tickets` — ticket para el WebSocket (HU-17, no implementado).
+- `POST /api/v1/combat/realtime/tickets` — ticket para el WebSocket (HU-17, implementado).
+- `GET /api/v1/combat/rooms/{roomId}` y `POST /api/v1/combat/rooms/{roomId}/start` — leer una sala y iniciar su batalla, solo participantes (HU-17, implementado).
 - WebSocket `/api/v1/combat/realtime` — `chat.subscribe`, `chat.send`, `chat.unsubscribe` (HU-13, implementado; protocolo en [hu-13-chat.md](hu-13-chat.md)).
 - `POST /api/internal/v1/combat/simulations` — simulación para Missions.
 
@@ -67,6 +68,7 @@ Los vencimientos usan un intervalo dentro del proceso, apagado por defecto, con 
 
 ## Decisiones abiertas
 
-- HU-17 está en M2 pero depende de HU-14, HU-15 y HU-16, que no tienen milestone.
+- HU-17 (orden de turnos) está implementada; ver `docs/hu-17-turn-order.md`. Los equipos de distinto tamaño se rechazan (no hay regla ratificada) y el ciclo de vida de la secuencia aleatoria es una decisión técnica separada (la semilla es la validada por HU-26).
 - Retención y moderación del chat (HU-13): el chat se persiste con una **retención de 7 días que no tiene fuente** (el PO debe fijarla) y sin moderación. Además, EN-011 P2 pregunta si el chat entra en la exportación y eliminación de datos personales.
 - Escala del lobby: un único canal global con una sola réplica no sostiene el objetivo de 500 ms con 1000 conexiones (medido); más allá exigiría particionar el lobby (decisión de producto) o un bus de difusión (ADR nuevo).
+- ADR-020 está `Accepted` y el WebSocket con ticket, `seq` y `resume` está implementado (HU-15.2 y HU-17).

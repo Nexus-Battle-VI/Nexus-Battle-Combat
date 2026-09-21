@@ -20,7 +20,7 @@ import {
 /**
  * Persistencia del chat contra un MongoDB REAL, en contenedor (HU-13, RF-13).
  *
- * Comprueba lo que un doble no puede: que la migracion `005` cree las
+ * Comprueba lo que un doble no puede: que la migracion `006` cree las
  * colecciones, el validador `$jsonSchema` y los indices UNICOS y TTL de verdad;
  * que el contador de `seq` sea atomico bajo concurrencia; y que la idempotencia
  * descanse en el indice unico del motor.
@@ -118,7 +118,7 @@ describe('MongoChatMessageRepository', () => {
     await container.stop()
   })
 
-  describe('migracion 005', () => {
+  describe('migracion 006', () => {
     it('crea las dos colecciones', async () => {
       const names = (await db.listCollections().toArray()).map((c) => c.name)
 

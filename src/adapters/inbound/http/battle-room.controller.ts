@@ -19,6 +19,13 @@ import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagg
 
 import { DomainError } from '../../../domain/errors/DomainError'
 import {
+  BattleNotInProgressError,
+  InvalidBattleRosterError,
+  NotYourTurnError,
+  RoomNotStartableError,
+  UnsupportedTeamCompositionError,
+} from '../../../domain/errors/BattleErrors'
+import {
   DuplicateDisplayNameError,
   InvalidModeCompositionError,
   InvalidRewardError,
@@ -32,7 +39,11 @@ import {
   RoomNotJoinableError,
   RoomNotLeavableError,
 } from '../../../domain/errors/BattleRoomErrors'
-import { RoomConflictError, RoomNotFoundError } from '../../../application/errors/ApplicationError'
+import {
+  RoomAccessForbiddenError,
+  RoomConflictError,
+  RoomNotFoundError,
+} from '../../../application/errors/ApplicationError'
 import { PrecombatEligibilityBlockedError } from '../../../application/errors/PrecombatEligibilityError'
 import {
   AccountProfileMissingError,
@@ -42,6 +53,8 @@ import {
 import type { BattleRoomDto } from '../../../application/dto/BattleRoomDto'
 import type { CancelBattleRoom } from '../../../application/use-cases/CancelBattleRoom'
 import type { CreateBattleRoom } from '../../../application/use-cases/CreateBattleRoom'
+import type { GetBattleRoom } from '../../../application/use-cases/GetBattleRoom'
+import type { StartBattle } from '../../../application/use-cases/StartBattle'
 import type { JoinBattleRoom } from '../../../application/use-cases/JoinBattleRoom'
 import type { LeaveBattleRoom } from '../../../application/use-cases/LeaveBattleRoom'
 import type { ListAvailableBattleRooms } from '../../../application/use-cases/ListAvailableBattleRooms'
@@ -59,9 +72,11 @@ import {
 import {
   CANCEL_BATTLE_ROOM,
   CREATE_BATTLE_ROOM,
+  GET_BATTLE_ROOM,
   JOIN_BATTLE_ROOM,
   LEAVE_BATTLE_ROOM,
   LIST_AVAILABLE_BATTLE_ROOMS,
+  START_BATTLE,
 } from './tokens'
 
 /**
@@ -86,6 +101,8 @@ export class BattleRoomController {
     @Inject(CANCEL_BATTLE_ROOM) private readonly cancelBattleRoom: CancelBattleRoom,
     @Inject(JOIN_BATTLE_ROOM) private readonly joinBattleRoom: JoinBattleRoom,
     @Inject(LEAVE_BATTLE_ROOM) private readonly leaveBattleRoom: LeaveBattleRoom,
+    @Inject(GET_BATTLE_ROOM) private readonly getBattleRoom: GetBattleRoom,
+    @Inject(START_BATTLE) private readonly startBattle: StartBattle,
     @Inject(REALTIME_NOTIFIER) private readonly realtime: RealtimeNotifierPort,
   ) {}
 
@@ -254,6 +271,71 @@ export class BattleRoomController {
     }
   }
 
+  @Get(':roomId')
+  @ApiOperation({
+    summary: 'Lee una sala y, si esta en curso, su batalla (solo participantes; HU-17)',
+    description:
+      'GET /rooms solo lista salas WAITING_FOR_PLAYERS: en cuanto una sala pasa a PREPARING o ' +
+      'IN_BATTLE este es el unico modo HTTP de leerla. La identidad sale del testimonio.',
+  })
+  @ApiResponse({ status: 200, type: BattleRoomResponse })
+  @ApiResponse({ status: 400, description: 'roomId no es un UUID v4 valido' })
+  @ApiResponse({ status: 401, description: 'Falta el testimonio o no es valido' })
+  @ApiResponse({ status: 403, description: 'Quien pide no es participante de la sala' })
+  @ApiResponse({ status: 404, description: 'La sala no existe' })
+  async read(
+    @Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string,
+    @CurrentIdentity() identity: VerifiedIdentity,
+  ): Promise<BattleRoomDto> {
+    try {
+      return await this.getBattleRoom.execute(roomId, identity.subject)
+    } catch (error: unknown) {
+      throw BattleRoomController.translate(error)
+    }
+  }
+
+  @Post(':roomId/start')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Inicia la batalla de una sala PREPARING (HU-17, RF-17)',
+    description:
+      'Sin cuerpo: ningun cliente elige quien inicia ni quien participa. Cualquier participante ' +
+      'HUMAN puede invocarlo. Revalida la elegibilidad precombate (HU-16) de cada participante, ' +
+      'genera la cola de turnos con el motor centralizado (HU-24), la persiste y solo entonces ' +
+      'difunde battleStarted por WebSocket. IDEMPOTENTE: si la sala ya esta IN_BATTLE devuelve el ' +
+      'estado vigente sin generar otra cola ni otro evento.',
+  })
+  @ApiResponse({ status: 200, type: BattleRoomResponse })
+  @ApiResponse({ status: 400, description: 'roomId no es un UUID v4 valido' })
+  @ApiResponse({ status: 401, description: 'Falta el testimonio o no es valido' })
+  @ApiResponse({ status: 403, description: 'Quien pide no es participante de la sala' })
+  @ApiResponse({ status: 404, description: 'La sala no existe' })
+  @ApiResponse({
+    status: 409,
+    description: 'La sala no esta PREPARING ni IN_BATTLE, o conflicto de version',
+  })
+  @ApiResponse({
+    status: 422,
+    description:
+      'Un participante ya no es elegible (blockers[]: HERO_CHANGED_SINCE_JOIN, HERO_LOADOUT_CHANGED, ' +
+      'readiness, formato) o no tiene heroe equipado (code: HERO_NOT_SELECTED). No hay cola ni evento.',
+  })
+  @ApiResponse({ status: 503, description: 'Player-Inventory no respondio de verdad' })
+  async start(
+    @Param('roomId', new ParseUUIDPipe({ version: '4' })) roomId: string,
+    @CurrentIdentity() identity: VerifiedIdentity,
+  ): Promise<BattleRoomDto> {
+    try {
+      const dto = await this.startBattle.execute(roomId, identity.subject)
+
+      this.notifyRoomUpdated(dto)
+
+      return dto
+    } catch (error: unknown) {
+      throw BattleRoomController.translate(error)
+    }
+  }
+
   /**
    * Notifica `battle-room.updated` (HU-15.2, ADR-020) DESPUES de que
    * `repository.save()` ya persistio -- nunca antes: el controlador no
@@ -277,7 +359,10 @@ export class BattleRoomController {
       return new NotFoundException(error.message)
     }
 
-    if (error instanceof RoomCancellationForbiddenError) {
+    if (
+      error instanceof RoomCancellationForbiddenError ||
+      error instanceof RoomAccessForbiddenError
+    ) {
       return new ForbiddenException(error.message)
     }
 
@@ -289,7 +374,10 @@ export class BattleRoomController {
       error instanceof PlayerAlreadyJoinedError ||
       error instanceof DuplicateDisplayNameError ||
       error instanceof PlayerNotInRoomError ||
-      error instanceof RoomNotLeavableError
+      error instanceof RoomNotLeavableError ||
+      error instanceof RoomNotStartableError ||
+      error instanceof BattleNotInProgressError ||
+      error instanceof NotYourTurnError
     ) {
       return new ConflictException(error.message)
     }
@@ -298,7 +386,8 @@ export class BattleRoomController {
       error instanceof InvalidTeamCapacityError ||
       error instanceof InvalidRoomCapacityError ||
       error instanceof InvalidModeCompositionError ||
-      error instanceof InvalidRewardError
+      error instanceof InvalidRewardError ||
+      error instanceof InvalidBattleRosterError
     ) {
       return new UnprocessableEntityException(error.message)
     }
@@ -306,6 +395,16 @@ export class BattleRoomController {
     // HU-16.1 (DP-7, hallazgo de la auditoria): antes caia en el 422 generico
     // de arriba, sin `code` -- indistinguible en el cuerpo de cualquier otro
     // 422. Mismo patron que `AccountProfileMissingError` de mas abajo.
+    // HU-17: equipos de distinto tamano. `code` estable para que Web lo distinga
+    // de "un participante ya no cumple los requisitos" (mismo 422).
+    if (error instanceof UnsupportedTeamCompositionError) {
+      return new UnprocessableEntityException({
+        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+        message: error.message,
+        code: error.code,
+      })
+    }
+
     if (error instanceof PlayerWithoutEquippedHeroError) {
       return new UnprocessableEntityException({
         statusCode: HttpStatus.UNPROCESSABLE_ENTITY,

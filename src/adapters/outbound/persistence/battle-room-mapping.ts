@@ -1,7 +1,10 @@
 import { Int32 } from 'mongodb'
 
 import type { BattleRoomSnapshot } from '../../../domain/entities/BattleRoom'
+import type { BattleEvent, HandledCommand } from '../../../domain/entities/BattleEvent'
+import type { BattleStateSnapshot } from '../../../domain/entities/BattleState'
 import type { TeamSnapshot } from '../../../domain/entities/Team'
+import type { TurnOrderEntry } from '../../../domain/entities/TurnOrder'
 
 /**
  * Traduccion entre el documento de MongoDB y la instantanea de la sala de
@@ -48,6 +51,30 @@ export interface RewardDocument {
 }
 
 /**
+ * HU-17 (migracion 005): estado de la batalla, bitacora de eventos y comandos
+ * procesados, en el MISMO documento de la sala. Aditivos y opcionales:
+ * documentos anteriores no los tienen y se restauran como "sin batalla".
+ */
+export interface BattleDocument {
+  readonly startedAt: Date
+  readonly turnOrder: readonly TurnOrderEntry[]
+  readonly turnsCompleted: Int32 | number
+}
+
+export interface BattleEventDocument {
+  readonly seq: Int32 | number
+  readonly type: string
+  readonly occurredAt: Date
+  /** JSON puro: la vista de la batalla ya calculada en el momento del evento. */
+  readonly payload: Readonly<Record<string, unknown>>
+}
+
+export interface HandledCommandDocument {
+  readonly commandId: string
+  readonly seq: Int32 | number
+}
+
+/**
  * `_id` es el identificador de la sala (UUID v4 generado por el servidor),
  * igual que `hero-loadouts`/`hero-selections` usan su propia clave como
  * `_id` en lugar de un `ObjectId` autogenerado.
@@ -61,6 +88,9 @@ export interface BattleRoomDocument {
   readonly createdBy: string
   readonly createdAt: Date
   readonly version: Int32 | number
+  readonly battle?: BattleDocument | null
+  readonly events?: readonly BattleEventDocument[]
+  readonly handledCommands?: readonly HandledCommandDocument[]
 }
 
 const toInt = (value: Int32 | number, field: string, roomId: string): number => {
@@ -107,8 +137,34 @@ export const toSnapshot = (document: BattleRoomDocument): BattleRoomSnapshot => 
     createdBy: document.createdBy,
     createdAt: document.createdAt,
     version: toInt(document.version, 'version', document._id),
+    battle: toBattleSnapshot(document),
+    events: (document.events ?? []).map((event) => toEvent(event, document._id)),
+    handledCommands: (document.handledCommands ?? []).map((handled): HandledCommand => ({
+      commandId: handled.commandId,
+      seq: toInt(handled.seq, 'handledCommands.seq', document._id),
+    })),
   }
 }
+
+const toBattleSnapshot = (document: BattleRoomDocument): BattleStateSnapshot | null =>
+  document.battle === undefined || document.battle === null
+    ? null
+    : {
+        startedAt: document.battle.startedAt,
+        turnOrder: document.battle.turnOrder.map((entry) => ({ ...entry })),
+        turnsCompleted: toInt(
+          document.battle.turnsCompleted,
+          'battle.turnsCompleted',
+          document._id,
+        ),
+      }
+
+const toEvent = (event: BattleEventDocument, roomId: string): BattleEvent => ({
+  seq: toInt(event.seq, 'events.seq', roomId),
+  type: event.type as BattleEvent['type'],
+  occurredAt: event.occurredAt,
+  payload: event.payload as unknown as BattleEvent['payload'],
+})
 
 const toTeamDocument = (team: TeamSnapshot): TeamDocument => ({
   label: team.label,
@@ -132,4 +188,19 @@ export const toDocument = (snapshot: BattleRoomSnapshot): BattleRoomDocument => 
   createdBy: snapshot.createdBy,
   createdAt: snapshot.createdAt,
   version: new Int32(snapshot.version),
+  battle:
+    snapshot.battle === null
+      ? null
+      : {
+          startedAt: snapshot.battle.startedAt,
+          turnOrder: snapshot.battle.turnOrder.map((entry) => ({ ...entry })),
+          turnsCompleted: snapshot.battle.turnsCompleted,
+        },
+  events: snapshot.events.map((event): BattleEventDocument => ({
+    seq: event.seq,
+    type: event.type,
+    occurredAt: event.occurredAt,
+    payload: event.payload as unknown as Readonly<Record<string, unknown>>,
+  })),
+  handledCommands: snapshot.handledCommands.map((handled) => ({ ...handled })),
 })
