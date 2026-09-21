@@ -27,7 +27,7 @@ Motor: **MongoDB**, base lógica `combat` con usuario y credenciales propios en 
 - **Player/Inventory** (síncrono, `operationId`): perfil de combate del héroe y compromiso `BATTLE`.
 - **Wallet** (síncrono, `operationId`): reservar apuestas, transferir al ganador, liberar al cancelar.
 - **Entrada interna** (`/api/internal/v1/combat/simulations`, HMAC): Missions ejecuta simulaciones.
-- **Tiempo real** (ADR-020): WebSocket en `/api/v1/combat/realtime` a través de Caddy, con ticket de un solo uso.
+- **Tiempo real** (ADR-020, `Accepted`): WebSocket en `/api/v1/combat/realtime` a través de Caddy. Implementado: aviso de cambios de sala (HU-15.2); ticket de un solo uso, `seq` de batalla y `resume` (HU-17); y chat (HU-13, con su propio `seq` por canal).
 
 Todas las llamadas salientes que mueven créditos o productos siguen el patrón de ADR-019:
 
@@ -48,6 +48,10 @@ Dominio puro en `domain/random-effects` (`EffectControlTable`, `ProbabilityModif
 
 `domain/policies/AttackResolutionPolicy` (Ataque > Defensa, la igualdad no supera) y `AttackProfile` (dado de Ataque por subtipo, Tabla 6), más los casos de uso `prepareAttack` (dos héroes equipados → Ataque, Defensa y tabla) y `ResolveAttack` (tira el dado, compara y, solo si el golpe es efectivo, invoca `ResolveRandomEffect`). Toda la aleatoriedad, dado incluido, sale de `RandomSequencePort.nextIndex()`. Todavía **no lo invoca ningún flujo de batalla** (HU-17, HU-18), **no está registrado en `app.module.ts`** y **no hay endpoint**: un cliente que aportara el Ataque o la Defensa podría manipular el resultado. No calcula daño numérico ni vida (HU-18). Detalle en [hu-20-attack-resolution.md](hu-20-attack-resolution.md).
 
+## Chat del lobby y de las salas (HU-13)
+
+Manejador (`adapters/inbound/ws/ChatRealtimeHandler`) dentro del gateway existente: la ruta es una sola y `@nestjs/platform-ws` enruta cada conexión por ruta al primer gateway que la declara. Dos contextos, `lobby` (un canal global) y `room:<uuid>` (solo participantes humanos, sala activa). Casos de uso `AuthorizeChatChannel`, `SendChatMessage` (en dos fases: `prepare` valida, deduplica y limita la frecuencia; `commit` persiste bajo el cerrojo del canal) y `ReadChatHistory`. Persistencia en dos colecciones (`chat-messages`, con índices únicos y TTL, y `chat-channels`, el contador de `seq`). Los mensajes de una conexión se atienden en orden (`SerialQueue`) y persistencia y difusión de un canal son secuenciales (`ChannelLock`). Detalle, protocolo, trazabilidad a pruebas, mediciones y limitaciones en [hu-13-chat.md](hu-13-chat.md).
+
 ## Contrato previsto
 
 - `POST /api/v1/combat/rooms` y `GET /api/v1/combat/rooms` — crear y listar salas (HU-14, implementado).
@@ -55,6 +59,7 @@ Dominio puro en `domain/random-effects` (`EffectControlTable`, `ProbabilityModif
 - `POST /api/v1/combat/rooms/{roomId}/participants` — unirse (HU-15, no implementado).
 - `POST /api/v1/combat/realtime/tickets` — ticket para el WebSocket (HU-17, implementado).
 - `GET /api/v1/combat/rooms/{roomId}` y `POST /api/v1/combat/rooms/{roomId}/start` — leer una sala y iniciar su batalla, solo participantes (HU-17, implementado).
+- WebSocket `/api/v1/combat/realtime` — `chat.subscribe`, `chat.send`, `chat.unsubscribe` (HU-13, implementado; protocolo en [hu-13-chat.md](hu-13-chat.md)).
 - `POST /api/internal/v1/combat/simulations` — simulación para Missions.
 
 ## Temporizadores
@@ -64,5 +69,6 @@ Los vencimientos usan un intervalo dentro del proceso, apagado por defecto, con 
 ## Decisiones abiertas
 
 - HU-17 (orden de turnos) está implementada; ver `docs/hu-17-turn-order.md`. Los equipos de distinto tamaño se rechazan (no hay regla ratificada) y el ciclo de vida de la secuencia aleatoria es una decisión técnica separada (la semilla es la validada por HU-26).
-- Retención y moderación del chat (HU-13): decisión de producto antes de persistirlo más allá de la sala.
+- Retención y moderación del chat (HU-13): el chat se persiste con una **retención de 7 días que no tiene fuente** (el PO debe fijarla) y sin moderación. Además, EN-011 P2 pregunta si el chat entra en la exportación y eliminación de datos personales.
+- Escala del lobby: un único canal global con una sola réplica no sostiene el objetivo de 500 ms con 1000 conexiones (medido); más allá exigiría particionar el lobby (decisión de producto) o un bus de difusión (ADR nuevo).
 - ADR-020 está `Accepted` y el WebSocket con ticket, `seq` y `resume` está implementado (HU-15.2 y HU-17).

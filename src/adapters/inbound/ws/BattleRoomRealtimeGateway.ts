@@ -26,6 +26,11 @@ import type { BattleEvent } from '../../../domain/entities/BattleEvent'
 import type { Logger } from '../../../infrastructure/observability/logger'
 import { LOGGER } from '../../../infrastructure/observability/logger-token'
 import { CONSUME_REALTIME_TICKET, RESUME_BATTLE } from '../http/tokens'
+import { CHAT_MESSAGE_TYPES, ChatRealtimeHandler } from './ChatRealtimeHandler'
+import type { RealtimeSocket, RealtimeSocketData } from './RealtimeSocket'
+import { SerialQueue } from './SerialQueue'
+
+export type { RealtimeSocket, RealtimeSocketData } from './RealtimeSocket'
 
 /**
  * Gateway WebSocket de Combat (RF-15 y RF-17, ADR-020 de
@@ -55,28 +60,17 @@ import { CONSUME_REALTIME_TICKET, RESUME_BATTLE } from '../http/tokens'
  *    eventos ya persistidos por `BattleEventPublisherPort`).
  *  - LATIDO: ping cada 25 s; una conexion que no responde con pong se cierra.
  *  - Mensajes de hasta 16 KiB (`maxPayload`); mayores cierran la conexion.
+ *  - CHAT (HU-13, RF-13): `chat.subscribe`, `chat.send` y `chat.unsubscribe`
+ *    se delegan en `ChatRealtimeHandler`. Van por ESTA ruta y por la misma
+ *    identidad (el `sub` del ticket); el chat tiene su propio `seq` por canal,
+ *    independiente del de los eventos de batalla. Los comandos de chat de una
+ *    conexion se atienden EN ORDEN de llegada (ver `handleChat`). Contrato:
+ *    `docs/contracts/hu-13-chat-v1.md` de Nexus-Battle-Infrastructure.
  *
  * Un comando rechazado responde SOLO a quien lo envio con `command.rejected` y
  * un codigo estable, sin modificar nada. Nunca viajan semilla, estado del
  * generador ni valores aleatorios futuros.
  */
-export interface RealtimeSocket {
-  readonly readyState: number
-  on(event: 'message', listener: (data: RealtimeSocketData) => void): void
-  on(event: 'close' | 'pong', listener: () => void): void
-  send(data: string): void
-  close(code?: number, reason?: string): void
-  /** Frame de latido. Opcional para dobles de prueba. */
-  ping?(): void
-  /** Corte inmediato de una conexion muerta. Opcional para dobles de prueba. */
-  terminate?(): void
-}
-
-/** Lo que `ws` entrega en el evento `message`: `Buffer`, `ArrayBuffer` o similar con `toString()`. */
-export interface RealtimeSocketData {
-  toString(): string
-}
-
 /** Cierre por falta de autenticacion o ticket invalido (ADR-020, seccion "Autenticacion"). */
 const CLOSE_UNAUTHENTICATED = 4401
 /** Cierre por un mensaje que no es JSON valido o no declara un `type` reconocido. */
@@ -87,6 +81,16 @@ export const AUTH_TIMEOUT_MS = 5_000
 export const HEARTBEAT_INTERVAL_MS = 25_000
 /** Tamano maximo de un mensaje entrante (ADR-020): 16 KiB. */
 export const MAX_MESSAGE_BYTES = 16 * 1024
+/** Cierre por exceso de comandos de chat en espera: RFC 6455, 1008 (violacion de politica). */
+const CLOSE_POLICY_VIOLATION = 1008
+/**
+ * Comandos de chat de una conexion en espera de su turno. Decision tecnica: acota
+ * la memoria que un cliente puede ocupar enviando mas rapido de lo que se atiende.
+ * ADR-020 pide un limite de comandos por conexion «configurable»; este es el
+ * limite de comandos EN COLA, no la frecuencia (esa la limita el chat por
+ * remitente y canal).
+ */
+const MAX_PENDING_CHAT_COMMANDS = 64
 
 const OPEN_STATE = 1
 
@@ -118,6 +122,8 @@ interface ConnectionState {
   pendingResume: PendingResume | null
   /** Serializa los `resume` de una misma conexion: una recuperacion no se intercala con otra. */
   resumeChain: Promise<void>
+  /** Comandos de chat de esta conexion, atendidos de uno en uno y en orden de llegada (HU-13). */
+  readonly chatQueue: SerialQueue
   authTimer: ReturnType<typeof setTimeout> | null
   heartbeat: ReturnType<typeof setInterval> | null
   alive: boolean
@@ -150,6 +156,7 @@ export class BattleRoomRealtimeGateway
     @Inject(BATTLE_ROOM_REPOSITORY) private readonly rooms: BattleRoomRepositoryPort,
     @Inject(RESUME_BATTLE) private readonly resumeBattle: ResumeBattle,
     @Inject(LOGGER) private readonly logger: Logger,
+    @Inject(ChatRealtimeHandler) private readonly chat: ChatRealtimeHandler,
     @Optional() @Inject(REALTIME_GATEWAY_OPTIONS) options: RealtimeGatewayOptions = {},
   ) {
     this.authTimeoutMs = options.authTimeoutMs ?? AUTH_TIMEOUT_MS
@@ -163,6 +170,11 @@ export class BattleRoomRealtimeGateway
       battleRoomId: null,
       pendingResume: null,
       resumeChain: Promise.resolve(),
+      chatQueue: new SerialQueue(MAX_PENDING_CHAT_COMMANDS, (error: unknown) => {
+        this.logger.error('realtime_chat_fallo', {
+          reason: error instanceof Error ? error.name : 'desconocido',
+        })
+      }),
       authTimer: setTimeout(() => {
         // Sin `{"type":"auth","ticket"}` valido en la ventana de ADR-020: se
         // cierra con el codigo que declara la seccion "Autenticacion".
@@ -219,6 +231,7 @@ export class BattleRoomRealtimeGateway
     // en el mapa y cada evento futuro de su sala intentaria escribir en un
     // socket muerto.
     this.connections.delete(client)
+    this.chat.onDisconnect(client)
   }
 
   /**
@@ -239,6 +252,16 @@ export class BattleRoomRealtimeGateway
         client.send(payload)
       }
     }
+
+    // HU-13: la sala cambio (salio alguien, se cancelo): el chat revalida el
+    // acceso de sus suscriptores. Sin esperar: la notificacion es sincrona y un
+    // fallo aqui no debe romper la respuesta HTTP de quien provoco el cambio.
+    this.chat.onRoomUpdated(event.roomId).catch((error: unknown) => {
+      this.logger.error('chat_actualizacion_de_sala_fallo', {
+        roomId: event.roomId,
+        reason: error instanceof Error ? error.name : 'desconocido',
+      })
+    })
   }
 
   /**
@@ -304,9 +327,46 @@ export class BattleRoomRealtimeGateway
       return
     }
 
+    if (CHAT_MESSAGE_TYPES.has(message.type as string)) {
+      this.handleChat(client, state, message)
+      return
+    }
+
     // Tipo de mensaje no reconocido en este protocolo (los comandos de combate
-    // -- `attack`/`useSkill`/`chat` -- son HU-18/HU-19/HU-13).
+    // -- `attack`/`useSkill` -- son HU-18/HU-19).
     client.close(CLOSE_BAD_MESSAGE, 'tipo_no_reconocido')
+  }
+
+  /**
+   * Comandos de chat (HU-13, RF-13). Se atienden de uno en uno y en el orden en
+   * que llegaron: un cliente que envia `chat.subscribe` y `chat.send` seguidos
+   * espera que el segundo vea la suscripcion del primero, y `chat.subscribe` es
+   * asincrono (lee la sala). Sin la cola, `chat.send` se comprobaria antes de que
+   * la suscripcion existiera y se rechazaria con `NOT_SUBSCRIBED`.
+   *
+   * La cola es SOLO de chat: `auth`, `subscribe` y `resume` conservan el
+   * comportamiento de HU-17, incluida la ventana de recuperacion del `resume`.
+   */
+  private handleChat(
+    client: RealtimeSocket,
+    state: ConnectionState,
+    message: Record<string, unknown>,
+  ): void {
+    // El `sub` se toma AQUI, en el orden de llegada: un `auth` anterior ya lo fijo
+    // (consumir el ticket es sincrono) y no puede cambiar despues.
+    const subject = state.subject
+
+    if (subject === null) {
+      // Igual que `subscribe` y `resume`: el chat nunca se atiende sin autenticar antes.
+      client.close(CLOSE_UNAUTHENTICATED, 'no_autenticado')
+      return
+    }
+
+    const accepted = state.chatQueue.push(() => this.chat.handle(client, subject, message))
+
+    if (!accepted) {
+      client.close(CLOSE_POLICY_VIOLATION, 'demasiados_mensajes')
+    }
   }
 
   private handleAuth(

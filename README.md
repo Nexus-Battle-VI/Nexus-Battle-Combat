@@ -35,6 +35,10 @@ Este repositorio contiene código y Pull Requests. No contiene Issues ni Product
 
 **Implementada la comparación Ataque contra Defensa** (`prepareAttack` y `ResolveAttack`): el Ataque es el efectivo del héroe (Player-Inventory) más el dado de la Tabla 6 (`10 + 1d6`, `10 + 1d8`, `10 + 1d10`), el golpe es efectivo si el Ataque **supera** la Defensa (la igualdad no supera), y **solo entonces** consume un índice más para el efecto de HU-25. **Sin caller de producción** (falta el flujo de batalla, HU-17/HU-18), **sin endpoint** y **sin daño numérico ni vida** (HU-18). Ver [docs/hu-20-attack-resolution.md](docs/hu-20-attack-resolution.md).
 
+### Chat del lobby y de las salas (HU-13)
+
+**Implementado** sobre el WebSocket de ADR-020 (`/api/v1/combat/realtime`), dentro del gateway existente: dos contextos —el **lobby** (la vista general de Jugar Online, un canal global) y **cada sala** (solo sus participantes humanos, mientras la sala esté activa)—, con comandos `chat.subscribe` / `chat.send` / `chat.unsubscribe`, procesado una sola vez por `commandId`, `seq` por canal, persistencia **antes** de difundir y recuperación con `lastSeq`. Longitud 500, frecuencia 5 cada 10 s y retención configurables (las cifras las ratificó el PO por chat; **la retención de 7 días no tiene ninguna fuente y el PO debe fijarla**). **Sin moderación**, **sin desplegar** (`main` va por detrás de `develop`; exige la migración `006`, que va después de la `005` de HU-17) y **una sola réplica** (ADR-020). El chat de la sala queda **abierto también durante la batalla** (`IN_BATTLE`): decisión técnica derivada de «sala activa», pendiente de confirmar por el PO. Al empezar se encontraron dos defectos de HU-15.2 que dejaban sin funcionar el WebSocket entero; HU-17 corrigió por su cuenta el registro del gateway y la carrera de `auth` desapareció con el ticket de un solo uso. Ver [docs/hu-13-chat.md](docs/hu-13-chat.md).
+
 ## Qué posee este contexto
 
 - Salas y lobby: modalidad, cupo, composición humana/IA, recompensa, estado.
@@ -73,7 +77,7 @@ Combat la **reimplementa a propósito** en `HeroPowerPolicy` (no puede importar 
 - **Player/Inventory** (síncrono, `operationId`): perfil de combate del héroe y compromiso `BATTLE`. El Poder máximo del héroe es `effectiveStats.power` del contrato `equipped-hero`, que Combat modela como `maxPower`.
 - **Wallet** (síncrono, `operationId`): reservar apuestas, transferir al ganador, liberar al cancelar.
 - **Entrada interna** (`/api/internal/v1/combat/simulations`, HMAC): Missions ejecuta simulaciones.
-- **Tiempo real** (ADR-020): WebSocket en `/api/v1/combat/realtime` a través de Caddy, con ticket de un solo uso.
+- **Tiempo real** (ADR-020): WebSocket en `/api/v1/combat/realtime` a través de Caddy. Autentica con un **ticket de un solo uso** (HU-17): se pide por HTTP y se envía como primer mensaje; el JWT no viaja por el socket. Lo usan el aviso de cambios de sala (HU-15.2), la batalla (HU-17) y el chat (HU-13).
 
 Detalle en [docs/architecture.md](docs/architecture.md).
 
@@ -85,6 +89,7 @@ src/
   application/       Casos de uso, puertos, DTO y errores
   adapters/
     inbound/http/    Controladores, DTO HTTP y guards
+    inbound/ws/      Gateway WebSocket (ADR-020) y el manejador del chat
     outbound/        Persistencia, identidad, clientes de otros servicios
   infrastructure/    config, observabilidad, salud, persistencia y composición
 ```
@@ -100,6 +105,7 @@ npm run format:check
 npm run typecheck
 npm run test:coverage
 npm run test:db        # requiere Docker: levanta MongoDB con Testcontainers
+npm run test:perf      # requiere Docker; NO forma parte del CI: latencia del chat con WebSocket real
 npm run build
 ```
 

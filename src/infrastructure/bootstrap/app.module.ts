@@ -25,11 +25,14 @@ import { InternalServiceGuard } from '../../adapters/inbound/http/auth/internal-
 import { JwtAuthGuard } from '../../adapters/inbound/http/auth/jwt-auth.guard'
 import { RolesGuard } from '../../adapters/inbound/http/auth/roles.guard'
 import { BattleRoomRealtimeGateway } from '../../adapters/inbound/ws/BattleRoomRealtimeGateway'
+import { ChatRealtimeHandler } from '../../adapters/inbound/ws/ChatRealtimeHandler'
 import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTokenVerifier'
 import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClient'
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
 import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistence/InMemoryBattleRoomRepository'
+import { InMemoryChatMessageRepository } from '../../adapters/outbound/persistence/InMemoryChatMessageRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
+import { MongoChatMessageRepository } from '../../adapters/outbound/persistence/MongoChatMessageRepository'
 import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
@@ -44,6 +47,10 @@ import {
   BATTLE_ROOM_REPOSITORY,
   type BattleRoomRepositoryPort,
 } from '../../application/ports/BattleRoomRepositoryPort'
+import {
+  CHAT_MESSAGE_REPOSITORY,
+  type ChatMessageRepositoryPort,
+} from '../../application/ports/ChatMessageRepositoryPort'
 import { CLOCK, type ClockPort } from '../../application/ports/ClockPort'
 import { ID_GENERATOR, type IdGeneratorPort } from '../../application/ports/IdGeneratorPort'
 import {
@@ -77,11 +84,15 @@ import {
   IssueRealtimeTicket,
 } from '../../application/use-cases/RealtimeTickets'
 import { TOKEN_VERIFIER, type TokenVerifierPort } from '../../application/ports/TokenVerifierPort'
+import { AuthorizeChatChannel } from '../../application/use-cases/AuthorizeChatChannel'
 import { CancelBattleRoom } from '../../application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../application/use-cases/CreateBattleRoom'
 import { JoinBattleRoom } from '../../application/use-cases/JoinBattleRoom'
 import { LeaveBattleRoom } from '../../application/use-cases/LeaveBattleRoom'
 import { ListAvailableBattleRooms } from '../../application/use-cases/ListAvailableBattleRooms'
+import { ReadChatHistory } from '../../application/use-cases/ReadChatHistory'
+import { SendChatMessage } from '../../application/use-cases/SendChatMessage'
+import { ChatRateLimiter } from '../../domain/policies/ChatRateLimiter'
 import { UpstreamServiceError } from '../../application/errors/UpstreamErrors'
 import { AuthMode, loadConfig, PersistenceDriver, type AppConfig } from '../config/env'
 import type { ReadinessCheck, VersionReport } from '../health/health'
@@ -368,6 +379,56 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       provide: LEAVE_BATTLE_ROOM,
       useFactory: (rooms: BattleRoomRepositoryPort): LeaveBattleRoom => new LeaveBattleRoom(rooms),
       inject: [BATTLE_ROOM_REPOSITORY],
+    },
+    // HU-13 (RF-13): chat del lobby y de las salas. Mensajes propios de Combat
+    // (ADR-019, data-ownership). `PERSISTENCE_DRIVER=memory` respalda pruebas y
+    // desarrollo, igual que el repositorio de salas.
+    {
+      provide: CHAT_MESSAGE_REPOSITORY,
+      useFactory: (db: Db | null): ChatMessageRepositoryPort =>
+        db === null ? new InMemoryChatMessageRepository() : new MongoChatMessageRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: ChatRealtimeHandler,
+      useFactory: (
+        config: AppConfig,
+        rooms: BattleRoomRepositoryPort,
+        messages: ChatMessageRepositoryPort,
+        accountProfiles: AccountBattleProfilePort,
+        clock: ClockPort,
+        ids: IdGeneratorPort,
+        logger: Logger,
+      ): ChatRealtimeHandler => {
+        const authorize = new AuthorizeChatChannel(rooms)
+
+        return new ChatRealtimeHandler({
+          authorize,
+          readHistory: new ReadChatHistory(messages, clock, config.chat.historyLimit),
+          sender: new SendChatMessage(
+            authorize,
+            messages,
+            accountProfiles,
+            new ChatRateLimiter(config.chat.rateLimitMessages, config.chat.rateLimitWindowMs),
+            clock,
+            ids,
+            {
+              maxMessageLength: config.chat.maxMessageLength,
+              retentionMs: config.chat.retentionMs,
+            },
+          ),
+          logger,
+        })
+      },
+      inject: [
+        APP_CONFIG,
+        BATTLE_ROOM_REPOSITORY,
+        CHAT_MESSAGE_REPOSITORY,
+        ACCOUNT_BATTLE_PROFILE,
+        CLOCK,
+        ID_GENERATOR,
+        LOGGER,
+      ],
     },
     // HU-15.2 (RF-15, ADR-020): gateway WebSocket nativo. Provider normal de
     // Nest (no un controlador): `BattleRoomController` lo consume a traves

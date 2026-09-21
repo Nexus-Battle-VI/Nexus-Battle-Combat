@@ -6,6 +6,7 @@ import {
   HEARTBEAT_INTERVAL_MS,
   MAX_MESSAGE_BYTES,
 } from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
+import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryRealtimeTicketStore } from '../../src/adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import type { RealtimeTicketCodecPort } from '../../src/application/ports/RealtimeTicketPort'
@@ -101,6 +102,17 @@ const codec: RealtimeTicketCodecPort = {
   hash: (ticket) => `h:${ticket}`,
 }
 
+/**
+ * Esta suite prueba tickets, `seq`, `resume` y latido, no el chat (HU-13): el
+ * manejador de chat es un doble inerte. El chat sobre el gateway real lo cubren
+ * `chat-gateway.spec.ts` y `test/integration/chat-realtime.spec.ts`.
+ */
+const noChat = {
+  handle: jest.fn().mockResolvedValue(undefined),
+  onDisconnect: jest.fn(),
+  onRoomUpdated: jest.fn().mockResolvedValue(undefined),
+} as unknown as ChatRealtimeHandler
+
 const world = (resume?: (repo: InMemoryBattleRoomRepository) => ResumeBattle) => {
   const repo = new InMemoryBattleRoomRepository()
   const store = new InMemoryRealtimeTicketStore()
@@ -110,6 +122,7 @@ const world = (resume?: (repo: InMemoryBattleRoomRepository) => ResumeBattle) =>
     repo,
     resume?.(repo) ?? new ResumeBattle(repo),
     silentLogger,
+    noChat,
   )
 
   const connect = async (subject: string | null): Promise<FakeSocket> => {
@@ -184,6 +197,7 @@ describe('BattleRoomRealtimeGateway — autenticacion por ticket (ADR-020)', () 
       repo,
       new ResumeBattle(repo),
       silentLogger,
+      noChat,
     )
     const { ticket } = new IssueRealtimeTicket(codec, store, past).execute('a1')
     const socket = new FakeSocket()
