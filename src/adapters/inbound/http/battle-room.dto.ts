@@ -169,7 +169,7 @@ export class BattleRoomResponse {
   @ApiProperty({ enum: ['PVP', 'PVE'] })
   readonly mode!: string
 
-  @ApiProperty({ enum: ['WAITING_FOR_PLAYERS', 'PREPARING', 'CANCELLED'] })
+  @ApiProperty({ enum: ['WAITING_FOR_PLAYERS', 'PREPARING', 'IN_BATTLE', 'CANCELLED'] })
   readonly status!: string
 
   @ApiProperty({ type: TeamResponse, isArray: true })
@@ -186,4 +186,16 @@ export class BattleRoomResponse {
 
   @ApiProperty()
   readonly version!: number
+
+  @ApiProperty({ description: 'seq del ultimo evento de batalla (HU-17); 0 sin batalla.' })
+  readonly lastSeq!: number
+
+  @ApiProperty({
+    nullable: true,
+    type: 'object',
+    additionalProperties: true,
+    description:
+      'Batalla en curso (HU-17): battleId, startedAt, turnOrder inmutable, turnsCompleted, round y currentTurn. null hasta IN_BATTLE.',
+  })
+  readonly battle!: Record<string, unknown> | null
 }

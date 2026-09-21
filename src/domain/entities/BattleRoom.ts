@@ -1,5 +1,12 @@
 import { DomainError } from '../errors/DomainError'
 import {
+  BattleNotInProgressError,
+  InvalidBattleRosterError,
+  InvalidCommandIdError,
+  NotYourTurnError,
+  RoomNotStartableError,
+} from '../errors/BattleErrors'
+import {
   DuplicateDisplayNameError,
   InvalidModeCompositionError,
   InvalidRoomCapacityError,
@@ -23,6 +30,9 @@ import {
   type ParticipantInput,
 } from './Participant'
 import { Team, type TeamSnapshot } from './Team'
+import { BattleEventType, type BattleEvent, type HandledCommand } from './BattleEvent'
+import { BattleState, type BattleStateSnapshot, type BattleView } from './BattleState'
+import { memberKey, type TeamRoster, type TurnOrderEntry } from './TurnOrder'
 
 export interface TeamConfigInput {
   readonly capacity: number
@@ -49,13 +59,45 @@ export interface BattleRoomSnapshot {
   readonly createdBy: string
   readonly createdAt: Date
   readonly version: number
+  /** HU-17: batalla en curso (`null` hasta `startBattle()`). */
+  readonly battle: BattleStateSnapshot | null
+  /** HU-17: bitacora de eventos de batalla con `seq` (ADR-020). */
+  readonly events: readonly BattleEvent[]
+  /** HU-17: comandos ya procesados, para deduplicar por `commandId`. */
+  readonly handledCommands: readonly HandledCommand[]
 }
+
+/**
+ * Lo que `restore()` acepta: los campos de HU-17 son opcionales para que los
+ * documentos y las instantaneas anteriores a la batalla sigan restaurandose
+ * sin migracion de datos (ausente = sin batalla, sin eventos, sin comandos).
+ */
+export type RestorableBattleRoomSnapshot = Omit<
+  BattleRoomSnapshot,
+  'battle' | 'events' | 'handledCommands'
+> &
+  Partial<Pick<BattleRoomSnapshot, 'battle' | 'events' | 'handledCommands'>>
+
+/** Estado de batalla que acompana a la sala; vacio hasta HU-17 `startBattle()`. */
+interface BattleExtras {
+  readonly battle: BattleState | null
+  readonly events: readonly BattleEvent[]
+  readonly handledCommands: readonly HandledCommand[]
+}
+
+const NO_BATTLE: BattleExtras = { battle: null, events: [], handledCommands: [] }
+
+/** Longitud maxima de un `commandId` (ADR-020). */
+const MAX_COMMAND_ID_LENGTH = 100
 
 /**
  * Sala de batalla (HU-14, RF-14). Aggregate root: cupo, equipos, modalidad,
  * recompensa y estado cambian juntos en una sola escritura (HU-14.1,
- * `HU-14.1-Decisiones-Tecnicas.md`, punto 1). No se modela `Battle`: HU-14
- * solo crea salas, no inicia batallas (HU-17+).
+ * `HU-14.1-Decisiones-Tecnicas.md`, punto 1). HU-17 extiende ESTE agregado con
+ * la batalla (cola de turnos inmutable, contador de progreso y bitacora de
+ * eventos con `seq`) en lugar de crear otra entidad: ADR-019 declara que la
+ * batalla es un unico agregado y una sola escritura atomica es lo que permite
+ * "persistir antes de difundir" (ADR-020).
  */
 export class BattleRoom {
   readonly id: string
@@ -65,6 +107,9 @@ export class BattleRoom {
   readonly reward: RewardConfig
   readonly createdBy: string
   readonly createdAt: Date
+  readonly battle: BattleState | null
+  readonly events: readonly BattleEvent[]
+  readonly handledCommands: readonly HandledCommand[]
   private readonly _version: number
 
   private constructor(
@@ -76,6 +121,7 @@ export class BattleRoom {
     createdBy: string,
     createdAt: Date,
     version: number,
+    extras: BattleExtras = NO_BATTLE,
   ) {
     this.id = id
     this.mode = mode
@@ -85,6 +131,9 @@ export class BattleRoom {
     this.createdBy = createdBy
     this.createdAt = createdAt
     this._version = version
+    this.battle = extras.battle
+    this.events = extras.events
+    this.handledCommands = extras.handledCommands
   }
 
   /**
@@ -161,7 +210,7 @@ export class BattleRoom {
    * estructurales (`DomainError`): los datos ya pasaron las reglas de
    * negocio al escribirse.
    */
-  static restore(snapshot: BattleRoomSnapshot): BattleRoom {
+  static restore(snapshot: RestorableBattleRoomSnapshot): BattleRoom {
     const roomId = BattleRoomId.create(snapshot.id)
     const mode = parseBattleMode(snapshot.mode)
     const status = parseBattleRoomStatus(snapshot.status)
@@ -186,6 +235,20 @@ export class BattleRoom {
     }
 
     const reward = RewardConfig.create(snapshot.reward.amount)
+    const battle =
+      snapshot.battle === undefined || snapshot.battle === null
+        ? null
+        : BattleState.restore(snapshot.battle)
+    const events = snapshot.events ?? []
+    const handledCommands = snapshot.handledCommands ?? []
+
+    if ((status === BattleRoomStatus.InBattle) !== (battle !== null)) {
+      throw new DomainError(
+        'Una sala IN_BATTLE necesita batalla y una batalla solo existe en una sala IN_BATTLE.',
+      )
+    }
+
+    BattleRoom.assertConsistentEvents(events)
 
     return new BattleRoom(
       roomId.value,
@@ -196,6 +259,7 @@ export class BattleRoom {
       snapshot.createdBy.trim(),
       snapshot.createdAt,
       snapshot.version,
+      { battle, events, handledCommands },
     )
   }
 
@@ -351,7 +415,9 @@ export class BattleRoom {
    * completar el cupo total.
    */
   leave(playerId: string): BattleRoom {
-    if (this.status === BattleRoomStatus.Cancelled) {
+    // HU-17: con la batalla en curso la lista de participantes es definitiva
+    // (RF-17): abandonar el lobby cambiaria el roster de una cola ya publicada.
+    if (this.status === BattleRoomStatus.Cancelled || this.status === BattleRoomStatus.InBattle) {
       throw new RoomNotLeavableError(this.id, this.status)
     }
 
@@ -422,6 +488,198 @@ export class BattleRoom {
       createdBy: this.createdBy,
       createdAt: this.createdAt,
       version: this._version,
+      battle: this.battle === null ? null : this.battle.toSnapshot(),
+      events: this.events,
+      handledCommands: this.handledCommands,
+    }
+  }
+
+  /** `seq` del ultimo evento de batalla (0 si todavia no hay ninguno). */
+  get lastSeq(): number {
+    return this.events.length
+  }
+
+  /** Vista de la batalla visible para los participantes, o `null` sin batalla. */
+  battleView(): BattleView | null {
+    return this.battle === null ? null : this.battle.toView(this.id)
+  }
+
+  /** Eventos con `seq` estrictamente mayor que `seq`, en orden. */
+  eventsAfter(seq: number): readonly BattleEvent[] {
+    return this.events.filter((event) => event.seq > seq)
+  }
+
+  /** `true` si `playerId` es un participante HUMAN de la sala. */
+  isParticipant(playerId: string): boolean {
+    return [...this.teams[0].participants, ...this.teams[1].participants].some(
+      (participant) =>
+        participant.kind === ParticipantKind.Human && participant.playerId === playerId,
+    )
+  }
+
+  /**
+   * Lista definitiva de participantes por equipo (HU-17): la ENTRADA de la
+   * generacion de la cola. `heroSubtype` queda en `null`: lo aporta la capa de
+   * aplicacion desde Player-Inventory al iniciar. Ningun dato de estadisticas
+   * o equipamiento pasa por aqui.
+   */
+  roster(): readonly [TeamRoster, TeamRoster] {
+    const rosterOf = (team: Team): TeamRoster => ({
+      label: team.label,
+      members: team.participants.map((participant, seat) => ({
+        teamLabel: team.label,
+        seat,
+        kind: participant.kind,
+        playerId: participant.playerId,
+        displayName: participant.displayName,
+        heroId: participant.heroId,
+        heroSubtype: null,
+      })),
+    })
+
+    return [rosterOf(this.teams[0]), rosterOf(this.teams[1])]
+  }
+
+  /**
+   * Inicia la batalla (HU-17, RF-17) con la cola YA generada: `PREPARING ->
+   * IN_BATTLE`, registra `battleStarted` con `seq = 1` y deja el turno activo
+   * en la posicion 0. La cola debe corresponder EXACTAMENTE a la lista
+   * definitiva de la sala (ningun participante externo, ninguno omitido).
+   *
+   * Devuelve un agregado nuevo con la MISMA version: quien la incrementa es el
+   * repositorio al guardar con `expectedVersion`.
+   */
+  startBattle(turnOrder: readonly TurnOrderEntry[], at: Date): BattleRoom {
+    if (this.status !== BattleRoomStatus.Preparing) {
+      throw new RoomNotStartableError(this.id, this.status)
+    }
+
+    if (this.totalParticipants() !== this.totalCapacity()) {
+      throw new RoomNotStartableError(this.id, this.status)
+    }
+
+    BattleRoom.assertQueueMatchesRoster(this.roster(), turnOrder)
+
+    const battle = BattleState.start(turnOrder, at)
+    const event: BattleEvent = {
+      seq: 1,
+      type: BattleEventType.BattleStarted,
+      occurredAt: at,
+      payload: { battle: battle.toView(this.id) },
+    }
+
+    return new BattleRoom(
+      this.id,
+      this.mode,
+      BattleRoomStatus.InBattle,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      { battle, events: [event], handledCommands: [] },
+    )
+  }
+
+  /**
+   * Cierra el turno activo y avanza al siguiente elemento de la cola (HU-17,
+   * RF-17). Lo invoca EL SERVIDOR al terminar una accion valida (HU-18/19); no
+   * es una operacion que un cliente pueda pedir por si misma.
+   *
+   * `actorPlayerId` debe ser el participante de la posicion activa (`null`
+   * cuando el turno activo es de un `AI`, que lo cierra el servidor). Un
+   * `commandId` ya procesado devuelve ESTA MISMA instancia (`next === this`):
+   * el llamante lo detecta y no persiste ni difunde nada (ADR-020).
+   */
+  completeTurn(actorPlayerId: string | null, commandId: string, at: Date): BattleRoom {
+    if (
+      typeof commandId !== 'string' ||
+      commandId.trim().length === 0 ||
+      commandId.length > MAX_COMMAND_ID_LENGTH
+    ) {
+      throw new InvalidCommandIdError()
+    }
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    if (this.handledCommands.some((handled) => handled.commandId === commandId)) {
+      return this
+    }
+
+    const current = this.battle.currentEntry
+    const isActor =
+      current.kind === ParticipantKind.Human
+        ? actorPlayerId !== null && actorPlayerId === current.playerId
+        : actorPlayerId === null
+
+    if (!isActor) {
+      throw new NotYourTurnError(this.id)
+    }
+
+    const completedPosition = this.battle.currentPosition
+    const battle = this.battle.completeTurn()
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.TurnAdvanced,
+      occurredAt: at,
+      payload: { completedPosition, battle: battle.toView(this.id) },
+    }
+
+    return new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        handledCommands: [...this.handledCommands, { commandId, seq }],
+      },
+    )
+  }
+
+  private static assertConsistentEvents(events: readonly BattleEvent[]): void {
+    events.forEach((event, index) => {
+      if (event.seq !== index + 1) {
+        throw new DomainError(
+          'La bitacora de eventos de la sala no es una secuencia 1..n sin huecos.',
+        )
+      }
+    })
+  }
+
+  /** La cola debe ser EXACTAMENTE la lista definitiva: mismos participantes, ni uno mas ni uno menos. */
+  private static assertQueueMatchesRoster(
+    rosters: readonly [TeamRoster, TeamRoster],
+    turnOrder: readonly TurnOrderEntry[],
+  ): void {
+    const expected = new Map(
+      rosters.flatMap((roster) => roster.members).map((member) => [memberKey(member), member]),
+    )
+
+    if (turnOrder.length !== expected.size) {
+      throw new InvalidBattleRosterError(
+        'La cola de turnos no contiene exactamente a los participantes de la sala.',
+      )
+    }
+
+    for (const entry of turnOrder) {
+      const member = expected.get(memberKey(entry))
+
+      if (member?.kind !== entry.kind || member.playerId !== entry.playerId) {
+        throw new InvalidBattleRosterError(
+          `El participante ${memberKey(entry)} de la cola no pertenece a la sala.`,
+        )
+      }
+
+      expected.delete(memberKey(entry))
     }
   }
 
