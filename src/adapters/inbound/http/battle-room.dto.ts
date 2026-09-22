@@ -22,6 +22,23 @@ import {
  * Los participantes `HUMAN` que se declaren aqui se resuelven al creador —
  * por eso `ParticipantRequest` tampoco acepta `playerId` del cliente.
  */
+/**
+ * Apuesta declarada por el cliente (HU-23, RF-23): SOLO el monto. El
+ * `holdOperationId` lo resuelve Combat (determinista) y el estado lo decide
+ * Wallet; ninguno se acepta del cuerpo.
+ *
+ * SIN `@Min(1)`: `0` significa "no apostar" (D5) y un negativo o decimal es
+ * `INVALID_AMOUNT` (422, regla de negocio), no 400.
+ */
+export class StakeRequest {
+  @ApiProperty({
+    minimum: 0,
+    description: 'Creditos a apostar. 0 = no apostar (D5); negativo o no entero -> 422.',
+  })
+  @IsNumber()
+  amount!: number
+}
+
 export class ParticipantRequest {
   @ApiProperty({ enum: ['HUMAN', 'AI'] })
   @IsIn(['HUMAN', 'AI'])
@@ -35,6 +52,17 @@ export class ParticipantRequest {
   @IsString()
   @MinLength(1)
   heroId?: string
+
+  @ApiProperty({
+    required: false,
+    type: StakeRequest,
+    description:
+      'HU-23: apuesta opcional del participante declarado (solo el creador puede ser HUMAN).',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => StakeRequest)
+  stake?: StakeRequest
 }
 
 export class TeamConfigRequest {
@@ -90,6 +118,18 @@ export class JoinBattleRoomRequest {
   @IsOptional()
   @IsIn(['A', 'B'])
   team?: string
+
+  @ApiProperty({
+    required: false,
+    type: StakeRequest,
+    description:
+      'HU-23: apuesta opcional del jugador que se une (D1, individual). Se reserva de forma ' +
+      'sincrona antes de persistir la union.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => StakeRequest)
+  stake?: StakeRequest
 }
 
 export class RewardConfigRequest {
@@ -122,6 +162,16 @@ export class CreateBattleRoomRequest {
   reward!: RewardConfigRequest
 }
 
+class ParticipantStakeResponse {
+  @ApiProperty({ description: 'Creditos apostados por el PROPIO jugador.' })
+  readonly amount!: number
+
+  @ApiProperty({
+    enum: ['PENDING_RESERVE', 'ACTIVE', 'RESERVE_FAILED', 'RELEASED', 'CAPTURED', 'SETTLED_WON'],
+  })
+  readonly status!: string
+}
+
 class ParticipantResponse {
   @ApiProperty({ enum: ['HUMAN', 'AI'] })
   readonly kind!: string
@@ -141,6 +191,15 @@ class ParticipantResponse {
   })
   readonly displayName!: string | null
 
+  @ApiProperty({
+    required: false,
+    type: ParticipantStakeResponse,
+    description:
+      'HU-23 (§10): apuesta del PROPIO jugador que pide la sala. Ausente si no aposto o si el ' +
+      'participante es un rival (su monto y estado nunca viajan).',
+  })
+  readonly stake?: ParticipantStakeResponse
+
   @ApiProperty({ format: 'date-time' })
   readonly joinedAt!: string
 }
@@ -159,6 +218,11 @@ class TeamResponse {
 class RewardConfigResponse {
   @ApiProperty()
   readonly amount!: number
+}
+
+class StakePoolResponse {
+  @ApiProperty({ description: 'Suma de las apuestas ACTIVE de la sala.' })
+  readonly total!: number
 }
 
 /** Respuesta de creacion, listado y cancelacion (misma forma en los tres). */
@@ -198,4 +262,11 @@ export class BattleRoomResponse {
       'Batalla en curso (HU-17): battleId, startedAt, turnOrder inmutable, turnsCompleted, round y currentTurn. null hasta IN_BATTLE.',
   })
   readonly battle!: Record<string, unknown> | null
+
+  @ApiProperty({
+    type: StakePoolResponse,
+    description:
+      'HU-23 (§10): resumen agregado de las apuestas ACTIVE de la sala (sin desglosar por rival).',
+  })
+  readonly stakePool!: StakePoolResponse
 }

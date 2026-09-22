@@ -46,6 +46,14 @@ import {
 } from '../../../application/errors/ApplicationError'
 import { PrecombatEligibilityBlockedError } from '../../../application/errors/PrecombatEligibilityError'
 import {
+  StakeOperationConflictError,
+  StakeRejectedError,
+} from '../../../application/errors/StakeIntegrationErrors'
+import {
+  InvalidStakeAmountError,
+  StakeNotAllowedInPveError,
+} from '../../../domain/errors/StakeErrors'
+import {
   AccountProfileMissingError,
   PlayerWithoutEquippedHeroError,
   UpstreamServiceError,
@@ -131,8 +139,10 @@ export class BattleRoomController {
   @ApiOperation({ summary: 'Lista las salas disponibles (WAITING_FOR_PLAYERS y con cupo)' })
   @ApiResponse({ status: 200, type: BattleRoomResponse, isArray: true })
   @ApiResponse({ status: 401, description: 'Falta el testimonio o no es valido' })
-  async list(): Promise<readonly BattleRoomDto[]> {
-    return this.listAvailableBattleRooms.execute()
+  async list(@CurrentIdentity() identity: VerifiedIdentity): Promise<readonly BattleRoomDto[]> {
+    // HU-23 (§10): la apuesta que viaja es la del PROPIO jugador; por eso el
+    // listado necesita la identidad (ya la exige el guard global).
+    return this.listAvailableBattleRooms.execute(identity.subject)
   }
 
   @Post(':roomId/cancel')
@@ -221,7 +231,12 @@ export class BattleRoomController {
     @CurrentIdentity() identity: VerifiedIdentity,
   ): Promise<BattleRoomDto> {
     try {
-      const dto = await this.joinBattleRoom.execute(roomId, identity.subject, body.team ?? null)
+      const dto = await this.joinBattleRoom.execute(
+        roomId,
+        identity.subject,
+        body.team ?? null,
+        body.stake ?? null,
+      )
 
       // Un solo evento cubre tanto "ingreso valido" como "transicion a
       // PREPARING": ambos son el MISMO resultado de la MISMA mutacion
@@ -442,6 +457,31 @@ export class BattleRoomController {
           'si el problema persiste, contacta a soporte.',
         code: 'ACCOUNT_PROFILE_NOT_FOUND',
       })
+    }
+
+    // HU-23 (contrato §11): apuesta en una sala PVE (D4) y monto invalido.
+    // Se comprueban ANTES del `DomainError` generico: ambos extienden de el.
+    if (error instanceof StakeNotAllowedInPveError || error instanceof InvalidStakeAmountError) {
+      return new UnprocessableEntityException({
+        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+        message: error.message,
+        code: error.code,
+      })
+    }
+
+    // HU-23: Wallet rechazo la reserva (422) con su propio codigo del §11 --
+    // `INSUFFICIENT_AVAILABLE_BALANCE` viaja TAL CUAL (contrato §7: la
+    // creacion completa falla con el mismo codigo).
+    if (error instanceof StakeRejectedError) {
+      return new UnprocessableEntityException({
+        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+        message: error.message,
+        ...(error.code === null ? {} : { code: error.code }),
+      })
+    }
+
+    if (error instanceof StakeOperationConflictError) {
+      return new ConflictException(error.message)
     }
 
     // HU-15.2 (RF-15): las llamadas internas a Account/Player-Inventory

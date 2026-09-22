@@ -22,6 +22,6 @@ export class GetBattleRoom {
       throw new RoomAccessForbiddenError(roomId)
     }
 
-    return toBattleRoomDto(room)
+    return toBattleRoomDto(room, requesterId)
   }
 }
