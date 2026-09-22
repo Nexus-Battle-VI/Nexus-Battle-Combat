@@ -1,5 +1,9 @@
 import type { BattleEvent, DegradedFrom } from '../../domain/entities/BattleEvent'
-import type { BattleRoom, BasicAttackOutcome, BasicAttackReadyPlan } from '../../domain/entities/BattleRoom'
+import type {
+  BattleRoom,
+  BasicAttackOutcome,
+  BasicAttackReadyPlan,
+} from '../../domain/entities/BattleRoom'
 import type { CombatantKey } from '../../domain/entities/Combatant'
 import { UnsupportedCombatProfileError } from '../../domain/errors/BattleErrors'
 import { DomainError } from '../../domain/errors/DomainError'
