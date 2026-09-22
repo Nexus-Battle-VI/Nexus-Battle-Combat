@@ -69,7 +69,9 @@ export interface AppConfig {
   readonly accountServiceBaseUrl: string | null
   /** URL base de Player-Inventory para el contrato interno `equipped-hero` (HU-15.2, DP-4). Sin barra final. */
   readonly playerInventoryServiceBaseUrl: string | null
-  /** Tiempo de espera de las llamadas HTTP internas salientes (Account, Player-Inventory). */
+  /** URL base de Wallet para el contrato interno `battle-reward` (HU-22, `hu-22-reward-contract-v1` §3). Sin barra final. */
+  readonly walletServiceBaseUrl: string | null
+  /** Tiempo de espera de las llamadas HTTP internas salientes (Account, Player-Inventory, Wallet). */
   readonly internalHttpTimeoutMs: number
   readonly chat: ChatConfig
   /**
@@ -217,6 +219,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   const internalServiceAuthSecret = readString(env, 'INTERNAL_SERVICE_AUTH_SECRET', '')
   const accountServiceBaseUrl = readString(env, 'ACCOUNT_SERVICE_BASE_URL', '')
   const playerInventoryServiceBaseUrl = readString(env, 'PLAYER_INVENTORY_SERVICE_BASE_URL', '')
+  const walletServiceBaseUrl = readString(env, 'WALLET_SERVICE_BASE_URL', '')
 
   // Igual que AUTH_MODE/PERSISTENCE_DRIVER: en produccion, HU-15.2 no puede
   // arrancar sin poder resolver displayName/heroId -- lo contrario dejaria
@@ -229,6 +232,15 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     throw new ConfigurationError(
       'ACCOUNT_SERVICE_BASE_URL y PLAYER_INVENTORY_SERVICE_BASE_URL son obligatorios con ' +
         'NODE_ENV=production (HU-15.2, RF-15: resolucion de displayName/heroId al unirse).',
+    )
+  }
+
+  // HU-22: sin esto, todo RewardWorkflow queda atascado en PENDING_CREDIT
+  // desde la primera batalla que termine, sin que el arranque lo advierta.
+  if (nodeEnv === 'production' && walletServiceBaseUrl === '') {
+    throw new ConfigurationError(
+      'WALLET_SERVICE_BASE_URL es obligatorio con NODE_ENV=production ' +
+        '(HU-22, hu-22-reward-contract-v1 §3: acreditar creditos de batalla).',
     )
   }
 
@@ -253,6 +265,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     accountServiceBaseUrl: accountServiceBaseUrl === '' ? null : accountServiceBaseUrl,
     playerInventoryServiceBaseUrl:
       playerInventoryServiceBaseUrl === '' ? null : playerInventoryServiceBaseUrl,
+    walletServiceBaseUrl: walletServiceBaseUrl === '' ? null : walletServiceBaseUrl,
     internalHttpTimeoutMs: readInteger(env, 'INTERNAL_HTTP_TIMEOUT_MS', 3_000, 100, 30_000),
     chat: {
       // El tope 2000 acota lo que el validador del motor admite (8000 unidades,

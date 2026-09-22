@@ -61,6 +61,8 @@ describe('Configuracion del servicio', () => {
       // "exige ACCOUNT_SERVICE_BASE_URL...").
       ACCOUNT_SERVICE_BASE_URL: 'https://account.internal',
       PLAYER_INVENTORY_SERVICE_BASE_URL: 'https://player-inventory.internal',
+      // HU-22: produccion tambien exige poder acreditar creditos de batalla.
+      WALLET_SERVICE_BASE_URL: 'https://wallet.internal',
     })
 
     expect(config.swaggerEnabled).toBe(false)
