@@ -405,6 +405,9 @@ describe('ExecuteBasicAttack — rechazos: 0 sorteos, nada cambia', () => {
   it('objetivo aliado (2v2)', () =>
     rejected({ teamSizes: [2, 2] }, { target: { teamLabel: 'A', seat: 1 } }, SameTeamTargetError))
 
+  it('objetivo aliado (3v3, HU-12 Issue #21): el mas lejano en la cola tambien se rechaza', () =>
+    rejected({ teamSizes: [3, 3] }, { target: { teamLabel: 'A', seat: 2 } }, SameTeamTargetError))
+
   it('objetivo sin Vida', () => rejected({ health: { 'B#0': 0 } }, {}, TargetUnavailableError))
 
   it('atacante sin Vida', () => rejected({ health: { 'A#0': 0 } }, {}, ActorUnavailableError))

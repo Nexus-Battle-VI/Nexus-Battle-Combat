@@ -185,6 +185,17 @@ describe('BattleRoom.planSkill — validacion previa (0 sorteos)', () => {
     )
   })
 
+  it('3v3 (HU-12, Issue #21): ningun aliado es objetivo valido con una habilidad, ni el mas lejano', () => {
+    const room = battleWithSkills({ teamSizes: [3, 3] })
+
+    expect(() =>
+      room.planSkill('a1', 'cmd-1', SHIELD_STRIKE_ID, { teamLabel: 'A', seat: 1 }),
+    ).toThrow(SameTeamTargetError)
+    expect(() =>
+      room.planSkill('a1', 'cmd-2', SHIELD_STRIKE_ID, { teamLabel: 'A', seat: 2 }),
+    ).toThrow(SameTeamTargetError)
+  })
+
   it('un objetivo sin Vida: TargetUnavailableError; un actor sin Vida: ActorUnavailableError', () => {
     expect(() =>
       battleWithSkills({ health: { 'B#0': 0 } }).planSkill(
