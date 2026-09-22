@@ -97,7 +97,10 @@ export const STONE_HAND = abilityOf(STONE_HAND_ID, 'Mano de piedra', 4, [
   },
 ])
 
-/** Reanimacion (Medico): reanima a un aliado; el documento dice «todos los puntos de poder». NO soportada. */
+/**
+ * Reanimacion (Medico): reanima a un aliado; el documento dice «todos los puntos
+ * de poder». SOPORTADA (excepcion de curacion de HU-12, sin Task de Management).
+ */
 export const REANIMATE: CombatAbility = {
   abilityId: REANIMATE_ID,
   name: 'Reanimacion',

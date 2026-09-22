@@ -69,6 +69,30 @@ const finished: BattleEvent = {
   },
 }
 
+/** Excepcion de curacion de HU-12 (Tabla 7, sin Task de Management): Reanimacion. */
+const healed: BattleEvent = {
+  seq: 7,
+  type: BattleEventType.HealSkillUsed,
+  occurredAt: NOW,
+  payload: {
+    commandId: 'cmd-heal',
+    completedPosition: 0,
+    actor: { teamLabel: 'A', seat: 0 },
+    target: { teamLabel: 'A', seat: 1 },
+    skill: {
+      abilityId: 'reanimacion-id',
+      name: 'Reanimacion',
+      powerCost: { mode: 'ALL_AVAILABLE' },
+      chargeTurns: 1,
+    },
+    power: { before: 10, after: 0 },
+    cooldown: { remainingTurns: 1 },
+    heal: { amount: 32 },
+    targetHealth: { before: 12, after: 44 },
+    battle: view,
+  },
+}
+
 describe('toBattleEventWire — HU-21 (contrato §6)', () => {
   it('`turnTimedOut` lleva exactamente type, seq, roomId, occurredAt, completedPosition, timedOut y battle', () => {
     const wire = toBattleEventWire(ROOM_ID, timedOut)
@@ -110,6 +134,48 @@ describe('toBattleEventWire — HU-21 (contrato §6)', () => {
       'result',
       'roomId',
       'seq',
+      'type',
+    ])
+  })
+
+  it('`healSkillUsed` (excepcion de curacion, HU-12): SIN resolution ni bonus, con heal y targetHealth', () => {
+    const wire = toBattleEventWire(ROOM_ID, healed)
+
+    expect(wire).toEqual({
+      type: 'healSkillUsed',
+      seq: 7,
+      roomId: ROOM_ID,
+      occurredAt: NOW.toISOString(),
+      commandId: 'cmd-heal',
+      completedPosition: 0,
+      actor: { teamLabel: 'A', seat: 0 },
+      target: { teamLabel: 'A', seat: 1 },
+      skill: {
+        abilityId: 'reanimacion-id',
+        name: 'Reanimacion',
+        powerCost: { mode: 'ALL_AVAILABLE' },
+        chargeTurns: 1,
+      },
+      power: { before: 10, after: 0 },
+      cooldown: { remainingTurns: 1 },
+      heal: { amount: 32 },
+      targetHealth: { before: 12, after: 44 },
+      battle: view,
+    })
+    expect(Object.keys(wire).sort()).toEqual([
+      'actor',
+      'battle',
+      'commandId',
+      'completedPosition',
+      'cooldown',
+      'heal',
+      'occurredAt',
+      'power',
+      'roomId',
+      'seq',
+      'skill',
+      'target',
+      'targetHealth',
       'type',
     ])
   })

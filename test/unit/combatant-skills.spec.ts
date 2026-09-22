@@ -8,6 +8,8 @@ import { NOW } from '../fixtures/battle'
 import {
   EMBATE,
   EMBATE_ID,
+  REANIMATE,
+  REANIMATE_ID,
   SHIELD_STRIKE,
   SHIELD_STRIKE_ID,
   STONE_HAND,
@@ -281,6 +283,17 @@ describe('Combatant.toView — lo que ve el cliente (contrato §5.4)', () => {
       powerCost: { mode: 'FIXED', amount: 2 },
       chargeTurns: 1,
       cooldownRemaining: 0,
+      targetAudience: 'OPPONENT',
+      status: 'READY',
+    })
+  })
+
+  it('Reanimacion (excepcion de curacion, HU-12) se ve con targetAudience ALLY', () => {
+    const view = Combatant.start(KEY_A, skillProfile({ abilities: [REANIMATE] })).toView()
+
+    expect(view.skills[0]).toMatchObject({
+      abilityId: REANIMATE_ID,
+      targetAudience: 'ALLY',
       status: 'READY',
     })
   })

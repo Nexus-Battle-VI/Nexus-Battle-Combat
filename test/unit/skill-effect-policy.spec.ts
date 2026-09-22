@@ -23,11 +23,16 @@ const abilityWith = (effects: readonly CombatAbilityEffect[]): CombatAbility => 
   effects,
 })
 
+/** Este describe solo cubre el patron DAMAGE (bono de Ataque/Dano); Reanimacion tiene el suyo propio abajo. */
 const supported = (ability: CombatAbility) => {
   const result = evaluateSkill(ability)
 
   if (!result.supported) {
     throw new Error(`se esperaba una habilidad soportada: ${result.reason}`)
+  }
+
+  if (result.kind !== 'DAMAGE') {
+    throw new Error(`se esperaba el patron DAMAGE, no ${result.kind}`)
   }
 
   return result
@@ -37,6 +42,7 @@ describe('evaluateSkill — habilidades soportadas', () => {
   it('Golpe con escudo: +2 al Ataque, sin bono de Dano', () => {
     expect(supported(SHIELD_STRIKE)).toEqual({
       supported: true,
+      kind: 'DAMAGE',
       attackBonus: { fixed: 2, dice: [] },
       damageBonus: { fixed: 0, dice: [] },
     })
@@ -143,9 +149,8 @@ describe('evaluateSkill — lo que NO se soporta se rechaza de forma explicita',
     expect(evaluateSkill(abilityWith([])).supported).toBe(false)
   })
 
-  it('Mano de piedra (duracion y condicion) y Reanimacion (reanimar a un aliado) no estan soportadas', () => {
+  it('Mano de piedra (duracion y condicion) no esta soportada', () => {
     expect(evaluateSkill(STONE_HAND).supported).toBe(false)
-    expect(evaluateSkill(REANIMATE).supported).toBe(false)
   })
 
   it('el motivo se explica en el resultado (para el registro, nunca para el cliente)', () => {
@@ -155,6 +160,59 @@ describe('evaluateSkill — lo que NO se soporta se rechaza de forma explicita',
       supported: false,
       reason: 'un efecto con duracion exige un estado de batalla mas alla del turno.',
     })
+  })
+})
+
+/**
+ * Excepcion de curacion de HU-12 (Tabla 7, sin Task de Management): Reanimacion
+ * (Medico) es la UNICA habilidad de curacion formalmente soportada.
+ */
+describe('evaluateSkill — Reanimacion (excepcion de curacion, HU-12)', () => {
+  it('Reanimacion SI esta soportada: kind HEAL con la magnitud del efecto REVIVE', () => {
+    expect(evaluateSkill(REANIMATE)).toEqual({
+      supported: true,
+      kind: 'HEAL',
+      healMagnitude: { mode: 'PERCENTAGE', basisPoints: 10_000 },
+    })
+  })
+
+  const revive = (change: Partial<CombatAbilityEffect>): CombatAbilityEffect => ({
+    kind: 'REVIVE',
+    target: 'ALLY',
+    magnitude: { mode: 'PERCENTAGE', basisPoints: 10_000 },
+    hasActivationCondition: false,
+    ...change,
+  })
+
+  it.each([
+    ['sobre un rival', revive({ target: 'OPPONENT' })],
+    ['sobre todo el grupo aliado (Canto del Bosque)', revive({ target: 'ALLIED_GROUP' })],
+    ['con duracion (Vinculo Natural)', revive({ durationTurns: 2 })],
+    ['con condicion de activacion', revive({ hasActivationCondition: true })],
+    ['con magnitud FIXED en vez de PERCENTAGE', revive({ magnitude: fixed(100) })],
+    ['con magnitud en DADOS', revive({ magnitude: dice(2, 6) })],
+    ['con 0 puntos base', revive({ magnitude: { mode: 'PERCENTAGE', basisPoints: 0 } })],
+    [
+      'con mas de 10000 puntos base',
+      revive({ magnitude: { mode: 'PERCENTAGE', basisPoints: 10_001 } }),
+    ],
+    ['sin magnitud', revive({ magnitude: undefined })],
+  ])('una curacion %s no esta soportada', (_label, unsupportedEffect) => {
+    const result = evaluateSkill(abilityWith([unsupportedEffect]))
+
+    expect(result.supported).toBe(false)
+  })
+
+  it('un REVIVE junto a otro efecto (aunque sea un segundo REVIVE) no esta soportado: solo uno', () => {
+    const result = evaluateSkill(abilityWith([revive({}), revive({})]))
+
+    expect(result.supported).toBe(false)
+  })
+
+  it('un REVIVE mezclado con un STAT_MODIFIER no esta soportado', () => {
+    const result = evaluateSkill(abilityWith([revive({}), attackBonus(fixed(1))]))
+
+    expect(result.supported).toBe(false)
   })
 })
 
@@ -250,7 +308,7 @@ describe('evaluateSkill — el Catalog desplegado (24 habilidades, contrato §10
     ['Neutralizacion de Efectos', false, [mod('HEALING', fixed(2)), mod('HEALING', dice(2, 4))]],
     [
       'Reanimacion',
-      false,
+      true,
       [other('REVIVE', 'ALLY', { magnitude: { mode: 'PERCENTAGE', basisPoints: 10_000 } })],
     ],
   ]
@@ -263,7 +321,9 @@ describe('evaluateSkill — el Catalog desplegado (24 habilidades, contrato §10
     expect(evaluateSkill({ ...SHIELD_STRIKE, name, effects }).supported).toBe(expected)
   })
 
-  it('10 de 24 estan soportadas', () => {
-    expect(CATALOG.filter(([, isSupported]) => isSupported)).toHaveLength(10)
+  // Excepcion de curacion de HU-12 (sin Task de Management): Reanimacion pasa de
+  // no soportada a soportada. Las otras 23 no cambian.
+  it('11 de 24 estan soportadas (10 ofensivas + Reanimacion)', () => {
+    expect(CATALOG.filter(([, isSupported]) => isSupported)).toHaveLength(11)
   })
 })

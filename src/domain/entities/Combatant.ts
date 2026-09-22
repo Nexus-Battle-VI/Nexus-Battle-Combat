@@ -47,6 +47,15 @@ export interface PowerView {
  */
 export type SkillStatus = 'READY' | 'RECHARGING' | 'UNSUPPORTED'
 
+/**
+ * A quien puede dirigirse una habilidad (excepcion de HU-12, sin Task de
+ * Management): `OPPONENT` para toda habilidad ofensiva (el default de siempre,
+ * HU-19); `ALLY` UNICAMENTE para la excepcion nombrada de curacion (Reanimacion).
+ * Nunca lo decide el cliente: lo deriva Combat de `evaluateSkill`, mismo criterio
+ * que `status`.
+ */
+export type SkillTargetAudience = 'OPPONENT' | 'ALLY'
+
 /** Una habilidad tal como la ve un cliente: nunca lleva sus efectos. */
 export interface SkillView {
   readonly abilityId: string
@@ -54,6 +63,7 @@ export interface SkillView {
   readonly powerCost: CombatPowerCost
   readonly chargeTurns: number
   readonly cooldownRemaining: number
+  readonly targetAudience: SkillTargetAudience
   readonly status: SkillStatus
 }
 
@@ -334,6 +344,7 @@ export class Combatant {
           : { current: this.currentPower, max: this.profile.maxPower },
       skills: this.abilities.map((ability): SkillView => {
         const cooldownRemaining = this.cooldownOf(ability.abilityId)
+        const support = evaluateSkill(ability)
 
         return {
           abilityId: ability.abilityId,
@@ -341,7 +352,8 @@ export class Combatant {
           powerCost: ability.powerCost,
           chargeTurns: ability.chargeTurns,
           cooldownRemaining,
-          status: !evaluateSkill(ability).supported
+          targetAudience: support.supported && support.kind === 'HEAL' ? 'ALLY' : 'OPPONENT',
+          status: !support.supported
             ? 'UNSUPPORTED'
             : cooldownRemaining > 0
               ? 'RECHARGING'
