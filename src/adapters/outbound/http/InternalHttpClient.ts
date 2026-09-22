@@ -140,5 +140,114 @@ export const getInternalJson = async (
   }
 }
 
+/**
+ * Resultado de una llamada `POST` interna firmada (HU-22): la forma del
+ * cuerpo la valida cada cliente concreto (`WalletHttpClient`,
+ * `PlayerInventoryGrantHttpClient`), esta funcion solo distingue los
+ * resultados de transporte/protocolo que HU-22 documenta como negocio, no
+ * como fallo:
+ *
+ *  - `ok`: `200`, cuerpo JSON crudo.
+ *  - `conflict`: `409` (mismo `operationId`, cuerpo distinto).
+ *  - `rejected`: `422` (rechazo terminal de negocio; el cuerpo trae `code`/`message`).
+ *
+ * Cualquier otro resultado (no alcanzable, tiempo agotado, 401, 5xx, cuerpo
+ * no parseable) lanza `UpstreamServiceError`, igual que `getInternalJson`.
+ */
+export type InternalPostResult =
+  | { readonly outcome: 'ok'; readonly body: unknown }
+  | { readonly outcome: 'conflict'; readonly body: unknown }
+  | { readonly outcome: 'rejected'; readonly body: unknown }
+
+export const postInternalJson = async (
+  service: string,
+  path: string,
+  payload: unknown,
+  options: InternalHttpClientOptions,
+): Promise<InternalPostResult> => {
+  const method = 'POST'
+  const timestamp = String(options.clock.now().getTime())
+  const signature = signInternalRequest(options.secret, {
+    service: options.callerService,
+    method,
+    path,
+    timestamp,
+    body: payload,
+  })
+
+  const fetchImpl = options.fetchImpl ?? fetch
+  const controller = new AbortController()
+  const timer = setTimeout(() => {
+    controller.abort()
+  }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+
+  let response: Response
+  try {
+    response = await fetchImpl(`${options.baseUrl}${path}`, {
+      method,
+      headers: {
+        [INTERNAL_SERVICE_HEADER]: options.callerService,
+        [INTERNAL_TIMESTAMP_HEADER]: timestamp,
+        [INTERNAL_SIGNATURE_HEADER]: signature,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    })
+  } catch (error: unknown) {
+    const reason = isAbortError(error) ? 'tiempo_agotado' : 'no_alcanzable'
+
+    options.logger.warn('internal_http_client_fallo', { service, path, reason })
+
+    throw new UpstreamServiceError(service, reason)
+  } finally {
+    clearTimeout(timer)
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    options.logger.warn('internal_http_client_fallo', {
+      service,
+      path,
+      reason: 'no_autorizado',
+    })
+
+    throw new UpstreamServiceError(service, 'no_autorizado')
+  }
+
+  if (response.status !== 200 && response.status !== 409 && response.status !== 422) {
+    options.logger.warn('internal_http_client_fallo', {
+      service,
+      path,
+      reason: 'error_servidor',
+      status: response.status,
+    })
+
+    throw new UpstreamServiceError(service, 'error_servidor')
+  }
+
+  try {
+    const body: unknown = await response.json()
+
+    if (response.status === 409) {
+      return { outcome: 'conflict' as const, body }
+    }
+
+    if (response.status === 422) {
+      return { outcome: 'rejected' as const, body }
+    }
+
+    return { outcome: 'ok' as const, body }
+  } catch {
+    options.logger.warn('internal_http_client_fallo', {
+      service,
+      path,
+      reason: 'respuesta_invalida',
+    })
+
+    throw new UpstreamServiceError(service, 'respuesta_invalida')
+  }
+}
+
 const isAbortError = (error: unknown): boolean =>
   error instanceof Error && error.name === 'AbortError'

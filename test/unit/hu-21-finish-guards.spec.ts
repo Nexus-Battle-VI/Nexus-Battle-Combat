@@ -95,7 +95,7 @@ describe('HU-21 — sin aleatoriedad ni reloj propio en dominio/aplicacion', () 
 })
 
 describe('HU-21 — temporizadores y un solo escritor', () => {
-  it('`setInterval`/`setTimeout` solo en el planificador nuevo y en los dos adaptadores que ya los tenian', () => {
+  it('`setInterval`/`setTimeout` solo en los planificadores y en los adaptadores que ya los tenian', () => {
     const withTimers = allSources(ROOT)
       .filter((path) => /setInterval|setTimeout/.test(code(path)))
       .map((path) => relative(ROOT, path).replace(/\\/g, '/'))
@@ -105,6 +105,9 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
       'adapters/inbound/ws/BattleRoomRealtimeGateway.ts',
       'adapters/outbound/http/InternalHttpClient.ts',
       'adapters/outbound/system/IntervalBattleDeadlineScheduler.ts',
+      // HU-22 (Task HU-22.3): mismo patron de barrido que el planificador de
+      // vencimientos, para el RewardWorkflow.
+      'adapters/outbound/system/IntervalRewardWorkflowScheduler.ts',
     ])
   })
 
@@ -182,8 +185,21 @@ describe('HU-21 — el cliente no aporta el resultado y los adaptadores no acred
     }
   })
 
-  it('ningun adaptador de entrada menciona wallet ni creditos (el derecho sale por el puerto)', () => {
+  it('ningun adaptador de entrada de COMBATE menciona wallet ni creditos (el derecho sale por el puerto)', () => {
+    // HU-22 anade un adaptador de entrada NUEVO cuyo unico proposito es
+    // exponer el estado de creditos/cofre (`reward-status.controller.ts`,
+    // Task HU-22.3): mencionar "credit"/"wallet" ahi es el requisito, no una
+    // fuga. `tokens.ts` es el registro neutro de simbolos de inyeccion
+    // (incluye REWARD_CREDIT_PORT): no es logica de negocio ni un mensaje al
+    // cliente. Esta guarda sigue vigente para los handlers de COMBATE
+    // (ataque, habilidad, sala, WS): esos no deben saber nada de economia.
+    const excusedFromCheck = ['reward-status.controller.ts', 'reward-status.dto.ts', 'tokens.ts']
+
     for (const path of allSources(join(ROOT, 'adapters', 'inbound'))) {
+      if (excusedFromCheck.some((name) => path.endsWith(name))) {
+        continue
+      }
+
       expect({ path, matches: /wallet|credit/i.test(code(path)) }).toEqual({ path, matches: false })
     }
   })

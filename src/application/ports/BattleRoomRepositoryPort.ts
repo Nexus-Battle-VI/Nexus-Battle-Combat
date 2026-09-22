@@ -31,6 +31,18 @@ export interface BattleRoomRepositoryPort {
    * `RoomConflictError`. Devuelve la sala con la version nueva.
    */
   save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom>
+
+  /**
+   * Salas `FINISHED` cuyo resultado se persistio en o despues de `since`
+   * (HU-22, reconciliacion de `RewardWorkflow`): `since` acota la ventana, no
+   * es un escaneo del historico completo. La usa
+   * `ReconcileRewardWorkflows` al arrancar para cerrar el hueco entre "sala
+   * FINISHED persistida" y "RewardWorkflow persistido" -- ver
+   * `RewardWorkflowResultPublisher`, que crea el workflow *despues* de la
+   * escritura de la sala y sin esperarla (`publish()` no puede ser sincrono:
+   * su firma es la de `BattleResultPublisherPort`, ya cerrada por HU-21).
+   */
+  findFinishedSince(since: Date): Promise<readonly BattleRoom[]>
 }
 
 export const BATTLE_ROOM_REPOSITORY = Symbol('BattleRoomRepositoryPort')

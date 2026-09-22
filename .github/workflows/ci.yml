@@ -149,14 +149,15 @@ jobs:
             sleep 2
           done
           url='mongodb://combat-ci-db:27017/combat'
-          # ACCOUNT_SERVICE_BASE_URL y PLAYER_INVENTORY_SERVICE_BASE_URL son
-          # obligatorias en produccion desde HU-15.2 (vease env.ts). Los valores
-          # siguen la convencion de Nexus-Battle-Infrastructure
-          # (compose.example.yml / nodes/app.yml): no se resuelven de verdad en
-          # esta red de CI, pero la readiness solo depende de MongoDB, asi que
-          # basta con que el arranque pase la validacion de configuracion.
-          docker run --rm --network combat-ci -e AUTH_MODE=jwt -e COGNITO_USER_POOL_ID=us-east-1_ci -e COGNITO_CLIENT_ID=cliente-ci -e PERSISTENCE_DRIVER=mongo -e MONGODB_URI="$url" -e ACCOUNT_SERVICE_BASE_URL=http://account:3000 -e PLAYER_INVENTORY_SERVICE_BASE_URL=http://inventory:3002 nexus-battle-combat:ci node dist/infrastructure/persistence/migrate.js
-          docker run -d --name combat-ci --network combat-ci -p 3006:3006 -e AUTH_MODE=jwt -e COGNITO_USER_POOL_ID=us-east-1_ci -e COGNITO_CLIENT_ID=cliente-ci -e PERSISTENCE_DRIVER=mongo -e MONGODB_URI="$url" -e ACCOUNT_SERVICE_BASE_URL=http://account:3000 -e PLAYER_INVENTORY_SERVICE_BASE_URL=http://inventory:3002 nexus-battle-combat:ci
+          # ACCOUNT_SERVICE_BASE_URL, PLAYER_INVENTORY_SERVICE_BASE_URL y
+          # WALLET_SERVICE_BASE_URL son obligatorias en produccion desde
+          # HU-15.2/HU-22 (vease env.ts). Los valores siguen la convencion de
+          # Nexus-Battle-Infrastructure (compose.example.yml / nodes/app.yml,
+          # puerto 3009 para Wallet segun ADR-019): no se resuelven de verdad
+          # en esta red de CI, pero la readiness solo depende de MongoDB, asi
+          # que basta con que el arranque pase la validacion de configuracion.
+          docker run --rm --network combat-ci -e AUTH_MODE=jwt -e COGNITO_USER_POOL_ID=us-east-1_ci -e COGNITO_CLIENT_ID=cliente-ci -e PERSISTENCE_DRIVER=mongo -e MONGODB_URI="$url" -e ACCOUNT_SERVICE_BASE_URL=http://account:3000 -e PLAYER_INVENTORY_SERVICE_BASE_URL=http://inventory:3002 -e WALLET_SERVICE_BASE_URL=http://wallet:3009 nexus-battle-combat:ci node dist/infrastructure/persistence/migrate.js
+          docker run -d --name combat-ci --network combat-ci -p 3006:3006 -e AUTH_MODE=jwt -e COGNITO_USER_POOL_ID=us-east-1_ci -e COGNITO_CLIENT_ID=cliente-ci -e PERSISTENCE_DRIVER=mongo -e MONGODB_URI="$url" -e ACCOUNT_SERVICE_BASE_URL=http://account:3000 -e PLAYER_INVENTORY_SERVICE_BASE_URL=http://inventory:3002 -e WALLET_SERVICE_BASE_URL=http://wallet:3009 nexus-battle-combat:ci
           for attempt in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:3006/api/health/ready > /dev/null; then
               echo "readiness correcta en el intento ${attempt}"

@@ -4,6 +4,7 @@ import type { Db } from 'mongodb'
 
 import { BattleRoomController } from '../../adapters/inbound/http/battle-room.controller'
 import { RealtimeTicketController } from '../../adapters/inbound/http/realtime-ticket.controller'
+import { RewardStatusController } from '../../adapters/inbound/http/reward-status.controller'
 import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
 import {
@@ -16,15 +17,24 @@ import {
   COMPLETE_BATTLE_TURN,
   CONSUME_REALTIME_TICKET,
   CREATE_BATTLE_ROOM,
+  CREATE_REWARD_WORKFLOWS,
   EXECUTE_BASIC_ATTACK,
   USE_SKILL,
   GET_BATTLE_ROOM,
+  GET_REWARD_STATUS,
   ISSUE_REALTIME_TICKET,
   JOIN_BATTLE_ROOM,
   LEAVE_BATTLE_ROOM,
   LIST_AVAILABLE_BATTLE_ROOMS,
   PROCESS_BATTLE_DEADLINES,
+  PROCESS_REWARD_WORKFLOW,
+  RECONCILE_REWARD_WORKFLOWS,
   RECOVER_BATTLE_DEADLINES,
+  REWARD_CREDIT_PORT,
+  REWARD_GRANT_PORT,
+  REWARD_TABLE,
+  REWARD_WORKFLOW_REPOSITORY,
+  REWARD_WORKFLOW_SCHEDULER_OPTIONS,
   RESUME_BATTLE,
   ROOM_COMMAND_LOCK,
   START_BATTLE,
@@ -41,10 +51,14 @@ import { ChatRealtimeHandler } from '../../adapters/inbound/ws/ChatRealtimeHandl
 import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTokenVerifier'
 import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClient'
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
+import { PlayerInventoryGrantHttpClient } from '../../adapters/outbound/http/PlayerInventoryGrantHttpClient'
+import { WalletHttpClient } from '../../adapters/outbound/http/WalletHttpClient'
 import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryChatMessageRepository } from '../../adapters/outbound/persistence/InMemoryChatMessageRepository'
+import { InMemoryRewardWorkflowRepository } from '../../adapters/outbound/persistence/InMemoryRewardWorkflowRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
 import { MongoChatMessageRepository } from '../../adapters/outbound/persistence/MongoChatMessageRepository'
+import { MongoRewardWorkflowRepository } from '../../adapters/outbound/persistence/MongoRewardWorkflowRepository'
 import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
@@ -54,7 +68,11 @@ import {
   DEFAULT_BATTLE_DEADLINE_SCHEDULER_OPTIONS,
   IntervalBattleDeadlineScheduler,
 } from '../../adapters/outbound/system/IntervalBattleDeadlineScheduler'
-import { LoggingBattleResultPublisher } from '../../adapters/outbound/system/LoggingBattleResultPublisher'
+import {
+  DEFAULT_REWARD_WORKFLOW_SCHEDULER_OPTIONS,
+  IntervalRewardWorkflowScheduler,
+} from '../../adapters/outbound/system/IntervalRewardWorkflowScheduler'
+import { RewardWorkflowResultPublisher } from '../../adapters/outbound/system/RewardWorkflowResultPublisher'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
 import { UuidGenerator } from '../../adapters/outbound/system/UuidGenerator'
@@ -96,6 +114,9 @@ import {
   PLAYER_INVENTORY_EQUIPPED_HERO,
   type PlayerInventoryEquippedHeroPort,
 } from '../../application/ports/PlayerInventoryEquippedHeroPort'
+import type { RewardCreditPort } from '../../application/ports/RewardCreditPort'
+import type { RewardGrantPort } from '../../application/ports/RewardGrantPort'
+import type { RewardWorkflowRepositoryPort } from '../../application/ports/RewardWorkflowRepositoryPort'
 import {
   RANDOM_SEQUENCE_FACTORY,
   type RandomSequenceFactoryPort,
@@ -122,8 +143,12 @@ import { BattleFinalizer } from '../../application/services/BattleFinalizer'
 import { RandomSeed } from '../../domain/value-objects/RandomSeed'
 import type { BoundedRandom } from '../../domain/policies/TurnOrderPolicy'
 import { CompleteBattleTurn } from '../../application/use-cases/CompleteBattleTurn'
+import { CreateRewardWorkflows } from '../../application/use-cases/CreateRewardWorkflows'
+import { ReconcileRewardWorkflows } from '../../application/use-cases/ReconcileRewardWorkflows'
 import { ExecuteBasicAttack } from '../../application/use-cases/ExecuteBasicAttack'
+import { GetRewardStatus } from '../../application/use-cases/GetRewardStatus'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
+import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
 import { RecoverBattleDeadlines } from '../../application/use-cases/RecoverBattleDeadlines'
 import { UseSkill } from '../../application/use-cases/UseSkill'
 import { GetBattleRoom } from '../../application/use-cases/GetBattleRoom'
@@ -144,7 +169,9 @@ import { ReadChatHistory } from '../../application/use-cases/ReadChatHistory'
 import { SendChatMessage } from '../../application/use-cases/SendChatMessage'
 import { ChatRateLimiter } from '../../domain/policies/ChatRateLimiter'
 import { UpstreamServiceError } from '../../application/errors/UpstreamErrors'
+import type { RewardTable } from '../../domain/reward/RewardTable'
 import { AuthMode, loadConfig, PersistenceDriver, type AppConfig } from '../config/env'
+import { buildRewardTable } from '../config/reward-table'
 import type { ReadinessCheck, VersionReport } from '../health/health'
 import { createLogger, type Logger } from '../observability/logger'
 import { LOGGER } from '../observability/logger-token'
@@ -181,7 +208,12 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
  * independiente del framework.
  */
 @Module({
-  controllers: [HealthController, BattleRoomController, RealtimeTicketController],
+  controllers: [
+    HealthController,
+    BattleRoomController,
+    RealtimeTicketController,
+    RewardStatusController,
+  ],
   providers: [
     {
       provide: APP_CONFIG,
@@ -577,9 +609,17 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     },
     {
       provide: BATTLE_RESULT_PUBLISHER,
-      useFactory: (logger: Logger): BattleResultPublisherPort =>
-        new LoggingBattleResultPublisher(logger),
-      inject: [LOGGER],
+      // HU-22: reemplaza a `LoggingBattleResultPublisher` (que sigue en el
+      // repositorio, documentada como el adaptador de HU-21, pero ya no se
+      // conecta aqui). Conserva su MISMO registro `battle_finished` y ADEMAS
+      // crea y procesa el RewardWorkflow -- ver `RewardWorkflowResultPublisher`.
+      useFactory: (
+        createWorkflows: CreateRewardWorkflows,
+        processWorkflow: ProcessRewardWorkflow,
+        logger: Logger,
+      ): BattleResultPublisherPort =>
+        new RewardWorkflowResultPublisher(createWorkflows, processWorkflow, logger),
+      inject: [CREATE_REWARD_WORKFLOWS, PROCESS_REWARD_WORKFLOW, LOGGER],
     },
     {
       provide: BATTLE_ROOM_RELEASE,
@@ -675,6 +715,142 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         CLOCK,
         LOGGER,
         BATTLE_DEADLINE_SCHEDULER_OPTIONS,
+      ],
+    },
+    // HU-22 (`hu-22-reward-contract-v1`): cofre de recompensa por acumulacion
+    // de creditos. `PERSISTENCE_DRIVER=memory` respalda pruebas, igual que el
+    // resto de repositorios del servicio.
+    {
+      provide: REWARD_TABLE,
+      useFactory: (): RewardTable => buildRewardTable(),
+    },
+    {
+      provide: REWARD_WORKFLOW_REPOSITORY,
+      useFactory: (db: Db | null): RewardWorkflowRepositoryPort =>
+        db === null
+          ? new InMemoryRewardWorkflowRepository()
+          : new MongoRewardWorkflowRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: REWARD_CREDIT_PORT,
+      useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): RewardCreditPort => {
+        if (config.internalServiceAuthSecret === null || config.walletServiceBaseUrl === null) {
+          logger.warn('wallet_client_sin_configurar', {
+            detail: 'WALLET_SERVICE_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET no configurados.',
+          })
+
+          return {
+            creditBattleReward: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('wallet', 'no_configurado')),
+          }
+        }
+
+        return new WalletHttpClient({
+          baseUrl: config.walletServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
+    {
+      provide: REWARD_GRANT_PORT,
+      useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): RewardGrantPort => {
+        if (
+          config.internalServiceAuthSecret === null ||
+          config.playerInventoryServiceBaseUrl === null
+        ) {
+          logger.warn('player_inventory_grant_client_sin_configurar', {
+            detail:
+              'PLAYER_INVENTORY_SERVICE_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET no configurados.',
+          })
+
+          return {
+            grant: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('player-inventory', 'no_configurado')),
+          }
+        }
+
+        return new PlayerInventoryGrantHttpClient({
+          baseUrl: config.playerInventoryServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
+    {
+      provide: CREATE_REWARD_WORKFLOWS,
+      useFactory: (repository: RewardWorkflowRepositoryPort): CreateRewardWorkflows =>
+        new CreateRewardWorkflows(repository),
+      inject: [REWARD_WORKFLOW_REPOSITORY],
+    },
+    {
+      provide: PROCESS_REWARD_WORKFLOW,
+      useFactory: (
+        repository: RewardWorkflowRepositoryPort,
+        creditPort: RewardCreditPort,
+        grantPort: RewardGrantPort,
+        sequence: RandomSequencePort,
+        table: RewardTable,
+        logger: Logger,
+      ): ProcessRewardWorkflow =>
+        new ProcessRewardWorkflow(repository, creditPort, grantPort, sequence, table, logger),
+      // BATTLE_RANDOM_SEQUENCE: la MISMA secuencia de proceso que ya consumen
+      // la cola de turnos y los golpes (HU-17/18/19/24) -- no una nueva.
+      inject: [
+        REWARD_WORKFLOW_REPOSITORY,
+        REWARD_CREDIT_PORT,
+        REWARD_GRANT_PORT,
+        BATTLE_RANDOM_SEQUENCE,
+        REWARD_TABLE,
+        LOGGER,
+      ],
+    },
+    {
+      provide: GET_REWARD_STATUS,
+      useFactory: (repository: RewardWorkflowRepositoryPort): GetRewardStatus =>
+        new GetRewardStatus(repository),
+      inject: [REWARD_WORKFLOW_REPOSITORY],
+    },
+    {
+      // HU-22: cierra el hueco entre "sala FINISHED persistida" y
+      // "RewardWorkflow persistido" -- ver ReconcileRewardWorkflows.
+      provide: RECONCILE_REWARD_WORKFLOWS,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        createWorkflows: CreateRewardWorkflows,
+        logger: Logger,
+      ): ReconcileRewardWorkflows => new ReconcileRewardWorkflows(rooms, createWorkflows, logger),
+      inject: [BATTLE_ROOM_REPOSITORY, CREATE_REWARD_WORKFLOWS, LOGGER],
+    },
+    {
+      provide: REWARD_WORKFLOW_SCHEDULER_OPTIONS,
+      useValue: DEFAULT_REWARD_WORKFLOW_SCHEDULER_OPTIONS,
+    },
+    {
+      provide: IntervalRewardWorkflowScheduler,
+      useFactory: (
+        repository: RewardWorkflowRepositoryPort,
+        process: ProcessRewardWorkflow,
+        reconcile: ReconcileRewardWorkflows,
+        logger: Logger,
+        options: typeof DEFAULT_REWARD_WORKFLOW_SCHEDULER_OPTIONS,
+      ): IntervalRewardWorkflowScheduler =>
+        new IntervalRewardWorkflowScheduler(repository, process, reconcile, logger, options),
+      inject: [
+        REWARD_WORKFLOW_REPOSITORY,
+        PROCESS_REWARD_WORKFLOW,
+        RECONCILE_REWARD_WORKFLOWS,
+        LOGGER,
+        REWARD_WORKFLOW_SCHEDULER_OPTIONS,
       ],
     },
     {
