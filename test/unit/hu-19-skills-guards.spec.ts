@@ -99,12 +99,16 @@ describe('HU-19 — el Poder solo se maneja con la politica de HU-11', () => {
     expect(combatant).not.toMatch(/currentPower\s*\+\s*2|Math\.min\(/)
   })
 
-  it('la politica de efectos es pura: no importa nada mas que tipos y no sortea', () => {
+  it('la politica de efectos es pura: no importa nada mas que tipos y una constante, y no sortea', () => {
     const policy = readFileSync(file('domain/policies/SkillEffectPolicy.ts'), 'utf8')
     const imports = policy.match(/^import .*$/gm) ?? []
 
+    // HU-12 (excepcion de curacion, sin Task de Management): `MAX_HEALING_BASIS_POINTS`
+    // es una constante numerica (sin I/O, sin aleatoriedad) de `HealApplicationPolicy`,
+    // otra politica igual de pura -- no rompe "no importa nada mas que tipos y no sortea".
     expect(imports).toEqual([
-      "import type { CombatAbility, CombatAbilityEffect } from '../entities/CombatProfile'",
+      "import type { CombatAbility, CombatAbilityEffect, CombatMagnitude } from '../entities/CombatProfile'",
+      "import { MAX_HEALING_BASIS_POINTS } from './HealApplicationPolicy'",
     ])
   })
 })
@@ -190,12 +194,19 @@ describe('HU-19 — el cliente no aporta resultados', () => {
     expect(fields).toEqual(['roomId', 'requesterId', 'commandId', 'abilityId', 'target'])
   })
 
-  it('el Poder insuficiente no tiene codigo de error propio: se degrada (HU-11)', () => {
+  it('el Poder insuficiente en una habilidad OFENSIVA no tiene codigo de error propio: se degrada (HU-11)', () => {
     const errors = code(file('domain/errors/BattleErrors.ts'))
-    const handler = code(file('adapters/inbound/ws/SkillRealtimeHandler.ts'))
 
-    expect(errors).not.toMatch(/INSUFFICIENT_POWER/)
-    expect(handler).not.toMatch(/INSUFFICIENT_POWER/)
+    // HU-12 (excepcion de curacion, sin Task de Management): un sanador no tiene
+    // Ataque numerico y no puede degradar a ataque basico (Tabla 6), asi que ESE
+    // caso SI tiene codigo propio (`INSUFFICIENT_POWER_FOR_HEAL`). Lo que sigue
+    // sin codigo es el Poder insuficiente de una habilidad ofensiva: no debe
+    // aparecer ningun OTRO codigo de "Poder insuficiente" ademas del de curar.
+    const insufficientPowerCodes = [...errors.matchAll(/INSUFFICIENT_POWER\w*/g)].map(
+      (match) => match[0],
+    )
+
+    expect(new Set(insufficientPowerCodes)).toEqual(new Set(['INSUFFICIENT_POWER_FOR_HEAL']))
   })
 
   it('el motivo de un efecto no soportado no viaja al cliente (solo se registra)', () => {

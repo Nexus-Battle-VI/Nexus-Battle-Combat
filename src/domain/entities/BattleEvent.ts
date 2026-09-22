@@ -19,6 +19,13 @@ export const BattleEventType = {
   BasicAttackResolved: 'basicAttackResolved',
   /** HU-19: una habilidad especial ejecutada, con el estado YA avanzado (un solo `seq` por accion). */
   SkillUsed: 'skillUsed',
+  /**
+   * Excepcion de curacion de HU-12 (Tabla 7, sin Task de Management): una
+   * habilidad de curacion ejecutada sobre un aliado, con el estado YA avanzado.
+   * Distinto de `skillUsed` porque no hay resolucion de Ataque/Defensa ni sorteo:
+   * curar es determinista.
+   */
+  HealSkillUsed: 'healSkillUsed',
   /** HU-21: el turno vigente vencio sin accion y paso al siguiente participante con Vida. */
   TurnTimedOut: 'turnTimedOut',
   /** HU-21: la batalla termino; lleva el resultado unico y la vista FINAL sin `deadlines`. */
@@ -139,6 +146,33 @@ export interface SkillUsedPayload {
   readonly battle: BattleView
 }
 
+/**
+ * Resultado de una habilidad de curacion (excepcion de HU-12, Tabla 7). Trae el
+ * monto sanado y la vista POSTERIOR; a diferencia de `SkillUsedPayload`, no
+ * lleva `resolution` (Ataque/Defensa) ni `bonus`: curar no resuelve un golpe.
+ */
+export interface HealSkillUsedPayload {
+  readonly commandId: string
+  readonly completedPosition: number
+  readonly actor: CombatantKey
+  readonly target: CombatantKey
+  readonly skill: {
+    readonly abilityId: string
+    readonly name: string
+    readonly powerCost: CombatPowerCost
+    readonly chargeTurns: number
+  }
+  /** Poder del actor antes y despues de pagar el costo. */
+  readonly power: { readonly before: number; readonly after: number }
+  /** Turnos propios que le faltan a ESTA habilidad tras la accion. */
+  readonly cooldown: { readonly remainingTurns: number }
+  /** Monto de Vida restaurado al objetivo, ya acotado a su maximo (sin overheal). */
+  readonly heal: { readonly amount: number }
+  readonly targetHealth: { readonly before: number; readonly after: number }
+  /** Vista POSTERIOR: Vida, Poder, recargas y turno ya avanzado. */
+  readonly battle: BattleView
+}
+
 export interface BattleEvent {
   readonly seq: number
   readonly type: BattleEventType
@@ -148,6 +182,7 @@ export interface BattleEvent {
     | TurnAdvancedPayload
     | BasicAttackResolvedPayload
     | SkillUsedPayload
+    | HealSkillUsedPayload
     | TurnTimedOutPayload
     | BattleFinishedPayload
 }

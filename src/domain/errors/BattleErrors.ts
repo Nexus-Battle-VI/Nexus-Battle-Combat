@@ -85,6 +85,7 @@ export class NotYourTurnError extends DomainError {
 export const BasicAttackErrorCode = Object.freeze({
   InvalidTarget: 'INVALID_TARGET',
   SameTeamTarget: 'SAME_TEAM_TARGET',
+  InvalidHealTarget: 'INVALID_HEAL_TARGET',
   TargetUnavailable: 'TARGET_UNAVAILABLE',
   ActorUnavailable: 'ACTOR_UNAVAILABLE',
   UnsupportedCombatProfile: 'UNSUPPORTED_COMBAT_PROFILE',
@@ -111,6 +112,22 @@ export class SameTeamTargetError extends DomainError {
   constructor() {
     super('El ataque basico no puede dirigirse a un aliado ni a uno mismo.')
     this.name = 'SameTeamTargetError'
+  }
+}
+
+/**
+ * La excepcion nombrada de HU-12 (RF-12, documento oficial §7.2: "a menos que un
+ * ataque o efecto particular lo permita"): una habilidad de curacion (`kind:
+ * 'REVIVE'`, `target: 'ALLY'`) debe dirigirse a un aliado DISTINTO de quien la
+ * usa -- "el companero" de la Tabla 7, no uno mismo ni un rival. `SameTeamTargetError`
+ * sigue rigiendo el ataque basico y las habilidades ofensivas sin excepcion.
+ */
+export class InvalidHealTargetError extends DomainError {
+  readonly code = BasicAttackErrorCode.InvalidHealTarget
+
+  constructor() {
+    super('Una habilidad de curacion debe dirigirse a un aliado distinto de quien la usa.')
+    this.name = 'InvalidHealTargetError'
   }
 }
 
@@ -200,6 +217,22 @@ export class UnsupportedSkillEffectError extends DomainError {
 }
 
 /** La habilidad sigue en recarga (HU-19, CA-04 y CA-07). */
+/**
+ * Poder insuficiente para una habilidad de curacion. NO se degrada a ataque
+ * basico (HU-11, RF-11): esa regla asume un actor que puede atacar, y un
+ * sanador no tiene Ataque numerico (Tabla 6, "Ataque: -") -- degradar
+ * lanzaria `UnsupportedCombatProfileError` en `planBasicAttack` en vez de
+ * responder un rechazo claro. Sin Poder, curar simplemente se rechaza.
+ */
+export class InsufficientPowerForHealError extends DomainError {
+  readonly code = 'INSUFFICIENT_POWER_FOR_HEAL'
+
+  constructor() {
+    super('El Poder no alcanza para curar: un sanador no puede degradar a ataque basico.')
+    this.name = 'InsufficientPowerForHealError'
+  }
+}
+
 export class SkillOnCooldownError extends DomainError {
   readonly code = SkillErrorCode.SkillOnCooldown
 

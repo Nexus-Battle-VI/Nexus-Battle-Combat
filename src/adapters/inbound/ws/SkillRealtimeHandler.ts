@@ -9,7 +9,9 @@ import type { BattleFinalizer } from '../../../application/services/BattleFinali
 import {
   ActorUnavailableError,
   BattleNotInProgressError,
+  InsufficientPowerForHealError,
   InvalidCommandIdError,
+  InvalidHealTargetError,
   InvalidTargetError,
   NotYourTurnError,
   SameTeamTargetError,
@@ -203,12 +205,14 @@ export class SkillRealtimeHandler {
     if (
       error instanceof InvalidTargetError ||
       error instanceof SameTeamTargetError ||
+      error instanceof InvalidHealTargetError ||
       error instanceof TargetUnavailableError ||
       error instanceof ActorUnavailableError ||
       error instanceof UnsupportedCombatProfileError ||
       error instanceof SkillsNotAvailableError ||
       error instanceof UnknownSkillError ||
-      error instanceof SkillOnCooldownError
+      error instanceof SkillOnCooldownError ||
+      error instanceof InsufficientPowerForHealError
     ) {
       return error.code
     }

@@ -139,6 +139,16 @@ export class UseSkill {
       })
     }
 
+    if (plan.kind === 'healSkill') {
+      // Curar es DETERMINISTA (excepcion de HU-12, `HealApplicationPolicy`): no hay
+      // `prepare`/`resolve` ni se consume la secuencia HU-24, a diferencia de una
+      // habilidad ofensiva.
+      const actionSeq = room.lastSeq + 1
+      const next = room.applyHealSkill(plan, input.commandId, this.clock.now())
+
+      return this.persist(room, next, actionSeq, input)
+    }
+
     // A partir de aqui se consume la secuencia: todo lo que puede fallar por el perfil ya se
     // comprobo (planSkill) o se comprueba en `prepare`, que no sortea.
     const prepared = this.prepare(plan)
@@ -148,6 +158,20 @@ export class UseSkill {
     const actionSeq = room.lastSeq + 1
     const next = room.applySkill(plan, outcome, input.commandId, this.clock.now())
 
+    return this.persist(room, next, actionSeq, input)
+  }
+
+  /**
+   * Guarda el agregado ya mutado (por `applySkill` o `applyHealSkill`) como UNA
+   * escritura y arma el resultado, mismo criterio para ambas habilidades: no hay
+   * nada especifico de dano ni de curacion en la persistencia.
+   */
+  private async persist(
+    room: BattleRoom,
+    next: BattleRoom,
+    actionSeq: number,
+    input: UseSkillInput,
+  ): Promise<UseSkillResult> {
     try {
       const saved = await this.rooms.save(next, room.version)
       const event = saved.events.find((candidate) => candidate.seq === actionSeq)

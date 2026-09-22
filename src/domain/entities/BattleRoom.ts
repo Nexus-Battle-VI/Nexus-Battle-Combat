@@ -3,7 +3,9 @@ import {
   ActorUnavailableError,
   BattleNotInProgressError,
   InvalidBattleRosterError,
+  InsufficientPowerForHealError,
   InvalidCommandIdError,
+  InvalidHealTargetError,
   InvalidTargetError,
   NotYourTurnError,
   RoomNotStartableError,
@@ -21,6 +23,7 @@ import {
   calculateDamage,
   type SupportedDamage,
 } from '../policies/BasicAttackDamagePolicy'
+import { applyHeal, calculateHeal } from '../policies/HealApplicationPolicy'
 import { spendPower } from '../policies/HeroPowerPolicy'
 import { evaluateSkill, type SkillBonus } from '../policies/SkillEffectPolicy'
 import {
@@ -83,7 +86,7 @@ import {
 } from './BattleEvent'
 import { BattleState, type BattleStateSnapshot, type BattleView } from './BattleState'
 import type { Combatant, CombatantKey } from './Combatant'
-import type { CombatAbility, CombatProfile } from './CombatProfile'
+import type { CombatAbility, CombatMagnitude, CombatProfile } from './CombatProfile'
 import { memberKey, type TeamRoster, type TurnOrderEntry } from './TurnOrder'
 
 /**
@@ -144,13 +147,34 @@ export interface SkillReadyPlan {
   readonly powerAfter: number
 }
 
+/**
+ * Una habilidad de curacion ya VALIDADA (excepcion de HU-12, Tabla 7: Reanimacion),
+ * lista para resolverse: 0 sorteos hasta aqui NI DESPUES -- curar es determinista
+ * (HealApplicationPolicy).
+ */
+export interface SkillHealReadyPlan {
+  readonly kind: 'healSkill'
+  readonly attackerEntry: TurnOrderEntry
+  readonly targetEntry: TurnOrderEntry
+  readonly attacker: Combatant
+  readonly target: Combatant
+  readonly attackerProfile: CombatProfile
+  readonly targetProfile: CombatProfile
+  readonly targetHealth: number
+  readonly ability: CombatAbility
+  /** Magnitud `PERCENTAGE` del efecto `REVIVE`, ya comprobada por `evaluateSkill`. */
+  readonly healMagnitude: CombatMagnitude & { readonly mode: 'PERCENTAGE' }
+  readonly powerBefore: number
+  readonly powerAfter: number
+}
+
 /** El Poder no alcanza: la accion se degrada a un ataque basico contra el mismo objetivo (HU-11). */
 export interface SkillDegradedPlan {
   readonly kind: 'degraded'
   readonly abilityId: string
 }
 
-export type SkillPlan = SkillReadyPlan | SkillDegradedPlan | BasicAttackReplay
+export type SkillPlan = SkillReadyPlan | SkillHealReadyPlan | SkillDegradedPlan | BasicAttackReplay
 
 /** Lo que HU-20, HU-25 y el sorteo de dano produjeron para una habilidad. */
 export interface SkillOutcome extends BasicAttackOutcome {
@@ -1019,9 +1043,136 @@ export class BattleRoom {
   }
 
   /**
-   * Lo que comparten el ataque basico y la habilidad (HU-18/HU-19), en este orden y sin
-   * sortear: batalla en curso, turno del solicitante, objetivo existente y enemigo,
-   * snapshot de combate, perfiles y Vida de ambos. Cualquier fallo lanza y no cambia nada.
+   * La mitad del contexto que NO depende del objetivo (HU-18/HU-19): batalla en
+   * curso, turno del solicitante, snapshot de combate, perfil y Vida del actor.
+   * Separada de la resolucion del objetivo (`requireTargetCombatant`) porque
+   * `planSkill` necesita conocer la HABILIDAD (que sale de `attacker.abilities`)
+   * ANTES de decidir si el objetivo debe ser un rival o un aliado -- la excepcion
+   * de curacion de HU-12 no se puede resolver sin esa informacion, y antes de
+   * ella no hacia falta (todo objetivo era siempre un rival).
+   */
+  private requireAttackerTurn(actorPlayerId: string): {
+    readonly attackerEntry: TurnOrderEntry
+    readonly attacker: Combatant
+    readonly attackerProfile: CombatProfile
+  } {
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const attackerEntry = this.battle.currentEntry
+
+    if (attackerEntry.kind !== ParticipantKind.Human || attackerEntry.playerId !== actorPlayerId) {
+      throw new NotYourTurnError(this.id)
+    }
+
+    if (this.battle.combatants === null) {
+      throw new UnsupportedCombatProfileError(
+        'la batalla comenzo antes de habilitar el ataque basico y no tiene snapshot de combate.',
+      )
+    }
+
+    const attacker = this.battle.combatantFor(attackerEntry)
+
+    if (attacker === undefined) {
+      throw new DomainError('El snapshot de combate no contiene al atacante.')
+    }
+
+    if (attacker.profile === null || attacker.currentHealth === null) {
+      throw new UnsupportedCombatProfileError('el atacante no tiene perfil de combate.')
+    }
+
+    if (!attacker.alive) {
+      throw new ActorUnavailableError()
+    }
+
+    return { attackerEntry, attacker, attackerProfile: attacker.profile }
+  }
+
+  /**
+   * Resuelve y valida el objetivo (HU-18/HU-19, mas la excepcion de curacion de
+   * HU-12): existe en la batalla, tiene la audiencia correcta -- `OPPONENT`
+   * (rival, el default de siempre: RF-12 bloquea el propio equipo, incluido uno
+   * mismo) o `ALLY` (companero DISTINTO del actor, solo para la habilidad de
+   * curacion soportada) -- y tiene perfil.
+   *
+   * LA VIDA DEL OBJETIVO SOLO SE EXIGE PARA `OPPONENT`: no se ataca a alguien ya
+   * caido (`TargetUnavailableError`, sin cambios). Para `ALLY` NO se exige ni
+   * vivo ni caido -- Reanimacion (`kind: 'REVIVE'`) es "sana el 100% de la vida
+   * del companero" sin mas condicion en la Tabla 7, y su nombre (reanimar) sugiere
+   * que el uso real es levantar a un companero caido (Vida 0): un companero caido
+   * SIGUE en `turnOrder`/`combatants` mientras su equipo no este eliminado
+   * (`BattleState.hasLifeAt` solo le salta el turno, no lo retira), asi que es un
+   * objetivo perfectamente valido. Exigirlo vivo excluiria el caso central de la
+   * habilidad; exigirlo caido excluiria curar a un companero herido pero vivo, que
+   * el texto tampoco prohibe. Ninguna de las dos restricciones esta en el
+   * documento oficial: no se inventan.
+   */
+  private requireTargetCombatant(
+    attackerEntry: TurnOrderEntry,
+    target: CombatantKey,
+    audience: 'OPPONENT' | 'ALLY',
+  ): {
+    readonly targetEntry: TurnOrderEntry
+    readonly target: Combatant
+    readonly targetProfile: CombatProfile
+    readonly targetHealth: number
+  } {
+    // Se llama tras `requireAttackerTurn`, que ya comprueba esto -- se repite aqui
+    // (mismo criterio que el resto del agregado) para que TypeScript estreche el
+    // tipo sin una asercion, no porque pueda cambiar entre ambas llamadas.
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const battle = this.battle
+
+    const targetEntry = battle.turnOrder.find(
+      (entry) => entry.teamLabel === target.teamLabel && entry.seat === target.seat,
+    )
+
+    if (targetEntry === undefined) {
+      throw new InvalidTargetError(this.id)
+    }
+
+    const sameTeam = targetEntry.teamLabel === attackerEntry.teamLabel
+    const isSelf = sameTeam && targetEntry.seat === attackerEntry.seat
+
+    if (audience === 'OPPONENT' && sameTeam) {
+      throw new SameTeamTargetError()
+    }
+
+    if (audience === 'ALLY' && (!sameTeam || isSelf)) {
+      throw new InvalidHealTargetError()
+    }
+
+    const targetCombatant = battle.combatantFor(targetEntry)
+
+    if (targetCombatant === undefined) {
+      throw new DomainError('El snapshot de combate no contiene al objetivo.')
+    }
+
+    if (targetCombatant.profile === null || targetCombatant.currentHealth === null) {
+      throw new UnsupportedCombatProfileError('el objetivo no tiene perfil de combate.')
+    }
+
+    if (audience === 'OPPONENT' && !targetCombatant.alive) {
+      throw new TargetUnavailableError()
+    }
+
+    return {
+      targetEntry,
+      target: targetCombatant,
+      targetProfile: targetCombatant.profile,
+      targetHealth: targetCombatant.currentHealth,
+    }
+  }
+
+  /**
+   * Lo que comparten el ataque basico y las habilidades OFENSIVAS (HU-18/HU-19):
+   * el objetivo es SIEMPRE un rival (`requireTargetCombatant(..., 'OPPONENT')`).
+   * `planSkill` no la usa mas: resuelve el actor y el objetivo por separado para
+   * poder variar la audiencia segun la habilidad (excepcion de curacion, HU-12).
    */
   private requireCombatContext(
     actorPlayerId: string,
@@ -1035,66 +1186,14 @@ export class BattleRoom {
     readonly targetProfile: CombatProfile
     readonly targetHealth: number
   } {
-    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
-      throw new BattleNotInProgressError(this.id, this.status)
-    }
-
-    const attackerEntry = this.battle.currentEntry
-
-    if (attackerEntry.kind !== ParticipantKind.Human || attackerEntry.playerId !== actorPlayerId) {
-      throw new NotYourTurnError(this.id)
-    }
-
-    const targetEntry = this.battle.turnOrder.find(
-      (entry) => entry.teamLabel === target.teamLabel && entry.seat === target.seat,
+    const attackerContext = this.requireAttackerTurn(actorPlayerId)
+    const targetContext = this.requireTargetCombatant(
+      attackerContext.attackerEntry,
+      target,
+      'OPPONENT',
     )
 
-    if (targetEntry === undefined) {
-      throw new InvalidTargetError(this.id)
-    }
-
-    if (targetEntry.teamLabel === attackerEntry.teamLabel) {
-      throw new SameTeamTargetError()
-    }
-
-    if (this.battle.combatants === null) {
-      throw new UnsupportedCombatProfileError(
-        'la batalla comenzo antes de habilitar el ataque basico y no tiene snapshot de combate.',
-      )
-    }
-
-    const attacker = this.battle.combatantFor(attackerEntry)
-    const targetCombatant = this.battle.combatantFor(targetEntry)
-
-    if (attacker === undefined || targetCombatant === undefined) {
-      throw new DomainError('El snapshot de combate no contiene a los participantes del golpe.')
-    }
-
-    if (attacker.profile === null || attacker.currentHealth === null) {
-      throw new UnsupportedCombatProfileError('el atacante no tiene perfil de combate.')
-    }
-
-    if (targetCombatant.profile === null || targetCombatant.currentHealth === null) {
-      throw new UnsupportedCombatProfileError('el objetivo no tiene perfil de combate.')
-    }
-
-    if (!attacker.alive) {
-      throw new ActorUnavailableError()
-    }
-
-    if (!targetCombatant.alive) {
-      throw new TargetUnavailableError()
-    }
-
-    return {
-      attackerEntry,
-      targetEntry,
-      attacker,
-      target: targetCombatant,
-      attackerProfile: attacker.profile,
-      targetProfile: targetCombatant.profile,
-      targetHealth: targetCombatant.currentHealth,
-    }
+    return { ...attackerContext, ...targetContext }
   }
 
   /**
@@ -1187,15 +1286,26 @@ export class BattleRoom {
   }
 
   /**
-   * Valida una habilidad especial (HU-19, contrato `hu-19-skills-v1`, §3) ANTES de consumir
-   * un solo sorteo. Orden: `commandId` (forma), repeticion, batalla, turno, objetivo,
-   * perfiles y Vida (los mismos de `attack`), estado de habilidades, habilidad del heroe
-   * (CA-02), efectos soportados, recarga (CA-04, CA-07) y, al final, el Poder (CA-03).
+   * Valida una habilidad especial (HU-19, contrato `hu-19-skills-v1`, §3; excepcion de
+   * curacion HU-12/Tabla 7) ANTES de consumir un solo sorteo. Orden: `commandId` (forma),
+   * repeticion, batalla, turno del actor (los mismos de `attack`, SIN el objetivo todavia),
+   * estado de habilidades, habilidad del heroe (CA-02), efectos soportados -- que decide
+   * si el objetivo debe ser un rival o un aliado --, objetivo con la audiencia correcta,
+   * recarga (CA-04, CA-07) y, al final, el Poder (CA-03).
    *
-   * Poder insuficiente NO es un error: HU-11 exige forzar el ataque basico en ese turno, asi
-   * que se devuelve `degraded` y el llamador ejecuta un ataque basico contra el mismo
-   * objetivo, con el Poder y la recarga intactos. Una habilidad que el sistema no sabe
-   * ejecutar se rechaza ANTES de hablar de Poder: no se fuerza un ataque por ella.
+   * EL OBJETIVO SE RESUELVE DESPUES DE LA HABILIDAD (a diferencia de `attack`, que no
+   * tiene mas que una audiencia posible): la excepcion de curacion de HU-12 no se puede
+   * decidir sin saber si `abilityId` es la habilidad de curacion soportada. Con una
+   * habilidad ofensiva el orden efectivo es identico al de antes (el rechazo por equipo
+   * sigue ocurriendo, solo que un paso mas tarde).
+   *
+   * Poder insuficiente en una habilidad OFENSIVA NO es un error: HU-11 exige forzar el
+   * ataque basico en ese turno, asi que se devuelve `degraded` y el llamador ejecuta un
+   * ataque basico contra el mismo objetivo, con el Poder y la recarga intactos. Un
+   * sanador NO puede degradar (no tiene Ataque numerico, Tabla 6): Poder insuficiente en
+   * la habilidad de curacion es un rechazo directo (`InsufficientPowerForHealError`).
+   * Una habilidad que el sistema no sabe ejecutar se rechaza ANTES de hablar de Poder: no
+   * se fuerza un ataque por ella.
    *
    * La identidad del actor es SIEMPRE `actorPlayerId` (el `sub` autenticado) y el turno
    * vigente; la habilidad y su costo salen del snapshot congelado, nunca del cliente.
@@ -1214,8 +1324,7 @@ export class BattleRoom {
       return replay
     }
 
-    const context = this.requireCombatContext(actorPlayerId, target)
-    const { attacker, attackerProfile } = context
+    const { attackerEntry, attacker, attackerProfile } = this.requireAttackerTurn(actorPlayerId)
     const maxPower = attackerProfile.maxPower
 
     if (maxPower === undefined || attacker.currentPower === null || !attacker.hasSkillState) {
@@ -1238,13 +1347,37 @@ export class BattleRoom {
       throw new SkillOnCooldownError()
     }
 
+    const targetContext = this.requireTargetCombatant(
+      attackerEntry,
+      target,
+      support.kind === 'HEAL' ? 'ALLY' : 'OPPONENT',
+    )
+
     const payment = spendPower(
-      { heroId: memberKey(context.attackerEntry), current: attacker.currentPower, max: maxPower },
+      { heroId: memberKey(attackerEntry), current: attacker.currentPower, max: maxPower },
       ability.powerCost,
     )
 
     if (!payment.ok) {
+      if (support.kind === 'HEAL') {
+        throw new InsufficientPowerForHealError()
+      }
+
       return { kind: 'degraded', abilityId }
+    }
+
+    if (support.kind === 'HEAL') {
+      return {
+        kind: 'healSkill',
+        attackerEntry,
+        attacker,
+        attackerProfile,
+        ...targetContext,
+        ability,
+        healMagnitude: support.healMagnitude,
+        powerBefore: attacker.currentPower,
+        powerAfter: payment.state.current,
+      }
     }
 
     if (attackerProfile.attack === null) {
@@ -1253,7 +1386,10 @@ export class BattleRoom {
 
     return {
       kind: 'skill',
-      ...context,
+      attackerEntry,
+      attacker,
+      attackerProfile,
+      ...targetContext,
       damage: assertSupportedDamage(attackerProfile.damage),
       ability,
       attackBonus: support.attackBonus,
@@ -1360,6 +1496,86 @@ export class BattleRoom {
 
     // HU-21 (mismo criterio que `applyBasicAttack`): una habilidad tambien puede
     // dejar a un equipo sin heroes, y lo hace en esta misma escritura.
+    return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
+  }
+
+  /**
+   * Aplica una habilidad de curacion ya resuelta (excepcion de HU-12, Tabla 7:
+   * Reanimacion) como UNA sola transicion del agregado, mismo criterio que
+   * `applySkill`: Vida del ALIADO objetivo + Poder del actor + recarga + evento +
+   * `commandId` procesado + turno avanzado, en una unica version nueva.
+   *
+   * DETERMINISTA: a diferencia de `applySkill`, no hay `outcome` que resolver --
+   * curar no consume la secuencia HU-24 (`HealApplicationPolicy`, sin sorteo). El
+   * monto se calcula aqui mismo, contra el maximo de Vida del OBJETIVO (nunca del
+   * actor): `floor(maxHealth(objetivo) x basisPoints / 10000)`.
+   */
+  applyHealSkill(plan: SkillHealReadyPlan, commandId: string, at: Date): BattleRoom {
+    BattleRoom.assertValidCommandId(commandId)
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const calculatedHeal = calculateHeal(
+      plan.targetProfile.maxHealth,
+      plan.healMagnitude.basisPoints,
+    )
+    const applied = applyHeal(plan.targetHealth, plan.targetProfile.maxHealth, calculatedHeal)
+    const completedPosition = this.battle.currentPosition
+    const actor = plan.attacker
+      .withPower(plan.powerAfter)
+      .withCooldown(plan.ability.abilityId, plan.ability.chargeTurns + 1)
+    const battle = this.battle
+      .withCombatant(actor)
+      .withCombatant(plan.target.withHealth(applied.healthAfter))
+      .completeTurn(at)
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.HealSkillUsed,
+      occurredAt: at,
+      payload: {
+        commandId,
+        completedPosition,
+        actor: { teamLabel: plan.attackerEntry.teamLabel, seat: plan.attackerEntry.seat },
+        target: { teamLabel: plan.targetEntry.teamLabel, seat: plan.targetEntry.seat },
+        skill: {
+          abilityId: plan.ability.abilityId,
+          name: plan.ability.name,
+          powerCost: plan.ability.powerCost,
+          chargeTurns: plan.ability.chargeTurns,
+        },
+        power: { before: plan.powerBefore, after: plan.powerAfter },
+        cooldown: {
+          remainingTurns:
+            battle.combatantFor(plan.attackerEntry)?.cooldownOf(plan.ability.abilityId) ?? 0,
+        },
+        heal: { amount: applied.appliedHeal },
+        targetHealth: { before: applied.healthBefore, after: applied.healthAfter },
+        battle: battle.toView(this.id),
+      },
+    }
+
+    const next = new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        handledCommands: [...this.handledCommands, { commandId, seq }],
+      },
+    )
+
+    // Curar nunca reduce la Vida de nadie: no puede eliminar a un equipo. Se
+    // conserva la llamada por simetria estructural con `applySkill`/
+    // `applyBasicAttack` (defensa en profundidad, no alcanzable hoy).
     return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
   }
 
