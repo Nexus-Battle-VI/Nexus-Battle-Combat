@@ -59,7 +59,11 @@ Cada llamada saliente (Wallet, Inventory) ocurre solo después de persistir la i
 
 ## Recovery
 
-`IntervalRewardWorkflowScheduler.onApplicationBootstrap` procesa un barrido inmediato: no hace falta un caso de uso de "recuperación" aparte, porque el barrido ya consulta el estado persistido (`findNonTerminal`) en cada tick, incluido el primero tras un reinicio.
+`IntervalRewardWorkflowScheduler.onApplicationBootstrap` procesa un barrido inmediato: un workflow que quedó a medias (creado, pero sin terminar) reanuda exactamente donde estaba, porque el barrido ya consulta el estado persistido (`findNonTerminal`) en cada tick, incluido el primero tras un reinicio.
+
+**Corrección** (encontrada en revisión): eso NO cubre el caso en que el workflow nunca llegó a _crearse_. `RewardWorkflowResultPublisher.publish()` es fire-and-forget por contrato (`BattleResultPublisherPort`, cerrado por HU-21, no puede volverse asíncrono): crea los workflows _después_ de que `BattleFinalizer.afterFinished` ya persistió la sala `FINISHED`, sin esperar esa creación. Una caída del proceso justo en ese hueco deja una sala `FINISHED` sin ningún `RewardWorkflow`, y el barrido — que solo lee workflows que YA existen — no tiene nada que recuperar: la recompensa se perdía en silencio.
+
+`ReconcileRewardWorkflows` cierra el hueco: al arrancar, ANTES del barrido, revisa las salas `FINISHED` de una ventana acotada (`reconcileWindowMs`, 24 h por defecto — no un escaneo del histórico completo) contra `BattleRoomRepositoryPort.findFinishedSince` y llama a `CreateRewardWorkflows.execute` para cada una. `createIfAbsent` ya es idempotente por participante, así que una sala cuyos workflows ya existen es un no-op: reconciliar no puede duplicar nada. Un workflow recreado en esta pasada queda recogido por el `tick()` que sigue en el mismo arranque, sin esperar al siguiente reinicio.
 
 ## Failures
 
@@ -71,7 +75,7 @@ Ningún fallo revierte un crédito ya acreditado por Wallet (HU-22 §66). Un fal
 
 ## Tests
 
-- **Unit**: `RewardTable` (dominio + tabla real embebida), `CreateRewardWorkflows`, `ProcessRewardWorkflow` (dobles de Wallet/Inventory/RNG: sin cofre, con cofre, 409, 422, 503 transitorio, fallo de Inventory sin revertir el crédito, retry sin re-sortear), `GetRewardStatus`, `IntervalRewardWorkflowScheduler`, `WalletHttpClient`, `PlayerInventoryGrantHttpClient`, `RewardWorkflowResultPublisher`.
+- **Unit**: `RewardTable` (dominio + tabla real embebida), `CreateRewardWorkflows`, `ProcessRewardWorkflow` (dobles de Wallet/Inventory/RNG: sin cofre, con cofre, 409, 422, 503 transitorio, fallo de Inventory sin revertir el crédito, retry sin re-sortear), `GetRewardStatus`, `ReconcileRewardWorkflows` (crea lo que falta, idempotente, respeta la ventana, un fallo no detiene a las demás), `IntervalRewardWorkflowScheduler` (incluida la regresión: un workflow nunca creado se recrea Y se procesa en el mismo arranque — con la reconciliación revertida, la prueba falla), `WalletHttpClient`, `PlayerInventoryGrantHttpClient`, `RewardWorkflowResultPublisher`.
 - **Integration**: `GET .../reward` con `PERSISTENCE_DRIVER=memory`.
 - **DB** (Mongo Testcontainers): `MongoRewardWorkflowRepository` — transiciones atómicas reales, no-op ante estado de origen no coincidente, y una prueba de "reinicio" (segunda instancia del repositorio sobre la misma base recupera el estado exacto).
 - **Guardas estáticas de HU-21** actualizadas, no reabiertas: `reward-status.controller.ts` y `tokens.ts` quedan explícitamente excusados de "ningún adaptador de entrada menciona wallet/credit" (es su propósito); `IntervalRewardWorkflowScheduler` se añade a la lista permitida de `setInterval`.

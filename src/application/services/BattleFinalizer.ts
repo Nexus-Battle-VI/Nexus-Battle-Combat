@@ -61,7 +61,7 @@ export class BattleFinalizer {
       this.release.release(room.id)
     })
     this.step('result_publish', () => {
-      const notification = buildNotification(room)
+      const notification = buildBattleFinishedNotification(room)
 
       if (notification !== null) {
         this.results.publish(notification)
@@ -85,8 +85,16 @@ export class BattleFinalizer {
  * La notificacion de consumidores (contrato §9). `credits` es un DERECHO segun
  * §7.6: Combat no acredita nada y ningun transporte entre servicios existe
  * todavia (el adaptador solo registra).
+ *
+ * Exportada (no privada del modulo): `ReconcileRewardWorkflows` (HU-22)
+ * reconstruye la MISMA notificacion a partir de una sala `FINISHED` ya
+ * persistida, para recrear un `RewardWorkflow` que el `publish()`
+ * fire-and-forget de `afterFinished` no llego a crear antes de un reinicio.
+ * Una sola fuente de la traduccion `BattleRoom -> BattleFinishedNotification`.
  */
-const buildNotification = (room: BattleRoom): BattleFinishedNotification | null => {
+export const buildBattleFinishedNotification = (
+  room: BattleRoom,
+): BattleFinishedNotification | null => {
   const result = room.result
 
   if (result === null) {

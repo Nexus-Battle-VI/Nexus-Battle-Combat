@@ -28,6 +28,7 @@ import {
   LIST_AVAILABLE_BATTLE_ROOMS,
   PROCESS_BATTLE_DEADLINES,
   PROCESS_REWARD_WORKFLOW,
+  RECONCILE_REWARD_WORKFLOWS,
   RECOVER_BATTLE_DEADLINES,
   REWARD_CREDIT_PORT,
   REWARD_GRANT_PORT,
@@ -143,6 +144,7 @@ import { RandomSeed } from '../../domain/value-objects/RandomSeed'
 import type { BoundedRandom } from '../../domain/policies/TurnOrderPolicy'
 import { CompleteBattleTurn } from '../../application/use-cases/CompleteBattleTurn'
 import { CreateRewardWorkflows } from '../../application/use-cases/CreateRewardWorkflows'
+import { ReconcileRewardWorkflows } from '../../application/use-cases/ReconcileRewardWorkflows'
 import { ExecuteBasicAttack } from '../../application/use-cases/ExecuteBasicAttack'
 import { GetRewardStatus } from '../../application/use-cases/GetRewardStatus'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
@@ -819,6 +821,17 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       inject: [REWARD_WORKFLOW_REPOSITORY],
     },
     {
+      // HU-22: cierra el hueco entre "sala FINISHED persistida" y
+      // "RewardWorkflow persistido" -- ver ReconcileRewardWorkflows.
+      provide: RECONCILE_REWARD_WORKFLOWS,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        createWorkflows: CreateRewardWorkflows,
+        logger: Logger,
+      ): ReconcileRewardWorkflows => new ReconcileRewardWorkflows(rooms, createWorkflows, logger),
+      inject: [BATTLE_ROOM_REPOSITORY, CREATE_REWARD_WORKFLOWS, LOGGER],
+    },
+    {
       provide: REWARD_WORKFLOW_SCHEDULER_OPTIONS,
       useValue: DEFAULT_REWARD_WORKFLOW_SCHEDULER_OPTIONS,
     },
@@ -827,13 +840,15 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       useFactory: (
         repository: RewardWorkflowRepositoryPort,
         process: ProcessRewardWorkflow,
+        reconcile: ReconcileRewardWorkflows,
         logger: Logger,
         options: typeof DEFAULT_REWARD_WORKFLOW_SCHEDULER_OPTIONS,
       ): IntervalRewardWorkflowScheduler =>
-        new IntervalRewardWorkflowScheduler(repository, process, logger, options),
+        new IntervalRewardWorkflowScheduler(repository, process, reconcile, logger, options),
       inject: [
         REWARD_WORKFLOW_REPOSITORY,
         PROCESS_REWARD_WORKFLOW,
+        RECONCILE_REWARD_WORKFLOWS,
         LOGGER,
         REWARD_WORKFLOW_SCHEDULER_OPTIONS,
       ],

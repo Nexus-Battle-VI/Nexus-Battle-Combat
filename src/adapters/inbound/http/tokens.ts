@@ -33,5 +33,7 @@ export const REWARD_WORKFLOW_REPOSITORY = Symbol('RewardWorkflowRepositoryPort')
 export const REWARD_TABLE = Symbol('RewardTable')
 export const CREATE_REWARD_WORKFLOWS = Symbol('CreateRewardWorkflows')
 export const PROCESS_REWARD_WORKFLOW = Symbol('ProcessRewardWorkflow')
+/** Reconcilia salas FINISHED sin RewardWorkflow al arrancar (ventana de crash). */
+export const RECONCILE_REWARD_WORKFLOWS = Symbol('ReconcileRewardWorkflows')
 export const GET_REWARD_STATUS = Symbol('GetRewardStatus')
 export const REWARD_WORKFLOW_SCHEDULER_OPTIONS = Symbol('RewardWorkflowSchedulerOptions')

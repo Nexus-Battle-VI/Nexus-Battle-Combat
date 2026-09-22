@@ -37,6 +37,20 @@ export class InMemoryBattleRoomRepository implements BattleRoomRepositoryPort {
     return Promise.resolve(rooms)
   }
 
+  findFinishedSince(since: Date): Promise<readonly BattleRoom[]> {
+    const sinceIso = since.toISOString()
+    const rooms = [...this.byId.values()]
+      .filter(
+        (snapshot) =>
+          snapshot.status === 'FINISHED' &&
+          snapshot.result !== null &&
+          snapshot.result.finishedAt >= sinceIso,
+      )
+      .map((snapshot) => BattleRoom.restore(snapshot))
+
+    return Promise.resolve(rooms)
+  }
+
   save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom> {
     const stored = this.byId.get(room.id)
     const storedVersion = stored?.version ?? 0

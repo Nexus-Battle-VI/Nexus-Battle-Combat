@@ -43,6 +43,14 @@ export class MongoBattleRoomRepository implements BattleRoomRepositoryPort {
     return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
   }
 
+  async findFinishedSince(since: Date): Promise<readonly BattleRoom[]> {
+    const documents = await this.rooms
+      .find({ status: 'FINISHED', 'result.finishedAt': { $gte: since.toISOString() } })
+      .toArray()
+
+    return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
+  }
+
   async save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom> {
     const next: BattleRoomDocument = {
       ...toDocument(room.toSnapshot()),
