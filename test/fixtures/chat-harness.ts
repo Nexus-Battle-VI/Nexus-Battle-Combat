@@ -7,6 +7,8 @@ import type { ClockPort } from '../../src/application/ports/ClockPort'
 import type { IdGeneratorPort } from '../../src/application/ports/IdGeneratorPort'
 import { AuthorizeChatChannel } from '../../src/application/use-cases/AuthorizeChatChannel'
 import { CreateBattleRoom } from '../../src/application/use-cases/CreateBattleRoom'
+import { StakeReserver } from '../../src/application/services/StakeReserver'
+import type { WalletStakePort } from '../../src/application/ports/WalletStakePort'
 import { ReadChatHistory } from '../../src/application/use-cases/ReadChatHistory'
 import { SendChatMessage } from '../../src/application/use-cases/SendChatMessage'
 import type { BattleRoom } from '../../src/domain/entities/BattleRoom'
@@ -149,10 +151,18 @@ export const createRoom = async (
   roomId: string,
   createdBy = 'creador',
 ): Promise<BattleRoom> => {
+  // HU-23: la sala de prueba no declara apuestas, asi que Wallet no se toca.
+  const unusedWalletStakes = {
+    reserve: () => Promise.reject(new Error('Wallet no deberia llamarse.')),
+    release: () => Promise.reject(new Error('Wallet no deberia llamarse.')),
+    settle: () => Promise.reject(new Error('Wallet no deberia llamarse.')),
+  } as unknown as WalletStakePort
+
   const created = await new CreateBattleRoom(
     rooms,
     { generate: () => roomId },
     new MutableClock(),
+    new StakeReserver(unusedWalletStakes, new MutableClock(), { error: () => undefined }),
   ).execute(createdBy, {
     mode: 'PVP',
     teamConfigs: [{ capacity: 2 }, { capacity: 2 }],

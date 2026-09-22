@@ -51,6 +51,14 @@ export class MongoBattleRoomRepository implements BattleRoomRepositoryPort {
     return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
   }
 
+  async findCancelledSince(since: Date): Promise<readonly BattleRoom[]> {
+    const documents = await this.rooms
+      .find({ status: 'CANCELLED', createdAt: { $gte: since } })
+      .toArray()
+
+    return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
+  }
+
   async save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom> {
     const next: BattleRoomDocument = {
       ...toDocument(room.toSnapshot()),

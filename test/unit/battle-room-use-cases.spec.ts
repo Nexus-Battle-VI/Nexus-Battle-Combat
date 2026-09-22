@@ -25,7 +25,10 @@ import type {
   EquippedHero,
   PlayerInventoryEquippedHeroPort,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
+import type { WalletStakePort } from '../../src/application/ports/WalletStakePort'
 import { equippedHeroFixture } from '../fixtures/equipped-hero'
+import { StakeReleaser } from '../../src/application/services/StakeReleaser'
+import { StakeReserver } from '../../src/application/services/StakeReserver'
 import { CancelBattleRoom } from '../../src/application/use-cases/CancelBattleRoom'
 import { CreateBattleRoom } from '../../src/application/use-cases/CreateBattleRoom'
 import { JoinBattleRoom } from '../../src/application/use-cases/JoinBattleRoom'
@@ -74,10 +77,30 @@ const basicInput = (overrides: Partial<CreateBattleRoomInput> = {}): CreateBattl
   ...overrides,
 })
 
+/**
+ * HU-23: estas pruebas ejercitan el ciclo de sala SIN apuestas, asi que
+ * Wallet no debe recibir NINGUNA llamada: el doble rechaza cualquier uso y
+ * deja ese limite a la vista. Los servicios reales de reserva/liberacion
+ * tienen sus propias suites.
+ */
+const unusedWalletStakes = {
+  reserve: () => Promise.reject(new Error('Wallet no deberia llamarse en esta prueba.')),
+  release: () => Promise.reject(new Error('Wallet no deberia llamarse en esta prueba.')),
+  settle: () => Promise.reject(new Error('Wallet no deberia llamarse en esta prueba.')),
+} as unknown as WalletStakePort
+
+const silentLogger = { error: (): void => undefined }
+
+const noopStakeReserver = (): StakeReserver =>
+  new StakeReserver(unusedWalletStakes, fixedClock(), silentLogger)
+
+const noopStakeReleaser = (): StakeReleaser =>
+  new StakeReleaser(new InMemoryBattleRoomRepository(), unusedWalletStakes, silentLogger)
+
 describe('CreateBattleRoom', () => {
   it('crea la sala, resuelve createdBy del identificador verificado y no del cuerpo', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const useCase = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const useCase = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
 
     const dto = await useCase.execute(CREATOR, basicInput())
 
@@ -89,7 +112,7 @@ describe('CreateBattleRoom', () => {
 
   it('resuelve el playerId de un HUMAN inicial al creador, aunque el cliente no lo declare', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const useCase = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const useCase = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
 
     const dto = await useCase.execute(
       CREATOR,
@@ -105,7 +128,7 @@ describe('CreateBattleRoom', () => {
 describe('ListAvailableBattleRooms', () => {
   it('solo devuelve salas WAITING_FOR_PLAYERS con cupo', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
     const list = new ListAvailableBattleRooms(repo)
 
     const available = await create.execute(CREATOR, basicInput())
@@ -122,7 +145,7 @@ describe('ListAvailableBattleRooms', () => {
         ],
       }),
     )
-    const cancel = new CancelBattleRoom(repo)
+    const cancel = new CancelBattleRoom(repo, noopStakeReleaser())
     const cancelled = await create.execute(CREATOR, basicInput())
     await cancel.execute(cancelled.id, CREATOR)
 
@@ -136,8 +159,8 @@ describe('ListAvailableBattleRooms', () => {
 describe('CancelBattleRoom', () => {
   it('el creador cancela una sala valida', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const cancel = new CancelBattleRoom(repo)
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const cancel = new CancelBattleRoom(repo, noopStakeReleaser())
 
     const created = await create.execute(CREATOR, basicInput())
     const cancelled = await cancel.execute(created.id, CREATOR)
@@ -148,7 +171,7 @@ describe('CancelBattleRoom', () => {
 
   it('sala inexistente -> RoomNotFoundError', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const cancel = new CancelBattleRoom(repo)
+    const cancel = new CancelBattleRoom(repo, noopStakeReleaser())
 
     await expect(cancel.execute('sala-que-no-existe', CREATOR)).rejects.toBeInstanceOf(
       RoomNotFoundError,
@@ -157,8 +180,8 @@ describe('CancelBattleRoom', () => {
 
   it('quien no es el creador no puede cancelar', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const cancel = new CancelBattleRoom(repo)
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const cancel = new CancelBattleRoom(repo, noopStakeReleaser())
 
     const created = await create.execute(CREATOR, basicInput())
 
@@ -169,8 +192,8 @@ describe('CancelBattleRoom', () => {
 
   it('sala ya no cancelable -> RoomNotCancellableError', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const cancel = new CancelBattleRoom(repo)
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const cancel = new CancelBattleRoom(repo, noopStakeReleaser())
 
     const created = await create.execute(CREATOR, basicInput())
     await cancel.execute(created.id, CREATOR)
@@ -182,7 +205,7 @@ describe('CancelBattleRoom', () => {
 
   it('conflicto de bloqueo optimista -> RoomConflictError', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
     const created = await create.execute(CREATOR, basicInput())
 
     const room = await repo.findById(created.id)
@@ -203,7 +226,13 @@ describe('JoinBattleRoom', () => {
 
   it('sala inexistente -> RoomNotFoundError', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
 
     await expect(join.execute('sala-que-no-existe', JOINER, null)).rejects.toBeInstanceOf(
       RoomNotFoundError,
@@ -212,8 +241,14 @@ describe('JoinBattleRoom', () => {
 
   it('camino feliz: orquesta findById -> room.join() -> save(room, expectedVersion) y devuelve el DTO', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
 
     const created = await create.execute(
       CREATOR,
@@ -229,8 +264,14 @@ describe('JoinBattleRoom', () => {
 
   it('el join que ocupa el ultimo cupo persiste PREPARING', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
 
     const created = await create.execute(
       CREATOR,
@@ -254,7 +295,7 @@ describe('JoinBattleRoom', () => {
     // "si repository.save() rechaza con RoomConflictError, el caso de uso lo
     // propaga tal cual, sin ocultarlo ni reintentar en un bucle oculto".
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
     const created = await create.execute(
       CREATOR,
       basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
@@ -265,6 +306,7 @@ describe('JoinBattleRoom', () => {
       findWaitingForPlayers: () => repo.findWaitingForPlayers(),
       findInBattle: () => repo.findInBattle(),
       findFinishedSince: (since) => repo.findFinishedSince(since),
+      findCancelledSince: (since) => repo.findCancelledSince(since),
       save: () => Promise.reject(new RoomConflictError(created.id)),
     }
     const join = new JoinBattleRoom(
@@ -272,6 +314,7 @@ describe('JoinBattleRoom', () => {
       fixedClock(),
       fakeAccountProfiles(),
       fakeEquippedHeroes(),
+      noopStakeReserver(),
     )
 
     await expect(join.execute(created.id, JOINER, null)).rejects.toBeInstanceOf(RoomConflictError)
@@ -279,9 +322,15 @@ describe('JoinBattleRoom', () => {
 
   it('ausencia de persistencia parcial: RoomNotJoinableError nunca invoca repository.save()', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const cancel = new CancelBattleRoom(repo)
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const cancel = new CancelBattleRoom(repo, noopStakeReleaser())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
 
     const created = await create.execute(CREATOR, basicInput())
     await cancel.execute(created.id, CREATOR)
@@ -296,8 +345,14 @@ describe('JoinBattleRoom', () => {
 
   it('ausencia de persistencia parcial: RoomFullError nunca invoca repository.save()', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
 
     const created = await create.execute(
       CREATOR,
@@ -314,8 +369,14 @@ describe('JoinBattleRoom', () => {
 
   it('ausencia de persistencia parcial: PlayerAlreadyJoinedError nunca invoca repository.save()', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
 
     const created = await create.execute(
       CREATOR,
@@ -333,7 +394,7 @@ describe('JoinBattleRoom', () => {
 
   it('llama a save() con expectedVersion igual a la version leida de la sala', async () => {
     const repo: BattleRoomRepositoryPort = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
 
     const created = await create.execute(
       CREATOR,
@@ -341,7 +402,13 @@ describe('JoinBattleRoom', () => {
     )
 
     const saveSpy = jest.spyOn(repo, 'save')
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
 
     await join.execute(created.id, JOINER, null)
 
@@ -350,7 +417,7 @@ describe('JoinBattleRoom', () => {
 
   it('resuelve displayName/heroId de Account/Player-Inventory y los persiste en el participante', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
     const created = await create.execute(
       CREATOR,
       basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
@@ -364,7 +431,13 @@ describe('JoinBattleRoom', () => {
       getEquippedHero: (playerId) =>
         Promise.resolve(equippedHeroFixture({ playerId, heroId: 'heroe-equipado' })),
     }
-    const join = new JoinBattleRoom(repo, fixedClock(), accountProfiles, equippedHeroes)
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      accountProfiles,
+      equippedHeroes,
+      noopStakeReserver(),
+    )
 
     const dto = await join.execute(created.id, JOINER, null)
 
@@ -380,15 +453,21 @@ describe('JoinBattleRoom', () => {
 
   it('jugador sin heroe equipado (Player-Inventory devuelve null) -> PlayerWithoutEquippedHeroError, nunca invoca repository.save()', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
     const created = await create.execute(
       CREATOR,
       basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
     )
 
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
-      getEquippedHero: () => Promise.resolve(null),
-    })
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      {
+        getEquippedHero: () => Promise.resolve(null),
+      },
+      noopStakeReserver(),
+    )
     const saveSpy = jest.spyOn(repo, 'save')
 
     await expect(join.execute(created.id, JOINER, null)).rejects.toBeInstanceOf(
@@ -399,7 +478,7 @@ describe('JoinBattleRoom', () => {
 
   it('Account no responde -> propaga UpstreamServiceError, nunca invoca repository.save() ni consulta Player-Inventory', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
     const created = await create.execute(
       CREATOR,
       basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
@@ -414,6 +493,7 @@ describe('JoinBattleRoom', () => {
           Promise.reject(new UpstreamServiceError('account', 'no_alcanzable')),
       },
       { getEquippedHero: equippedHeroesSpy },
+      noopStakeReserver(),
     )
     const saveSpy = jest.spyOn(repo, 'save')
 
@@ -426,7 +506,7 @@ describe('JoinBattleRoom', () => {
 
   it('Account responde 404 (sujeto sin cuenta) -> propaga AccountProfileMissingError, nunca UpstreamServiceError, nunca invoca repository.save() ni consulta Player-Inventory (HU-15.4)', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
     const created = await create.execute(
       CREATOR,
       basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
@@ -440,6 +520,7 @@ describe('JoinBattleRoom', () => {
         getBattleProfile: (subject) => Promise.reject(new AccountProfileMissingError(subject)),
       },
       { getEquippedHero: equippedHeroesSpy },
+      noopStakeReserver(),
     )
     const saveSpy = jest.spyOn(repo, 'save')
 
@@ -452,7 +533,7 @@ describe('JoinBattleRoom', () => {
 
   it('displayName resuelto ya lo usa otro participante de la sala -> DuplicateDisplayNameError, nunca invoca repository.save()', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
     const created = await create.execute(
       CREATOR,
       basicInput({ teamConfigs: [{ capacity: 1 }, { capacity: 2 }] }),
@@ -467,6 +548,7 @@ describe('JoinBattleRoom', () => {
       fixedClock(),
       sameNameForEveryone,
       fakeEquippedHeroes(),
+      noopStakeReserver(),
     )
     await firstJoin.execute(created.id, CREATOR, 'A')
 
@@ -475,6 +557,7 @@ describe('JoinBattleRoom', () => {
       fixedClock(),
       sameNameForEveryone,
       fakeEquippedHeroes(),
+      noopStakeReserver(),
     )
     const saveSpy = jest.spyOn(repo, 'save')
 
@@ -487,7 +570,7 @@ describe('JoinBattleRoom', () => {
   describe('elegibilidad precombate (HU-16, RF-16, Management#25/#401/#402)', () => {
     it('heroe con ready=false -> PrecombatEligibilityBlockedError con los blockers de Player-Inventory, nunca invoca repository.save()', async () => {
       const repo = new InMemoryBattleRoomRepository()
-      const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+      const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
       const created = await create.execute(
         CREATOR,
         basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
@@ -499,10 +582,16 @@ describe('JoinBattleRoom', () => {
         reference: 'espada-de-dos-manos',
         detail: 'El producto equipado ya no esta en el inventario del jugador.',
       }
-      const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
-        getEquippedHero: (playerId) =>
-          Promise.resolve(equippedHeroFixture({ playerId, ready: false, blockers: [blocker] })),
-      })
+      const join = new JoinBattleRoom(
+        repo,
+        fixedClock(),
+        fakeAccountProfiles(),
+        {
+          getEquippedHero: (playerId) =>
+            Promise.resolve(equippedHeroFixture({ playerId, ready: false, blockers: [blocker] })),
+        },
+        noopStakeReserver(),
+      )
       const saveSpy = jest.spyOn(repo, 'save')
 
       const outcome = join.execute(created.id, JOINER, null)
@@ -516,16 +605,27 @@ describe('JoinBattleRoom', () => {
       '%s intenta unirse a una sala 1 contra 1 (1v1) -> PrecombatEligibilityBlockedError (DP-5)',
       async (subtype) => {
         const repo = new InMemoryBattleRoomRepository()
-        const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+        const create = new CreateBattleRoom(
+          repo,
+          sequentialIds(),
+          fixedClock(),
+          noopStakeReserver(),
+        )
         const created = await create.execute(
           CREATOR,
           basicInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
         )
 
-        const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
-          getEquippedHero: (playerId) =>
-            Promise.resolve(equippedHeroFixture({ playerId, subtype })),
-        })
+        const join = new JoinBattleRoom(
+          repo,
+          fixedClock(),
+          fakeAccountProfiles(),
+          {
+            getEquippedHero: (playerId) =>
+              Promise.resolve(equippedHeroFixture({ playerId, subtype })),
+          },
+          noopStakeReserver(),
+        )
         const saveSpy = jest.spyOn(repo, 'save')
 
         const outcome = join.execute(created.id, JOINER, null)
@@ -542,16 +642,27 @@ describe('JoinBattleRoom', () => {
       '%s SI puede unirse a una sala de EQUIPO (2v2) (DP-5)',
       async (subtype) => {
         const repo = new InMemoryBattleRoomRepository()
-        const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+        const create = new CreateBattleRoom(
+          repo,
+          sequentialIds(),
+          fixedClock(),
+          noopStakeReserver(),
+        )
         const created = await create.execute(
           CREATOR,
           basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
         )
 
-        const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
-          getEquippedHero: (playerId) =>
-            Promise.resolve(equippedHeroFixture({ playerId, subtype })),
-        })
+        const join = new JoinBattleRoom(
+          repo,
+          fixedClock(),
+          fakeAccountProfiles(),
+          {
+            getEquippedHero: (playerId) =>
+              Promise.resolve(equippedHeroFixture({ playerId, subtype })),
+          },
+          noopStakeReserver(),
+        )
 
         const dto = await join.execute(created.id, JOINER, null)
 
@@ -561,16 +672,22 @@ describe('JoinBattleRoom', () => {
 
     it('guerrero (clase no restringida) SI puede unirse a una sala 1 contra 1', async () => {
       const repo = new InMemoryBattleRoomRepository()
-      const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+      const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
       const created = await create.execute(
         CREATOR,
         basicInput({ teamConfigs: [{ capacity: 1 }, { capacity: 1 }] }),
       )
 
-      const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
-        getEquippedHero: (playerId) =>
-          Promise.resolve(equippedHeroFixture({ playerId, subtype: 'GUERRERO_TANQUE' })),
-      })
+      const join = new JoinBattleRoom(
+        repo,
+        fixedClock(),
+        fakeAccountProfiles(),
+        {
+          getEquippedHero: (playerId) =>
+            Promise.resolve(equippedHeroFixture({ playerId, subtype: 'GUERRERO_TANQUE' })),
+        },
+        noopStakeReserver(),
+      )
 
       const dto = await join.execute(created.id, JOINER, null)
 
@@ -579,16 +696,22 @@ describe('JoinBattleRoom', () => {
 
     it('DP-6: la version del loadout de Player-Inventory se captura en el participante persistido (no en el DTO publico, minimizacion de datos)', async () => {
       const repo = new InMemoryBattleRoomRepository()
-      const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
+      const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
       const created = await create.execute(
         CREATOR,
         basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
       )
 
-      const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), {
-        getEquippedHero: (playerId) =>
-          Promise.resolve(equippedHeroFixture({ playerId, loadoutVersion: 7 })),
-      })
+      const join = new JoinBattleRoom(
+        repo,
+        fixedClock(),
+        fakeAccountProfiles(),
+        {
+          getEquippedHero: (playerId) =>
+            Promise.resolve(equippedHeroFixture({ playerId, loadoutVersion: 7 })),
+        },
+        noopStakeReserver(),
+      )
 
       const dto = await join.execute(created.id, JOINER, null)
       const room = await repo.findById(created.id)
@@ -616,9 +739,15 @@ describe('LeaveBattleRoom (HU-15.2, ciclo de vida del lobby)', () => {
 
   it('un participante abandona y libera su cupo', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
-    const leave = new LeaveBattleRoom(repo)
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
+    const leave = new LeaveBattleRoom(repo, noopStakeReleaser())
 
     const created = await create.execute(
       CREATOR,
@@ -636,7 +765,7 @@ describe('LeaveBattleRoom (HU-15.2, ciclo de vida del lobby)', () => {
 
   it('sala inexistente -> RoomNotFoundError', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const leave = new LeaveBattleRoom(repo)
+    const leave = new LeaveBattleRoom(repo, noopStakeReleaser())
 
     await expect(leave.execute('sala-que-no-existe', GUEST)).rejects.toBeInstanceOf(
       RoomNotFoundError,
@@ -645,8 +774,8 @@ describe('LeaveBattleRoom (HU-15.2, ciclo de vida del lobby)', () => {
 
   it('quien no es participante no puede abandonar -> PlayerNotInRoomError, nunca invoca repository.save()', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const leave = new LeaveBattleRoom(repo)
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const leave = new LeaveBattleRoom(repo, noopStakeReleaser())
     const created = await create.execute(CREATOR, basicInput())
     const saveSpy = jest.spyOn(repo, 'save')
 
@@ -658,10 +787,16 @@ describe('LeaveBattleRoom (HU-15.2, ciclo de vida del lobby)', () => {
 
   it('sala ya CANCELLED -> RoomNotLeavableError', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
-    const cancel = new CancelBattleRoom(repo)
-    const leave = new LeaveBattleRoom(repo)
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
+    const cancel = new CancelBattleRoom(repo, noopStakeReleaser())
+    const leave = new LeaveBattleRoom(repo, noopStakeReleaser())
 
     const created = await create.execute(
       CREATOR,
@@ -675,8 +810,14 @@ describe('LeaveBattleRoom (HU-15.2, ciclo de vida del lobby)', () => {
 
   it('conflicto de bloqueo optimista -> RoomConflictError', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock())
-    const join = new JoinBattleRoom(repo, fixedClock(), fakeAccountProfiles(), fakeEquippedHeroes())
+    const create = new CreateBattleRoom(repo, sequentialIds(), fixedClock(), noopStakeReserver())
+    const join = new JoinBattleRoom(
+      repo,
+      fixedClock(),
+      fakeAccountProfiles(),
+      fakeEquippedHeroes(),
+      noopStakeReserver(),
+    )
     const created = await create.execute(
       CREATOR,
       basicInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),

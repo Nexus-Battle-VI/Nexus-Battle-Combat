@@ -82,6 +82,7 @@ const setup = async (
     findWaitingForPlayers: () => inner.findWaitingForPlayers(),
     findInBattle: () => inner.findInBattle(),
     findFinishedSince: (since) => inner.findFinishedSince(since),
+    findCancelledSince: (since) => inner.findCancelledSince(since),
     save: (room, expectedVersion) => {
       saves += 1
 
@@ -599,6 +600,7 @@ describe('UseSkill — conflicto de version: NUNCA se vuelve a sortear', () => {
       findWaitingForPlayers: () => inner.findWaitingForPlayers(),
       findInBattle: () => inner.findInBattle(),
       findFinishedSince: (since) => inner.findFinishedSince(since),
+      findCancelledSince: (since) => inner.findCancelledSince(since),
       save: (room, expectedVersion) => {
         if (!thrown) {
           thrown = true
