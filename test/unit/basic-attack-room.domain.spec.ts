@@ -139,6 +139,31 @@ describe('BattleRoom.planBasicAttack — validacion previa (0 sorteos)', () => {
     ).toBe('b2')
   })
 
+  it('3v3 (HU-12, Issue #21): ningun aliado es objetivo valido, incluido el mas lejano en la cola', () => {
+    const room = battleWithCombat({ teamSizes: [3, 3] })
+
+    expect(() => room.planBasicAttack('a1', 'cmd-1', { teamLabel: 'A', seat: 1 })).toThrow(
+      SameTeamTargetError,
+    )
+    expect(() => room.planBasicAttack('a1', 'cmd-2', { teamLabel: 'A', seat: 2 })).toThrow(
+      SameTeamTargetError,
+    )
+  })
+
+  it('3v3 (HU-12, Issue #21): los tres rivales son objetivo valido', () => {
+    const room = battleWithCombat({ teamSizes: [3, 3] })
+
+    expect(
+      ready(room.planBasicAttack('a1', 'cmd-1', { teamLabel: 'B', seat: 0 })).targetEntry.playerId,
+    ).toBe('b1')
+    expect(
+      ready(room.planBasicAttack('a1', 'cmd-2', { teamLabel: 'B', seat: 1 })).targetEntry.playerId,
+    ).toBe('b2')
+    expect(
+      ready(room.planBasicAttack('a1', 'cmd-3', { teamLabel: 'B', seat: 2 })).targetEntry.playerId,
+    ).toBe('b3')
+  })
+
   it('objetivo sin Vida: TargetUnavailableError', () => {
     expect(() =>
       battleWithCombat({ health: { 'B#0': 0 } }).planBasicAttack('a1', 'cmd-1', TARGET),

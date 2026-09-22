@@ -454,6 +454,19 @@ describe('UseSkill — rechazos: 0 sorteos y nada cambia', () => {
     expect(JSON.stringify((await room()).toSnapshot())).toBe(before)
   })
 
+  it('un objetivo aliado en 3v3 (HU-12, Issue #21): el mas lejano en la cola tambien se rechaza', async () => {
+    const { useCase, sequence, room, saves } = await setup({ teamSizes: [3, 3] }, [])
+    const before = JSON.stringify((await room()).toSnapshot())
+
+    await expect(
+      useCase.execute(command({ target: { teamLabel: 'A', seat: 2 } })),
+    ).rejects.toBeInstanceOf(SameTeamTargetError)
+
+    expect(sequence.consumed()).toBe(0)
+    expect(saves()).toBe(0)
+    expect(JSON.stringify((await room()).toSnapshot())).toBe(before)
+  })
+
   it('la sala no existe / quien envia no es participante', async () => {
     const { useCase } = await setup({}, [])
 
