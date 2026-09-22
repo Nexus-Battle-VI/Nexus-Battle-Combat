@@ -1,11 +1,22 @@
 import type { BattleEvent } from '../../domain/entities/BattleEvent'
+import type { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import type { BattleSnapshotWire } from '../dto/BattleEventDto'
 import { RoomAccessForbiddenError, RoomNotFoundError } from '../errors/ApplicationError'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 
 export type ResumeResult =
-  | { readonly kind: 'replay'; readonly seq: number; readonly events: readonly BattleEvent[] }
-  | { readonly kind: 'snapshot'; readonly seq: number; readonly snapshot: BattleSnapshotWire }
+  | {
+      readonly kind: 'replay'
+      readonly seq: number
+      readonly status: BattleRoomStatus
+      readonly events: readonly BattleEvent[]
+    }
+  | {
+      readonly kind: 'snapshot'
+      readonly seq: number
+      readonly status: BattleRoomStatus
+      readonly snapshot: BattleSnapshotWire
+    }
 
 /**
  * Recuperacion tras una reconexion (ADR-020, HU-17): `{"type":"resume",
@@ -41,18 +52,25 @@ export class ResumeBattle {
       lastSeq >= 1 &&
       lastSeq <= seq
     ) {
-      return { kind: 'replay', seq, events: room.eventsAfter(lastSeq) }
+      return {
+        kind: 'replay',
+        seq,
+        status: room.status,
+        events: room.eventsAfter(lastSeq),
+      }
     }
 
     return {
       kind: 'snapshot',
       seq,
+      status: room.status,
       snapshot: {
         type: 'snapshot',
         roomId: room.id,
         seq,
         status: room.status,
         battle: room.battleView(),
+        result: room.result,
       },
     }
   }

@@ -1,9 +1,7 @@
 import 'reflect-metadata'
 
 import { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicAttackRealtimeHandler'
-import { BattleRoomRealtimeGateway } from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
 import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
-import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
 import { SkillRealtimeHandler } from '../../src/adapters/inbound/ws/SkillRealtimeHandler'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryRealtimeTicketStore } from '../../src/adapters/outbound/realtime/InMemoryRealtimeTicketStore'
@@ -19,6 +17,7 @@ import { RandomEffectType } from '../../src/domain/random-effects/RandomEffectTy
 import { ROOM_ID, clock, scriptedSequence, silentLogger } from '../fixtures/battle'
 import { indexForEffect, indexForFace } from '../fixtures/basic-attack'
 import { FakeSocket, flush } from '../fixtures/fake-socket'
+import { buildGateway } from '../fixtures/gateway'
 import { SHIELD_STRIKE_ID, STONE_HAND_ID, battleWithSkills, skillProfile } from '../fixtures/skills'
 
 /**
@@ -35,12 +34,6 @@ const codec: RealtimeTicketCodecPort = {
   })(),
   hash: (ticket) => `h:${ticket}`,
 }
-
-const noChat = {
-  handle: jest.fn().mockResolvedValue(undefined),
-  onDisconnect: jest.fn(),
-  onRoomUpdated: jest.fn().mockResolvedValue(undefined),
-} as unknown as ChatRealtimeHandler
 
 const attackDie = (face: number): number => indexForFace(face, 6)
 const DAMAGE = indexForEffect('GUERRERO_ARMAS', RandomEffectType.Damage)
@@ -59,15 +52,13 @@ const world = async (
   const lock = new ChannelLock()
   const attack = new ExecuteBasicAttack(repo, clock, sequence, lock)
   const skill = new UseSkill(repo, clock, sequence, lock, attack)
-  const gateway = new BattleRoomRealtimeGateway(
-    new ConsumeRealtimeTicket(codec, store, clock),
-    repo,
-    new ResumeBattle(repo),
-    silentLogger,
-    noChat,
-    new BasicAttackRealtimeHandler(attack, silentLogger),
-    new SkillRealtimeHandler(skill, silentLogger),
-  )
+  const gateway = buildGateway({
+    consumeTicket: new ConsumeRealtimeTicket(codec, store, clock),
+    rooms: repo,
+    resumeBattle: new ResumeBattle(repo),
+    attack: new BasicAttackRealtimeHandler(attack, silentLogger),
+    skill: new SkillRealtimeHandler(skill, silentLogger),
+  })
 
   await repo.save(
     battleWithSkills({ profiles: { a1: skillProfile(), b1: skillProfile(), ...profiles } }),

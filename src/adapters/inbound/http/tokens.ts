@@ -20,3 +20,9 @@ export const EXECUTE_BASIC_ATTACK = Symbol('ExecuteBasicAttack')
 export const USE_SKILL = Symbol('UseSkill')
 /** HU-18: serializa los comandos de una misma sala (una replica, ADR-020). */
 export const ROOM_COMMAND_LOCK = Symbol('RoomCommandLock')
+/** HU-21: piezas de la finalizacion de batalla (servicios, casos de uso y planificador). */
+export const BATTLE_FINALIZER = Symbol('BattleFinalizer')
+export const BATTLE_DEADLINE_SETTLER = Symbol('BattleDeadlineSettler')
+export const PROCESS_BATTLE_DEADLINES = Symbol('ProcessBattleDeadlines')
+export const RECOVER_BATTLE_DEADLINES = Symbol('RecoverBattleDeadlines')
+export const BATTLE_DEADLINE_SCHEDULER_OPTIONS = Symbol('BattleDeadlineSchedulerOptions')

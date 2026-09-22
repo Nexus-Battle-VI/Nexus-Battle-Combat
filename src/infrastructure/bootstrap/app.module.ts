@@ -9,6 +9,9 @@ import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/to
 import {
   BATTLE_RANDOM,
   BATTLE_RANDOM_SEQUENCE,
+  BATTLE_DEADLINE_SCHEDULER_OPTIONS,
+  BATTLE_DEADLINE_SETTLER,
+  BATTLE_FINALIZER,
   CANCEL_BATTLE_ROOM,
   COMPLETE_BATTLE_TURN,
   CONSUME_REALTIME_TICKET,
@@ -20,6 +23,8 @@ import {
   JOIN_BATTLE_ROOM,
   LEAVE_BATTLE_ROOM,
   LIST_AVAILABLE_BATTLE_ROOMS,
+  PROCESS_BATTLE_DEADLINES,
+  RECOVER_BATTLE_DEADLINES,
   RESUME_BATTLE,
   ROOM_COMMAND_LOCK,
   START_BATTLE,
@@ -43,6 +48,13 @@ import { MongoChatMessageRepository } from '../../adapters/outbound/persistence/
 import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
+import { InMemoryBattleDeadlineBook } from '../../adapters/outbound/system/InMemoryBattleDeadlineBook'
+import { InMemoryBattlePresenceRegistry } from '../../adapters/outbound/system/InMemoryBattlePresenceRegistry'
+import {
+  DEFAULT_BATTLE_DEADLINE_SCHEDULER_OPTIONS,
+  IntervalBattleDeadlineScheduler,
+} from '../../adapters/outbound/system/IntervalBattleDeadlineScheduler'
+import { LoggingBattleResultPublisher } from '../../adapters/outbound/system/LoggingBattleResultPublisher'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
 import { UuidGenerator } from '../../adapters/outbound/system/UuidGenerator'
@@ -54,6 +66,26 @@ import {
   BATTLE_ROOM_REPOSITORY,
   type BattleRoomRepositoryPort,
 } from '../../application/ports/BattleRoomRepositoryPort'
+import {
+  BATTLE_CONNECTIONS,
+  type BattleConnectionsPort,
+} from '../../application/ports/BattleConnectionsPort'
+import {
+  BATTLE_DEADLINE_BOOK,
+  type BattleDeadlineBookPort,
+} from '../../application/ports/BattleDeadlineBookPort'
+import {
+  BATTLE_PRESENCE,
+  type BattlePresencePort,
+} from '../../application/ports/BattlePresencePort'
+import {
+  BATTLE_RESULT_PUBLISHER,
+  type BattleResultPublisherPort,
+} from '../../application/ports/BattleResultPublisherPort'
+import {
+  BATTLE_ROOM_RELEASE,
+  type BattleRoomReleasePort,
+} from '../../application/ports/BattleRoomReleasePort'
 import {
   CHAT_MESSAGE_REPOSITORY,
   type ChatMessageRepositoryPort,
@@ -74,7 +106,10 @@ import {
   BATTLE_EVENT_PUBLISHER,
   type BattleEventPublisherPort,
 } from '../../application/ports/BattleEventPublisherPort'
-import { REALTIME_NOTIFIER } from '../../application/ports/RealtimeNotifierPort'
+import {
+  REALTIME_NOTIFIER,
+  type RealtimeNotifierPort,
+} from '../../application/ports/RealtimeNotifierPort'
 import {
   REALTIME_TICKET_CODEC,
   REALTIME_TICKET_STORE,
@@ -82,10 +117,14 @@ import {
   type RealtimeTicketStorePort,
 } from '../../application/ports/RealtimeTicketPort'
 import { createBoundedRandom } from '../../application/services/BoundedRandom'
+import { BattleDeadlineSettler } from '../../application/services/BattleDeadlineSettler'
+import { BattleFinalizer } from '../../application/services/BattleFinalizer'
 import { RandomSeed } from '../../domain/value-objects/RandomSeed'
 import type { BoundedRandom } from '../../domain/policies/TurnOrderPolicy'
 import { CompleteBattleTurn } from '../../application/use-cases/CompleteBattleTurn'
 import { ExecuteBasicAttack } from '../../application/use-cases/ExecuteBasicAttack'
+import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
+import { RecoverBattleDeadlines } from '../../application/use-cases/RecoverBattleDeadlines'
 import { UseSkill } from '../../application/use-cases/UseSkill'
 import { GetBattleRoom } from '../../application/use-cases/GetBattleRoom'
 import { ResumeBattle } from '../../application/use-cases/ResumeBattle'
@@ -523,6 +562,121 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       provide: BATTLE_EVENT_PUBLISHER,
       useExisting: BattleRoomRealtimeGateway,
     },
+    // HU-21 (RF-21): piezas de la finalizacion de batalla. La presencia y el
+    // libro de vencimientos viven en memoria (ADR-020: una sola replica); el
+    // gateway es tambien el liberador de conexiones y el consultor de conexiones
+    // (solo lectura), y el publicador de resultados SOLO escribe un registro
+    // hasta que HU-22/23/29/30/09 definan su transporte.
+    {
+      provide: BATTLE_PRESENCE,
+      useFactory: (): BattlePresencePort => new InMemoryBattlePresenceRegistry(),
+    },
+    {
+      provide: BATTLE_DEADLINE_BOOK,
+      useFactory: (): BattleDeadlineBookPort => new InMemoryBattleDeadlineBook(),
+    },
+    {
+      provide: BATTLE_RESULT_PUBLISHER,
+      useFactory: (logger: Logger): BattleResultPublisherPort =>
+        new LoggingBattleResultPublisher(logger),
+      inject: [LOGGER],
+    },
+    {
+      provide: BATTLE_ROOM_RELEASE,
+      useExisting: BattleRoomRealtimeGateway,
+    },
+    {
+      provide: BATTLE_CONNECTIONS,
+      useExisting: BattleRoomRealtimeGateway,
+    },
+    {
+      provide: BATTLE_FINALIZER,
+      useFactory: (
+        book: BattleDeadlineBookPort,
+        presence: BattlePresencePort,
+        notifier: RealtimeNotifierPort,
+        release: BattleRoomReleasePort,
+        results: BattleResultPublisherPort,
+        logger: Logger,
+      ): BattleFinalizer => new BattleFinalizer(book, presence, notifier, release, results, logger),
+      inject: [
+        BATTLE_DEADLINE_BOOK,
+        BATTLE_PRESENCE,
+        REALTIME_NOTIFIER,
+        BATTLE_ROOM_RELEASE,
+        BATTLE_RESULT_PUBLISHER,
+        LOGGER,
+      ],
+    },
+    {
+      provide: BATTLE_DEADLINE_SETTLER,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        presence: BattlePresencePort,
+        book: BattleDeadlineBookPort,
+        clock: ClockPort,
+        events: BattleEventPublisherPort,
+        finalizer: BattleFinalizer,
+      ): BattleDeadlineSettler =>
+        new BattleDeadlineSettler(rooms, presence, book, clock, events, finalizer),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        BATTLE_PRESENCE,
+        BATTLE_DEADLINE_BOOK,
+        CLOCK,
+        BATTLE_EVENT_PUBLISHER,
+        BATTLE_FINALIZER,
+      ],
+    },
+    {
+      provide: PROCESS_BATTLE_DEADLINES,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        book: BattleDeadlineBookPort,
+        lock: RoomCommandLockPort,
+        settler: BattleDeadlineSettler,
+      ): ProcessBattleDeadlines => new ProcessBattleDeadlines(rooms, book, lock, settler),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        BATTLE_DEADLINE_BOOK,
+        ROOM_COMMAND_LOCK,
+        BATTLE_DEADLINE_SETTLER,
+      ],
+    },
+    {
+      provide: RECOVER_BATTLE_DEADLINES,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        presence: BattlePresencePort,
+        book: BattleDeadlineBookPort,
+        clock: ClockPort,
+      ): RecoverBattleDeadlines => new RecoverBattleDeadlines(rooms, presence, book, clock),
+      inject: [BATTLE_ROOM_REPOSITORY, BATTLE_PRESENCE, BATTLE_DEADLINE_BOOK, CLOCK],
+    },
+    {
+      provide: BATTLE_DEADLINE_SCHEDULER_OPTIONS,
+      useValue: DEFAULT_BATTLE_DEADLINE_SCHEDULER_OPTIONS,
+    },
+    {
+      provide: IntervalBattleDeadlineScheduler,
+      useFactory: (
+        book: BattleDeadlineBookPort,
+        process: ProcessBattleDeadlines,
+        recover: RecoverBattleDeadlines,
+        clock: ClockPort,
+        logger: Logger,
+        options: typeof DEFAULT_BATTLE_DEADLINE_SCHEDULER_OPTIONS,
+      ): IntervalBattleDeadlineScheduler =>
+        new IntervalBattleDeadlineScheduler(book, process, recover, clock, logger, options),
+      inject: [
+        BATTLE_DEADLINE_BOOK,
+        PROCESS_BATTLE_DEADLINES,
+        RECOVER_BATTLE_DEADLINES,
+        CLOCK,
+        LOGGER,
+        BATTLE_DEADLINE_SCHEDULER_OPTIONS,
+      ],
+    },
     {
       provide: START_BATTLE,
       useFactory: (
@@ -531,13 +685,29 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         equippedHeroes: PlayerInventoryEquippedHeroPort,
         random: BoundedRandom,
         publisher: BattleEventPublisherPort,
-      ): StartBattle => new StartBattle(rooms, clock, equippedHeroes, random, publisher),
+        presence: BattlePresencePort,
+        book: BattleDeadlineBookPort,
+        connections: BattleConnectionsPort,
+      ): StartBattle =>
+        new StartBattle(
+          rooms,
+          clock,
+          equippedHeroes,
+          random,
+          publisher,
+          presence,
+          book,
+          connections,
+        ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
         PLAYER_INVENTORY_EQUIPPED_HERO,
         BATTLE_RANDOM,
         BATTLE_EVENT_PUBLISHER,
+        BATTLE_PRESENCE,
+        BATTLE_DEADLINE_BOOK,
+        BATTLE_CONNECTIONS,
       ],
     },
     // Sin ruta publica: lo invocaran las acciones validas de HU-18/HU-19 al
@@ -565,14 +735,24 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         clock: ClockPort,
         sequence: RandomSequencePort,
         lock: RoomCommandLockPort,
-      ): ExecuteBasicAttack => new ExecuteBasicAttack(rooms, clock, sequence, lock),
-      inject: [BATTLE_ROOM_REPOSITORY, CLOCK, BATTLE_RANDOM_SEQUENCE, ROOM_COMMAND_LOCK],
+        settler: BattleDeadlineSettler,
+      ): ExecuteBasicAttack => new ExecuteBasicAttack(rooms, clock, sequence, lock, settler),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        CLOCK,
+        BATTLE_RANDOM_SEQUENCE,
+        ROOM_COMMAND_LOCK,
+        BATTLE_DEADLINE_SETTLER,
+      ],
     },
     {
       provide: BasicAttackRealtimeHandler,
-      useFactory: (attack: ExecuteBasicAttack, logger: Logger): BasicAttackRealtimeHandler =>
-        new BasicAttackRealtimeHandler(attack, logger),
-      inject: [EXECUTE_BASIC_ATTACK, LOGGER],
+      useFactory: (
+        attack: ExecuteBasicAttack,
+        finalizer: BattleFinalizer,
+        logger: Logger,
+      ): BasicAttackRealtimeHandler => new BasicAttackRealtimeHandler(attack, logger, finalizer),
+      inject: [EXECUTE_BASIC_ATTACK, BATTLE_FINALIZER, LOGGER],
     },
     // HU-19 (RF-19): habilidad especial por el mismo WebSocket (`useSkill`). Comparte el bloqueo
     // de sala y la secuencia HU-24 con el ataque basico, y lo reutiliza (mismo bloqueo, sin pedirlo
@@ -585,20 +765,25 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         sequence: RandomSequencePort,
         lock: RoomCommandLockPort,
         basicAttack: ExecuteBasicAttack,
-      ): UseSkill => new UseSkill(rooms, clock, sequence, lock, basicAttack),
+        settler: BattleDeadlineSettler,
+      ): UseSkill => new UseSkill(rooms, clock, sequence, lock, basicAttack, settler),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
         BATTLE_RANDOM_SEQUENCE,
         ROOM_COMMAND_LOCK,
         EXECUTE_BASIC_ATTACK,
+        BATTLE_DEADLINE_SETTLER,
       ],
     },
     {
       provide: SkillRealtimeHandler,
-      useFactory: (skill: UseSkill, logger: Logger): SkillRealtimeHandler =>
-        new SkillRealtimeHandler(skill, logger),
-      inject: [USE_SKILL, LOGGER],
+      useFactory: (
+        skill: UseSkill,
+        logger: Logger,
+        finalizer: BattleFinalizer,
+      ): SkillRealtimeHandler => new SkillRealtimeHandler(skill, logger, finalizer),
+      inject: [USE_SKILL, LOGGER, BATTLE_FINALIZER],
     },
     {
       provide: READINESS_CHECKS,
