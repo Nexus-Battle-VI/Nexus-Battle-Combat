@@ -4,6 +4,7 @@ import type {
   BattleEvent,
   BattleFinishedPayload,
   DegradedFrom,
+  HealSkillUsedPayload,
   SkillUsedPayload,
   TurnTimedOutPayload,
 } from '../../domain/entities/BattleEvent'
@@ -64,6 +65,28 @@ export type BattleEventWire =
       readonly cooldown: SkillUsedPayload['cooldown']
       readonly bonus: SkillUsedPayload['bonus']
       readonly resolution: BasicAttackResolution
+      readonly targetHealth: { readonly before: number; readonly after: number }
+      readonly battle: BattleView
+    }
+  | {
+      /**
+       * Excepcion de curacion de HU-12 (Tabla 7, sin Task de Management): una
+       * habilidad de curacion ejecutada, con Vida, Poder, recargas y turno YA
+       * actualizados en `battle`. Sin `resolution` ni `bonus`: curar no resuelve
+       * un golpe.
+       */
+      readonly type: 'healSkillUsed'
+      readonly seq: number
+      readonly roomId: string
+      readonly occurredAt: string
+      readonly commandId: string
+      readonly completedPosition: number
+      readonly actor: HealSkillUsedPayload['actor']
+      readonly target: HealSkillUsedPayload['target']
+      readonly skill: HealSkillUsedPayload['skill']
+      readonly power: HealSkillUsedPayload['power']
+      readonly cooldown: HealSkillUsedPayload['cooldown']
+      readonly heal: HealSkillUsedPayload['heal']
       readonly targetHealth: { readonly before: number; readonly after: number }
       readonly battle: BattleView
     }
@@ -138,6 +161,27 @@ export const toBattleEventWire = (roomId: string, event: BattleEvent): BattleEve
       resolution: skill.resolution,
       targetHealth: skill.targetHealth,
       battle: skill.battle,
+    }
+  }
+
+  if (event.type === 'healSkillUsed') {
+    const heal = event.payload as HealSkillUsedPayload
+
+    return {
+      type: 'healSkillUsed',
+      seq: event.seq,
+      roomId,
+      occurredAt,
+      commandId: heal.commandId,
+      completedPosition: heal.completedPosition,
+      actor: heal.actor,
+      target: heal.target,
+      skill: heal.skill,
+      power: heal.power,
+      cooldown: heal.cooldown,
+      heal: heal.heal,
+      targetHealth: heal.targetHealth,
+      battle: heal.battle,
     }
   }
 
