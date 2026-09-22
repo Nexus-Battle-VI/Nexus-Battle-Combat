@@ -1,10 +1,11 @@
 import type { BattleEvent } from '../../domain/entities/BattleEvent'
-import type { SkillOutcome, SkillReadyPlan } from '../../domain/entities/BattleRoom'
+import type { BattleRoom, SkillOutcome, SkillReadyPlan } from '../../domain/entities/BattleRoom'
 import type { CombatantKey } from '../../domain/entities/Combatant'
 import { UnsupportedCombatProfileError } from '../../domain/errors/BattleErrors'
 import { DomainError } from '../../domain/errors/DomainError'
 import { dieFaceFromIndex } from '../../domain/policies/AttackProfile'
 import type { SkillDice } from '../../domain/policies/SkillEffectPolicy'
+import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import {
   RoomAccessForbiddenError,
   RoomConflictError,
@@ -14,6 +15,7 @@ import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort
 import type { ClockPort } from '../ports/ClockPort'
 import type { RandomSequencePort } from '../ports/RandomSequencePort'
 import type { RoomCommandLockPort } from '../ports/RoomCommandLockPort'
+import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
 import type { ExecuteBasicAttack } from './ExecuteBasicAttack'
 import { prepareAttack, type AttackParticipant } from './PrepareAttack'
 import { ResolveAttack } from './ResolveAttack'
@@ -39,6 +41,10 @@ export interface UseSkillResult {
    * persistido y el llamador (el gateway, que ES el publicador) lo difunde.
    */
   readonly replayed: boolean
+  /** HU-21: eventos guardados despues del de la accion (p. ej. `[battleFinished]`). */
+  readonly followUp: readonly BattleEvent[]
+  /** HU-21: la sala persistida si y solo si quedo `FINISHED`; `null` si no. */
+  readonly finished: BattleRoom | null
 }
 
 /**
@@ -86,6 +92,8 @@ export class UseSkill {
     private readonly sequence: RandomSequencePort,
     private readonly lock: RoomCommandLockPort,
     private readonly basicAttack: ExecuteBasicAttack,
+    /** HU-21: liquidacion perezosa de vencimientos antes de validar (contrato §3). */
+    private readonly settler: BattleDeadlineSettler | null = null,
     private readonly resolveAttack: ResolveAttack = new ResolveAttack(),
   ) {}
 
@@ -94,7 +102,7 @@ export class UseSkill {
   }
 
   private async executeExclusively(input: UseSkillInput): Promise<UseSkillResult> {
-    const room = await this.rooms.findById(input.roomId)
+    let room = await this.rooms.findById(input.roomId)
 
     if (room === null) {
       throw new RoomNotFoundError(input.roomId)
@@ -104,10 +112,16 @@ export class UseSkill {
       throw new RoomAccessForbiddenError(input.roomId)
     }
 
+    // HU-21 (mismo criterio que `attack`): liquidar antes de validar; un
+    // `commandId` ya procesado NO liquida, devuelve su resultado tal cual.
+    if (this.settler !== null && !room.hasHandledCommand(input.commandId)) {
+      room = await this.settler.settle(room)
+    }
+
     const plan = room.planSkill(input.requesterId, input.commandId, input.abilityId, input.target)
 
     if (plan.kind === 'replay') {
-      return { event: plan.event, replayed: true }
+      return { event: plan.event, replayed: true, followUp: [], finished: null }
     }
 
     if (plan.kind === 'degraded') {
@@ -142,7 +156,12 @@ export class UseSkill {
         throw new DomainError('La habilidad se guardo sin su evento.')
       }
 
-      return { event, replayed: false }
+      return {
+        event,
+        replayed: false,
+        followUp: saved.events.filter((candidate) => candidate.seq > actionSeq),
+        finished: saved.status === BattleRoomStatus.Finished ? saved : null,
+      }
     } catch (error: unknown) {
       if (error instanceof RoomConflictError) {
         return this.resolveConflict(input, error)
@@ -268,7 +287,8 @@ export class UseSkill {
       throw conflict
     }
 
-    return { event, replayed: true }
+    // Un reintento idempotente no liquida ni finaliza nada.
+    return { event, replayed: true, followUp: [], finished: null }
   }
 }
 

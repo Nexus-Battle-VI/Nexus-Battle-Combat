@@ -24,6 +24,9 @@ import {
 import { PrecombatEligibilityBlockedError } from '../errors/PrecombatEligibilityError'
 import { PlayerWithoutEquippedHeroError, UpstreamServiceError } from '../errors/UpstreamErrors'
 import type { BattleEventPublisherPort } from '../ports/BattleEventPublisherPort'
+import type { BattleConnectionsPort } from '../ports/BattleConnectionsPort'
+import type { BattleDeadlineBookPort } from '../ports/BattleDeadlineBookPort'
+import type { BattlePresencePort } from '../ports/BattlePresencePort'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../ports/ClockPort'
 import type {
@@ -73,6 +76,14 @@ export class StartBattle {
     private readonly equippedHeroes: PlayerInventoryEquippedHeroPort,
     private readonly random: BoundedRandom,
     private readonly publisher: BattleEventPublisherPort,
+    /**
+     * HU-21: presencia y libro de vencimientos. Opcionales para no romper las
+     * construcciones que no necesitan sembrar la gracia; en produccion se
+     * inyectan los tres juntos.
+     */
+    private readonly presence: BattlePresencePort | null = null,
+    private readonly book: BattleDeadlineBookPort | null = null,
+    private readonly connections: BattleConnectionsPort | null = null,
   ) {}
 
   async execute(roomId: string, requesterId: string): Promise<BattleRoomDto> {
@@ -118,8 +129,44 @@ export class StartBattle {
     }
 
     this.publish(saved.id, saved.events)
+    this.seedPresence(saved)
 
     return toBattleRoomDto(saved)
+  }
+
+  /**
+   * HU-21 (contrato §4.2, "semilla de presencia"): quien no tiene una conexion
+   * de batalla EN ESTE INSTANTE empieza su gracia de 30 s en `startedAt`. El
+   * puerto de presencia no conoce conexiones; quien las conoce es el gateway
+   * (`BattleConnectionsPort`, solo lectura), y el gateway no depende de este
+   * caso de uso, asi que no hay ciclo.
+   *
+   * Despues de sembrar, la sala queda registrada en el libro de vencimientos con
+   * el mas inminente (incluidas las gracias recien abiertas).
+   */
+  private seedPresence(saved: BattleRoom): void {
+    const presence = this.presence
+    const battle = saved.battle
+
+    if (presence === null || battle === null) {
+      return
+    }
+
+    for (const entry of battle.turnOrder) {
+      if (entry.kind !== ParticipantKind.Human || entry.playerId === null) {
+        continue
+      }
+
+      if (!(this.connections?.isConnected(saved.id, entry.playerId) ?? false)) {
+        presence.markAbsent(saved.id, entry.playerId, battle.startedAt)
+      }
+    }
+
+    const due = saved.nextDueAt(presence.absences(saved.id))
+
+    if (due !== null) {
+      this.book?.ensureDueBy(saved.id, due)
+    }
   }
 
   /**

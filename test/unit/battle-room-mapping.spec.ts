@@ -154,7 +154,11 @@ describe('battle-room-mapping (HU-21, migracion 009, aditivo y retrocompatible)'
       throw new Error('La sala de prueba necesita batalla.')
     }
 
-    const { turnStartedAt: _omitted, ...legacyBattle } = battle
+    // Documento anterior a HU-21: sin `turnStartedAt`.
+    const legacyBattle = { ...battle }
+
+    delete (legacyBattle as { turnStartedAt?: Date }).turnStartedAt
+
     const legacy: BattleRoomDocument = {
       ...toDocument(snapshot),
       status: 'IN_BATTLE',

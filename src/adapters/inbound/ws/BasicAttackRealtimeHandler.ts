@@ -5,6 +5,7 @@ import {
   RoomNotFoundError,
 } from '../../../application/errors/ApplicationError'
 import type { ExecuteBasicAttack } from '../../../application/use-cases/ExecuteBasicAttack'
+import type { BattleFinalizer } from '../../../application/services/BattleFinalizer'
 import {
   ActorUnavailableError,
   BattleNotInProgressError,
@@ -110,6 +111,11 @@ export class BasicAttackRealtimeHandler {
   constructor(
     private readonly attack: ExecuteBasicAttack,
     private readonly logger: Logger,
+    /**
+     * HU-21: efectos de la finalizacion, SIEMPRE despues de difundir (contrato
+     * §8). Opcional para las construcciones de pruebas que no finalizan.
+     */
+    private readonly finalizer: BattleFinalizer | null = null,
   ) {}
 
   async handle(
@@ -153,14 +159,20 @@ export class BasicAttackRealtimeHandler {
       }
 
       // Persistido: ahora si se difunde. Un fallo aqui no revierte nada (el estado ya
-      // existe y `resume` lo recupera).
+      // existe y `resume` lo recupera). HU-21: se difunde PRIMERO la accion y despues
+      // `battleFinished` (mismos bytes, `seq` consecutivos) y SOLO DESPUES se liberan
+      // los recursos: si se liberara antes, las conexiones dejarian de recibir el final.
       try {
-        publish(command.roomId, [result.event])
+        publish(command.roomId, [result.event, ...result.followUp])
       } catch {
         this.logger.error('realtime_attack_difusion_fallo', {
           roomId: command.roomId,
           commandId: command.commandId,
         })
+      }
+
+      if (result.finished !== null) {
+        this.finalizer?.afterFinished(result.finished)
       }
     } catch (error: unknown) {
       this.reject(client, this.codeFor(error, command), command.commandId)

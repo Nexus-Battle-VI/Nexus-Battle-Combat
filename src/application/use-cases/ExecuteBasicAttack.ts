@@ -1,9 +1,10 @@
 import type { BattleEvent, DegradedFrom } from '../../domain/entities/BattleEvent'
-import type { BasicAttackOutcome, BasicAttackReadyPlan } from '../../domain/entities/BattleRoom'
+import type { BattleRoom, BasicAttackOutcome, BasicAttackReadyPlan } from '../../domain/entities/BattleRoom'
 import type { CombatantKey } from '../../domain/entities/Combatant'
 import { UnsupportedCombatProfileError } from '../../domain/errors/BattleErrors'
 import { DomainError } from '../../domain/errors/DomainError'
 import { dieFaceFromIndex } from '../../domain/policies/AttackProfile'
+import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import {
   RoomAccessForbiddenError,
   RoomConflictError,
@@ -13,6 +14,7 @@ import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort
 import type { ClockPort } from '../ports/ClockPort'
 import type { RandomSequencePort } from '../ports/RandomSequencePort'
 import type { RoomCommandLockPort } from '../ports/RoomCommandLockPort'
+import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
 import { prepareAttack, type AttackParticipant } from './PrepareAttack'
 import { ResolveAttack } from './ResolveAttack'
 
@@ -33,7 +35,7 @@ export interface ExecuteBasicAttackInput {
 }
 
 export interface ExecuteBasicAttackResult {
-  /** El evento persistido del ataque. */
+  /** El evento persistido de la accion (`basicAttackResolved`). */
   readonly event: BattleEvent
   /**
    * `true` si el `commandId` ya se habia procesado: no se sorteo, no se guardo y NO se
@@ -41,6 +43,18 @@ export interface ExecuteBasicAttackResult {
    * persistido y el llamador (el gateway, que ES el publicador) lo difunde.
    */
   readonly replayed: boolean
+  /**
+   * HU-21: eventos guardados DESPUES del de la accion en esa misma escritura.
+   * Normalmente `[]`; con un golpe letal trae `[battleFinished]`. El llamador
+   * debe difundirlos en orden TRAS el evento de la accion y ANTES de liberar.
+   */
+  readonly followUp: readonly BattleEvent[]
+  /**
+   * HU-21: la sala persistida SI y SOLO SI quedo `FINISHED`; `null` en cualquier
+   * otro caso. El llamador decide con esto si invoca al `BattleFinalizer`
+   * (siempre despues de difundir).
+   */
+  readonly finished: BattleRoom | null
 }
 
 /**
@@ -88,6 +102,12 @@ export class ExecuteBasicAttack {
     private readonly clock: ClockPort,
     private readonly sequence: RandomSequencePort,
     private readonly lock: RoomCommandLockPort,
+    /**
+     * HU-21: liquidacion perezosa de los vencimientos de la sala antes de validar
+     * (contrato §3). Opcional para no romper construcciones de pruebas que no
+     * necesitan vencimientos; en produccion SIEMPRE se inyecta.
+     */
+    private readonly settler: BattleDeadlineSettler | null = null,
     private readonly resolveAttack: ResolveAttack = new ResolveAttack(),
   ) {}
 
@@ -102,7 +122,7 @@ export class ExecuteBasicAttack {
    * llamarlo fuera de un `lock.run`.
    */
   async executeExclusively(input: ExecuteBasicAttackInput): Promise<ExecuteBasicAttackResult> {
-    const room = await this.rooms.findById(input.roomId)
+    let room = await this.rooms.findById(input.roomId)
 
     if (room === null) {
       throw new RoomNotFoundError(input.roomId)
@@ -112,10 +132,19 @@ export class ExecuteBasicAttack {
       throw new RoomAccessForbiddenError(input.roomId)
     }
 
+    // HU-21 (contrato §3): todo comando de combate liquida ANTES de validar, para
+    // que un golpe que llega tras el vencimiento del turno (o de la batalla) no se
+    // ejecute nunca sobre un turno o una batalla vencidos. NO se liquida antes de
+    // un reintento idempotente: un `commandId` ya procesado devuelve su evento
+    // aunque despues haya vencido algo.
+    if (this.settler !== null && !room.hasHandledCommand(input.commandId)) {
+      room = await this.settler.settle(room)
+    }
+
     const plan = room.planBasicAttack(input.requesterId, input.commandId, input.target)
 
     if (plan.kind === 'replay') {
-      return { event: plan.event, replayed: true }
+      return { event: plan.event, replayed: true, followUp: [], finished: null }
     }
 
     // A partir de aqui se consume la secuencia: todo lo que puede fallar por el perfil
@@ -142,7 +171,12 @@ export class ExecuteBasicAttack {
         throw new DomainError('El ataque se guardo sin su evento.')
       }
 
-      return { event, replayed: false }
+      return {
+        event,
+        replayed: false,
+        followUp: saved.events.filter((candidate) => candidate.seq > actionSeq),
+        finished: saved.status === BattleRoomStatus.Finished ? saved : null,
+      }
     } catch (error: unknown) {
       if (error instanceof RoomConflictError) {
         return this.resolveConflict(input, error)
@@ -247,7 +281,9 @@ export class ExecuteBasicAttack {
       throw conflict
     }
 
-    return { event, replayed: true }
+    // Un reintento idempotente no liquida ni finaliza nada: la escritura que gano
+    // ya hizo lo que tocaba.
+    return { event, replayed: true, followUp: [], finished: null }
   }
 }
 

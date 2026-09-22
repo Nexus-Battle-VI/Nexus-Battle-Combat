@@ -5,6 +5,7 @@ import {
   RoomNotFoundError,
 } from '../../../application/errors/ApplicationError'
 import type { UseSkill } from '../../../application/use-cases/UseSkill'
+import type { BattleFinalizer } from '../../../application/services/BattleFinalizer'
 import {
   ActorUnavailableError,
   BattleNotInProgressError,
@@ -120,6 +121,8 @@ export class SkillRealtimeHandler {
   constructor(
     private readonly skill: UseSkill,
     private readonly logger: Logger,
+    /** HU-21: efectos de la finalizacion, SIEMPRE despues de difundir. */
+    private readonly finalizer: BattleFinalizer | null = null,
   ) {}
 
   async handle(
@@ -164,14 +167,19 @@ export class SkillRealtimeHandler {
       }
 
       // Persistido: ahora si se difunde. Un fallo aqui no revierte nada (el estado ya existe y
-      // `resume` lo recupera).
+      // `resume` lo recupera). HU-21: PRIMERO la accion (y `battleFinished` si lo hay) y
+      // DESPUES los efectos de liberacion.
       try {
-        publish(command.roomId, [result.event])
+        publish(command.roomId, [result.event, ...result.followUp])
       } catch {
         this.logger.error('realtime_habilidad_difusion_fallo', {
           roomId: command.roomId,
           commandId: command.commandId,
         })
+      }
+
+      if (result.finished !== null) {
+        this.finalizer?.afterFinished(result.finished)
       }
     } catch (error: unknown) {
       this.reject(client, this.codeFor(error, command), command.commandId)
