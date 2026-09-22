@@ -25,6 +25,10 @@ import {
   type TokenVerifierPort,
   type VerifiedIdentity,
 } from '../../src/application/ports/TokenVerifierPort'
+import {
+  BATTLE_ROOM_REPOSITORY,
+  type BattleRoomRepositoryPort,
+} from '../../src/application/ports/BattleRoomRepositoryPort'
 import { AppModule } from '../../src/infrastructure/bootstrap/app.module'
 
 /**
@@ -831,6 +835,92 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       )
 
       expect(response.status).toBe(409)
+    })
+  })
+
+  describe('sala FINISHED (HU-21): el lobby ya no admite nada', () => {
+    /**
+     * Crea una sala 1v1, la inicia por HTTP y la cierra por vencimiento global
+     * escribiendo por el repositorio real del modulo. Devuelve su id.
+     */
+    const finishedRoom = async (): Promise<string> => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(validRoom()),
+      )
+      const roomId = String(created.body.id)
+
+      await authed('token-creador')(
+        request(app.getHttpServer())
+          .post(`/api/v1/combat/rooms/${roomId}/join`)
+          .send({ team: 'A' }),
+      )
+      await authed('token-otro')(
+        request(app.getHttpServer())
+          .post(`/api/v1/combat/rooms/${roomId}/join`)
+          .send({ team: 'B' }),
+      )
+
+      const started = await authed('token-creador')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/start`),
+      )
+
+      expect(started.status).toBe(200)
+      expect(started.body.status).toBe('IN_BATTLE')
+
+      const repo = app.get<BattleRoomRepositoryPort>(BATTLE_ROOM_REPOSITORY)
+      const room = await repo.findById(roomId)
+
+      if (room === null) {
+        throw new Error('la sala debia existir')
+      }
+
+      await repo.save(room.finish({ reason: 'TIME_LIMIT' }, new Date()), room.version)
+
+      return roomId
+    }
+
+    it('join responde 409 (la sala ya no admite ingresos)', async () => {
+      const roomId = await finishedRoom()
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer())
+          .post(`/api/v1/combat/rooms/${roomId}/join`)
+          .send({ team: 'A' }),
+      )
+
+      expect(response.status).toBe(409)
+    })
+
+    it('leave responde 409', async () => {
+      const roomId = await finishedRoom()
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/leave`),
+      )
+
+      expect(response.status).toBe(409)
+    })
+
+    it('cancel responde 409', async () => {
+      const roomId = await finishedRoom()
+
+      const response = await authed('token-creador')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/cancel`),
+      )
+
+      expect(response.status).toBe(409)
+    })
+
+    it('GET sigue devolviendo la sala con su resultado a los participantes', async () => {
+      const roomId = await finishedRoom()
+
+      const response = await authed('token-otro')(
+        request(app.getHttpServer()).get(`/api/v1/combat/rooms/${roomId}`),
+      )
+
+      expect(response.status).toBe(200)
+      expect(response.body.status).toBe('FINISHED')
+      expect(response.body.result).toMatchObject({ reason: 'TIME_LIMIT', outcome: 'NO_WINNER' })
     })
   })
 })
