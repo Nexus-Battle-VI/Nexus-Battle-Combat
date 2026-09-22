@@ -5,7 +5,10 @@ import {
   toSnapshot,
   type BattleRoomDocument,
 } from '../../src/adapters/outbound/persistence/battle-room-mapping'
-import type { BattleRoomSnapshot } from '../../src/domain/entities/BattleRoom'
+import { BattleRoom, type BattleRoomSnapshot } from '../../src/domain/entities/BattleRoom'
+import { DomainError } from '../../src/domain/errors/DomainError'
+import { NOW } from '../fixtures/battle'
+import { battleWithCombat } from '../fixtures/basic-attack'
 
 /**
  * Mapeo puro Mongo <-> instantanea de dominio (HU-14/HU-15.2). Cubre
@@ -114,5 +117,67 @@ describe('battle-room-mapping (HU-15.2, migracion 003, retrocompatibilidad)', ()
     const roundTripped = toSnapshot(document)
 
     expect(roundTripped.teams[0].participants[0]).toMatchObject({ displayName: 'Nombre Visible' })
+  })
+})
+
+describe('battle-room-mapping (HU-21, migracion 009, aditivo y retrocompatible)', () => {
+  const AT = new Date('2026-09-21T10:05:00.000Z')
+  const finished = (): BattleRoom =>
+    battleWithCombat({ health: { 'B#0': 0 } }).finish(
+      { reason: 'ELIMINATION', winnerTeamLabel: 'A' },
+      AT,
+    )
+
+  it('ida y vuelta de una sala FINISHED: el `result` y `turnStartedAt` sobreviven al documento', () => {
+    const room = finished()
+    const document = toDocument(room.toSnapshot())
+
+    expect(document.result).toMatchObject({ reason: 'ELIMINATION', winnerTeamLabel: 'A' })
+    expect(document.battle?.turnStartedAt).toEqual(NOW)
+
+    const roundTripped = toSnapshot(document)
+
+    expect(roundTripped.result).toEqual(room.result)
+    expect(roundTripped.battle?.turnStartedAt).toEqual(room.battle?.turnStartedAt)
+
+    const restored = BattleRoom.restore(roundTripped)
+
+    expect(restored.status).toBe('FINISHED')
+    expect(restored.result).toEqual(room.result)
+  })
+
+  it('un documento anterior a HU-21 (sin `result` ni `turnStartedAt`) se restaura sin lanzar', () => {
+    const snapshot = battleWithCombat().toSnapshot()
+    const battle = snapshot.battle
+
+    if (battle === null) {
+      throw new Error('La sala de prueba necesita batalla.')
+    }
+
+    // Documento anterior a HU-21: sin `turnStartedAt`.
+    const legacyBattle = { ...battle }
+
+    delete (legacyBattle as { turnStartedAt?: Date }).turnStartedAt
+
+    const legacy: BattleRoomDocument = {
+      ...toDocument(snapshot),
+      status: 'IN_BATTLE',
+      battle: legacyBattle,
+    }
+    delete (legacy as { result?: unknown }).result
+
+    const roundTripped = toSnapshot(legacy)
+
+    expect(roundTripped.result).toBeNull()
+    expect(roundTripped.battle?.turnStartedAt).toEqual(snapshot.battle?.startedAt)
+    expect(BattleRoom.restore(roundTripped).status).toBe('IN_BATTLE')
+  })
+
+  it('rechaza un `result` incoherente guardado en el documento', () => {
+    const document = toDocument(finished().toSnapshot())
+
+    expect(() =>
+      toSnapshot({ ...document, result: { ...document.result, reason: 'SURRENDER' } }),
+    ).toThrow(DomainError)
   })
 })

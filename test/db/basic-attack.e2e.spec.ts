@@ -932,9 +932,15 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
           heroSubtype: 'GUERRERO_ARMAS',
         })),
       )
+      // HU-21: la batalla LEGACY se inserta con instantes FRESCOS a proposito. Con
+      // un `startedAt` viejo la liquidacion perezosa de HU-21 la cerraria o
+      // avanzaria el turno antes de validar, y esta prueba mide otra cosa: que
+      // una batalla SIN snapshot de combate no admite ataque. Fresca, el
+      // vencimiento no interviene y el rechazo vuelve a ser el del perfil.
+      const startedAt = new Date()
       const view = {
         battleId: roomId,
-        startedAt: new Date('2026-09-20T10:00:00.000Z').toISOString(),
+        startedAt: startedAt.toISOString(),
         turnOrder: turnOrder.map((entry: any, position: number) => ({ position, ...entry })),
         turnsCompleted: 0,
         round: 1,
@@ -948,7 +954,7 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
           $set: {
             status: 'IN_BATTLE',
             battle: {
-              startedAt: new Date('2026-09-20T10:00:00.000Z'),
+              startedAt,
               turnOrder,
               turnsCompleted: 0,
             },
@@ -956,7 +962,7 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
               {
                 seq: 1,
                 type: 'battleStarted',
-                occurredAt: new Date('2026-09-20T10:00:00.000Z'),
+                occurredAt: startedAt,
                 payload: { battle: view },
               },
             ],

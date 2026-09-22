@@ -2,9 +2,12 @@ import type {
   BasicAttackResolution,
   BasicAttackResolvedPayload,
   BattleEvent,
+  BattleFinishedPayload,
   DegradedFrom,
   SkillUsedPayload,
+  TurnTimedOutPayload,
 } from '../../domain/entities/BattleEvent'
+import type { BattleResult } from '../../domain/entities/BattleResult'
 import type { BattleView } from '../../domain/entities/BattleState'
 import type { CombatantKey } from '../../domain/entities/Combatant'
 
@@ -64,6 +67,25 @@ export type BattleEventWire =
       readonly targetHealth: { readonly before: number; readonly after: number }
       readonly battle: BattleView
     }
+  | {
+      /** HU-21: el turno vigente vencio sin accion y el avance salto al siguiente con Vida. */
+      readonly type: 'turnTimedOut'
+      readonly seq: number
+      readonly roomId: string
+      readonly occurredAt: string
+      readonly completedPosition: number
+      readonly timedOut: CombatantKey
+      readonly battle: BattleView
+    }
+  | {
+      /** HU-21: la batalla termino; la vista es la FINAL (sin `deadlines`). */
+      readonly type: 'battleFinished'
+      readonly seq: number
+      readonly roomId: string
+      readonly occurredAt: string
+      readonly result: BattleResult
+      readonly battle: BattleView
+    }
 
 export const toBattleEventWire = (roomId: string, event: BattleEvent): BattleEventWire => {
   const occurredAt = event.occurredAt.toISOString()
@@ -119,6 +141,33 @@ export const toBattleEventWire = (roomId: string, event: BattleEvent): BattleEve
     }
   }
 
+  if (event.type === 'turnTimedOut') {
+    const timeout = event.payload as TurnTimedOutPayload
+
+    return {
+      type: 'turnTimedOut',
+      seq: event.seq,
+      roomId,
+      occurredAt,
+      completedPosition: timeout.completedPosition,
+      timedOut: timeout.timedOut,
+      battle: timeout.battle,
+    }
+  }
+
+  if (event.type === 'battleFinished') {
+    const finished = event.payload as BattleFinishedPayload
+
+    return {
+      type: 'battleFinished',
+      seq: event.seq,
+      roomId,
+      occurredAt,
+      result: finished.result,
+      battle: finished.battle,
+    }
+  }
+
   const payload = event.payload as { completedPosition: number; battle: BattleView }
 
   return {
@@ -138,4 +187,6 @@ export interface BattleSnapshotWire {
   readonly seq: number
   readonly status: string
   readonly battle: BattleView | null
+  /** HU-21: el resultado unico si la sala esta `FINISHED`; `null` en otro caso. */
+  readonly result: BattleResult | null
 }

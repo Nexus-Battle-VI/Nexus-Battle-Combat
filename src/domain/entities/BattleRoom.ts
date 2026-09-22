@@ -41,6 +41,27 @@ import { BattleMode, parseBattleMode } from '../value-objects/BattleMode'
 import { BattleRoomStatus, parseBattleRoomStatus } from '../value-objects/BattleRoomStatus'
 import { RewardConfig, type RewardConfigSnapshot } from '../value-objects/RewardConfig'
 import {
+  findEliminatedTeam,
+  lifePercentForDisplay,
+  resolveTimeLimit,
+  teamLives,
+  type TeamLife,
+} from '../policies/BattleOutcomePolicy'
+import {
+  battleDeadline,
+  graceDeadline,
+  hasReached,
+  turnDeadline,
+} from '../policies/BattleTimingPolicy'
+import {
+  ParticipantResultKind as ParticipantResults,
+  type BattleOutcome,
+  type BattleResult,
+  type ParticipantOutcome,
+  type TeamStanding,
+  type TiebreakRule,
+} from './BattleResult'
+import {
   createParticipant,
   ParticipantKind,
   type Participant,
@@ -163,27 +184,45 @@ export interface BattleRoomSnapshot {
   readonly events: readonly BattleEvent[]
   /** HU-17: comandos ya procesados, para deduplicar por `commandId`. */
   readonly handledCommands: readonly HandledCommand[]
+  /**
+   * HU-21: resultado unico de la batalla. `null` mientras esta en curso; no nulo
+   * si y solo si la sala esta `FINISHED` (invariante de la migracion `009`).
+   */
+  readonly result: BattleResult | null
 }
 
 /**
  * Lo que `restore()` acepta: los campos de HU-17 son opcionales para que los
  * documentos y las instantaneas anteriores a la batalla sigan restaurandose
  * sin migracion de datos (ausente = sin batalla, sin eventos, sin comandos).
+ * `result` es opcional por el mismo motivo: un documento anterior a HU-21 no lo
+ * tiene y se restaura como `null`.
  */
 export type RestorableBattleRoomSnapshot = Omit<
   BattleRoomSnapshot,
-  'battle' | 'events' | 'handledCommands'
+  'battle' | 'events' | 'handledCommands' | 'result'
 > &
-  Partial<Pick<BattleRoomSnapshot, 'battle' | 'events' | 'handledCommands'>>
+  Partial<Pick<BattleRoomSnapshot, 'battle' | 'events' | 'handledCommands' | 'result'>>
 
 /** Estado de batalla que acompana a la sala; vacio hasta HU-17 `startBattle()`. */
 interface BattleExtras {
   readonly battle: BattleState | null
   readonly events: readonly BattleEvent[]
   readonly handledCommands: readonly HandledCommand[]
+  /** HU-21: opcional en los constructores internos; ausente equivale a `null`. */
+  readonly result?: BattleResult | null
 }
 
-const NO_BATTLE: BattleExtras = { battle: null, events: [], handledCommands: [] }
+const NO_BATTLE: BattleExtras = { battle: null, events: [], handledCommands: [], result: null }
+
+/**
+ * Causa con la que se finaliza una sala (HU-21, contrato §4). No es un estado:
+ * se traduce al campo `reason` del resultado.
+ */
+export type FinishCause =
+  | { readonly reason: 'ELIMINATION'; readonly winnerTeamLabel: string }
+  | { readonly reason: 'DISCONNECTION'; readonly disconnected: CombatantKey }
+  | { readonly reason: 'TIME_LIMIT' }
 
 /** Longitud maxima de un `commandId` (ADR-020). */
 const MAX_COMMAND_ID_LENGTH = 100
@@ -208,6 +247,8 @@ export class BattleRoom {
   readonly battle: BattleState | null
   readonly events: readonly BattleEvent[]
   readonly handledCommands: readonly HandledCommand[]
+  /** HU-21: resultado unico; `null` mientras la batalla no haya terminado. */
+  readonly result: BattleResult | null
   private readonly _version: number
 
   private constructor(
@@ -232,6 +273,7 @@ export class BattleRoom {
     this.battle = extras.battle
     this.events = extras.events
     this.handledCommands = extras.handledCommands
+    this.result = extras.result ?? null
   }
 
   /**
@@ -339,10 +381,22 @@ export class BattleRoom {
         : BattleState.restore(snapshot.battle)
     const events = snapshot.events ?? []
     const handledCommands = snapshot.handledCommands ?? []
+    const result = snapshot.result ?? null
 
-    if ((status === BattleRoomStatus.InBattle) !== (battle !== null)) {
+    // Invariantes de HU-21 (contrato §12): la batalla existe si y solo si la
+    // sala esta IN_BATTLE o FINISHED, y el resultado si y solo si esta FINISHED.
+    const battleAllowed =
+      status === BattleRoomStatus.InBattle || status === BattleRoomStatus.Finished
+
+    if (battleAllowed !== (battle !== null)) {
       throw new DomainError(
-        'Una sala IN_BATTLE necesita batalla y una batalla solo existe en una sala IN_BATTLE.',
+        'Una sala IN_BATTLE o FINISHED necesita batalla, y una batalla solo existe en una de esas dos salas.',
+      )
+    }
+
+    if ((status === BattleRoomStatus.Finished) !== (result !== null)) {
+      throw new DomainError(
+        'Una sala FINISHED necesita resultado, y un resultado solo existe en una sala FINISHED.',
       )
     }
 
@@ -357,7 +411,7 @@ export class BattleRoom {
       snapshot.createdBy.trim(),
       snapshot.createdAt,
       snapshot.version,
-      { battle, events, handledCommands },
+      { battle, events, handledCommands, result },
     )
   }
 
@@ -515,7 +569,12 @@ export class BattleRoom {
   leave(playerId: string): BattleRoom {
     // HU-17: con la batalla en curso la lista de participantes es definitiva
     // (RF-17): abandonar el lobby cambiaria el roster de una cola ya publicada.
-    if (this.status === BattleRoomStatus.Cancelled || this.status === BattleRoomStatus.InBattle) {
+    // HU-21: una sala FINISHED es terminal; tampoco admite `leave` (contrato §2).
+    if (
+      this.status === BattleRoomStatus.Cancelled ||
+      this.status === BattleRoomStatus.InBattle ||
+      this.status === BattleRoomStatus.Finished
+    ) {
       throw new RoomNotLeavableError(this.id, this.status)
     }
 
@@ -589,6 +648,7 @@ export class BattleRoom {
       battle: this.battle === null ? null : this.battle.toSnapshot(),
       events: this.events,
       handledCommands: this.handledCommands,
+      result: this.result,
     }
   }
 
@@ -597,9 +657,22 @@ export class BattleRoom {
     return this.events.length
   }
 
-  /** Vista de la batalla visible para los participantes, o `null` sin batalla. */
+  /**
+   * Vista de la batalla visible para los participantes, o `null` sin batalla.
+   * Una sala FINISHED devuelve la vista final SIN `deadlines` (contrato §6.2 y
+   * §6.3); una batalla en curso los incluye.
+   */
   battleView(): BattleView | null {
-    return this.battle === null ? null : this.battle.toView(this.id)
+    return this.battle === null
+      ? null
+      : this.battle.toView(this.id, {
+          withDeadlines: this.status !== BattleRoomStatus.Finished,
+        })
+  }
+
+  /** `true` si el `commandId` ya se proceso en esta sala (ADR-020). */
+  hasHandledCommand(commandId: string): boolean {
+    return this.handledCommands.some((handled) => handled.commandId === commandId)
   }
 
   /** Eventos con `seq` estrictamente mayor que `seq`, en orden. */
@@ -715,7 +788,7 @@ export class BattleRoom {
     }
 
     const completedPosition = this.battle.currentPosition
-    const battle = this.battle.completeTurn()
+    const battle = this.battle.completeTurn(at)
     const seq = this.lastSeq + 1
     const event: BattleEvent = {
       seq,
@@ -912,7 +985,7 @@ export class BattleRoom {
     const completedPosition = this.battle.currentPosition
     const battle = this.battle
       .withCombatant(plan.target.withHealth(applied.healthAfter))
-      .completeTurn()
+      .completeTurn(at)
     const seq = this.lastSeq + 1
     const event: BattleEvent = {
       seq,
@@ -939,7 +1012,7 @@ export class BattleRoom {
       },
     }
 
-    return new BattleRoom(
+    const next = new BattleRoom(
       this.id,
       this.mode,
       this.status,
@@ -954,6 +1027,11 @@ export class BattleRoom {
         handledCommands: [...this.handledCommands, { commandId, seq }],
       },
     )
+
+    // HU-21 (contrato §4.1): la eliminacion se evalua EN ESTA MISMA escritura,
+    // sobre la sala que ya trae el evento de la accion. Si un equipo quedo sin
+    // heroes, la sala vuelve FINISHED con `battleFinished` de `seq` contiguo.
+    return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
   }
 
   /**
@@ -1074,7 +1152,7 @@ export class BattleRoom {
     const battle = this.battle
       .withCombatant(actor)
       .withCombatant(plan.target.withHealth(applied.healthAfter))
-      .completeTurn()
+      .completeTurn(at)
     const seq = this.lastSeq + 1
     const event: BattleEvent = {
       seq,
@@ -1112,7 +1190,7 @@ export class BattleRoom {
       },
     }
 
-    return new BattleRoom(
+    const next = new BattleRoom(
       this.id,
       this.mode,
       this.status,
@@ -1127,6 +1205,312 @@ export class BattleRoom {
         handledCommands: [...this.handledCommands, { commandId, seq }],
       },
     )
+
+    // HU-21 (mismo criterio que `applyBasicAttack`): una habilidad tambien puede
+    // dejar a un equipo sin heroes, y lo hace en esta misma escritura.
+    return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
+  }
+
+  /**
+   * Finaliza la batalla (HU-21, contrato §4 y §7) y devuelve la sala FINISHED
+   * con el resultado unico, el Poder restaurado (HU-11) y el evento
+   * `battleFinished`. Es IDEMPOTENTE: sobre una sala ya FINISHED devuelve esta
+   * misma instancia, sin segundo resultado ni segundo evento. Desde cualquier
+   * otro estado distinto de IN_BATTLE lanza `BattleNotInProgressError`.
+   *
+   * Una sola escritura: estado, `result`, Poder, evento y version viajan juntos
+   * (la version la incrementa el repositorio al guardar, como hoy). La vista
+   * final NO lleva `deadlines` (contrato §6.2).
+   */
+  finish(cause: FinishCause, at: Date): BattleRoom {
+    if (this.status === BattleRoomStatus.Finished) {
+      return this
+    }
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const labels: readonly [string, string] = [this.teams[0].label, this.teams[1].label]
+    const lives = teamLives(this.battle.combatants, labels)
+    const outcome = this.resolveOutcome(cause, labels, lives)
+    const battle = this.battle.restoreAllPower()
+    const result: BattleResult = {
+      reason: cause.reason,
+      outcome: outcome.outcome,
+      winnerTeamLabel: outcome.winnerTeamLabel,
+      finishedAt: at.toISOString(),
+      tiebreak: outcome.tiebreak,
+      disconnected:
+        cause.reason === 'DISCONNECTION'
+          ? { teamLabel: cause.disconnected.teamLabel, seat: cause.disconnected.seat }
+          : null,
+      teams: [standingOf(lives[0]), standingOf(lives[1])],
+      participants: participantOutcomes(
+        this.battle.turnOrder,
+        outcome.outcome,
+        outcome.winnerTeamLabel,
+      ),
+    }
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.BattleFinished,
+      occurredAt: at,
+      payload: { result, battle: battle.toView(this.id, { withDeadlines: false }) },
+    }
+
+    return new BattleRoom(
+      this.id,
+      this.mode,
+      BattleRoomStatus.Finished,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        handledCommands: this.handledCommands,
+        result,
+      },
+    )
+  }
+
+  /**
+   * Si algun equipo quedo sin heroes, finaliza por eliminacion (contrato §4.1).
+   * Lo invocan `applyBasicAttack` y `applySkill` al final, sobre la sala nueva
+   * que ya incluye su evento: asi el evento de la accion y `battleFinished`
+   * quedan en la MISMA escritura y con `seq` consecutivos.
+   */
+  private concludeIfEliminated(actorTeamLabel: string, at: Date): BattleRoom {
+    if (this.battle === null || this.status !== BattleRoomStatus.InBattle) {
+      return this
+    }
+
+    const labels: readonly [string, string] = [this.teams[0].label, this.teams[1].label]
+    const eliminated = findEliminatedTeam(teamLives(this.battle.combatants, labels))
+
+    // Sin eliminacion, o con el propio equipo del actor eliminado (imposible con
+    // las reglas de HU-18/19: el actor esta vivo y no se ataca a un aliado), la
+    // batalla sigue.
+    if (eliminated === null || eliminated === actorTeamLabel) {
+      return this
+    }
+
+    return this.finish({ reason: 'ELIMINATION', winnerTeamLabel: actorTeamLabel }, at)
+  }
+
+  /**
+   * Traduce la causa al par (outcome, ganador, desempate) del contrato §4:
+   * eliminacion y desconexion siempre tienen ganador; el vencimiento global lo
+   * resuelve `BattleOutcomePolicy` (porcentaje, vida absoluta o `NO_WINNER`).
+   */
+  private resolveOutcome(
+    cause: FinishCause,
+    labels: readonly [string, string],
+    lives: readonly [TeamLife, TeamLife],
+  ): {
+    readonly outcome: BattleOutcome
+    readonly winnerTeamLabel: string | null
+    readonly tiebreak: TiebreakRule | null
+  } {
+    if (cause.reason === 'ELIMINATION') {
+      if (!labels.includes(cause.winnerTeamLabel)) {
+        throw new DomainError('El ganador por eliminacion debe ser uno de los equipos de la sala.')
+      }
+
+      return { outcome: 'WIN', winnerTeamLabel: cause.winnerTeamLabel, tiebreak: null }
+    }
+
+    if (cause.reason === 'DISCONNECTION') {
+      const rival = labels.find((label) => label !== cause.disconnected.teamLabel)
+
+      if (rival === undefined) {
+        throw new DomainError('El desconectado debe pertenecer a uno de los equipos de la sala.')
+      }
+
+      return { outcome: 'WIN', winnerTeamLabel: rival, tiebreak: null }
+    }
+
+    const resolution = resolveTimeLimit(lives[0], lives[1])
+
+    return resolution.winnerTeamLabel === null
+      ? { outcome: 'NO_WINNER', winnerTeamLabel: null, tiebreak: null }
+      : {
+          outcome: 'WIN',
+          winnerTeamLabel: resolution.winnerTeamLabel,
+          tiebreak: resolution.tiebreak,
+        }
+  }
+
+  /**
+   * Liquida los vencimientos pendientes de la sala (HU-21, contrato §3 y §4.5).
+   * PURO y de UNA sola transicion por llamada: si vence la gracia de un
+   * participante ausente finaliza por desconexion; si vence el global, por
+   * tiempo; si vence el turno, publica `turnTimedOut` y avanza. Cuando hay
+   * varios vencimientos elige el MAS ANTIGUO; en empate exacto:
+   * DISCONNECTION > TIME_LIMIT > turno.
+   */
+  settleDeadlines(now: Date, absences: ReadonlyMap<string, Date>): BattleRoom {
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      return this
+    }
+
+    const expiry = this.oldestExpiry(now, absences)
+
+    if (expiry === null) {
+      return this
+    }
+
+    if (expiry.kind === 'grace') {
+      return this.finish({ reason: 'DISCONNECTION', disconnected: expiry.key }, now)
+    }
+
+    if (expiry.kind === 'global') {
+      return this.finish({ reason: 'TIME_LIMIT' }, now)
+    }
+
+    const completedPosition = this.battle.currentPosition
+    const timedOut = this.battle.currentEntry
+    const battle = this.battle.completeTurn(now)
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.TurnTimedOut,
+      occurredAt: now,
+      payload: {
+        completedPosition,
+        timedOut: { teamLabel: timedOut.teamLabel, seat: timedOut.seat },
+        battle: battle.toView(this.id),
+      },
+    }
+
+    return new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        // El vencimiento del turno NO consume comandos: no toca `handledCommands`.
+        handledCommands: this.handledCommands,
+      },
+    )
+  }
+
+  /**
+   * Instante del vencimiento mas inminente (global, turno o gracia de un
+   * ausente), o `null` fuera de `IN_BATTLE`. Es lo que el planificador registra
+   * para despertar solo cuando haga falta.
+   */
+  nextDueAt(absences: ReadonlyMap<string, Date>): Date | null {
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      return null
+    }
+
+    const deadlines: Date[] = [
+      battleDeadline(this.battle.startedAt),
+      turnDeadline(this.battle.turnStartedAt),
+    ]
+
+    for (const entry of this.battle.turnOrder) {
+      if (entry.kind !== ParticipantKind.Human || entry.playerId === null) {
+        continue
+      }
+
+      const since = absences.get(entry.playerId)
+
+      if (since !== undefined) {
+        deadlines.push(graceDeadline(since))
+      }
+    }
+
+    let earliest: Date | null = null
+
+    for (const deadline of deadlines) {
+      if (earliest === null || deadline.getTime() < earliest.getTime()) {
+        earliest = deadline
+      }
+    }
+
+    return earliest
+  }
+
+  /**
+   * El vencimiento mas antiguo entre los candidatos (contrato §4.5). En empate
+   * exacto manda la prioridad de la causa: desconexion, luego tiempo global,
+   * luego turno. Entre varias gracias con el mismo vencimiento gana la primera
+   * de la cola (y como el vencimiento es `ausenteDesde + 30 s`, eso es
+   * exactamente el `desconectadoDesde` mas antiguo, con la posicion menor como
+   * desempate).
+   */
+  private oldestExpiry(now: Date, absences: ReadonlyMap<string, Date>): Expiry | null {
+    if (this.battle === null) {
+      return null
+    }
+
+    const candidates: Expiry[] = []
+
+    for (const entry of this.battle.turnOrder) {
+      if (entry.kind !== ParticipantKind.Human || entry.playerId === null) {
+        continue
+      }
+
+      const since = absences.get(entry.playerId)
+
+      if (since === undefined) {
+        continue
+      }
+
+      const at = graceDeadline(since)
+
+      if (hasReached(now, at)) {
+        candidates.push({
+          kind: 'grace',
+          at,
+          key: { teamLabel: entry.teamLabel, seat: entry.seat },
+        })
+      }
+    }
+
+    const global = battleDeadline(this.battle.startedAt)
+
+    if (hasReached(now, global)) {
+      candidates.push({ kind: 'global', at: global })
+    }
+
+    const turn = turnDeadline(this.battle.turnStartedAt)
+
+    if (hasReached(now, turn)) {
+      candidates.push({ kind: 'turn', at: turn })
+    }
+
+    let oldest: Expiry | null = null
+
+    for (const candidate of candidates) {
+      if (oldest === null) {
+        oldest = candidate
+        continue
+      }
+
+      const difference = candidate.at.getTime() - oldest.at.getTime()
+
+      if (
+        difference < 0 ||
+        (difference === 0 && expiryPriority(candidate) < expiryPriority(oldest))
+      ) {
+        oldest = candidate
+      }
+    }
+
+    return oldest
   }
 
   private static assertValidCommandId(commandId: string): void {
@@ -1294,3 +1678,46 @@ export class BattleRoom {
     return autoIndex === 0 ? 0 : 1
   }
 }
+
+/**
+ * Vencimiento candidato de una liquidacion de HU-21. La gracia lleva la
+ * identidad del ausente; las otras dos causas no necesitan mas datos.
+ */
+type Expiry =
+  | { readonly kind: 'grace'; readonly at: Date; readonly key: CombatantKey }
+  | { readonly kind: 'global'; readonly at: Date }
+  | { readonly kind: 'turn'; readonly at: Date }
+
+/** Precedencia en un empate exacto (contrato §4.5): desconexion > tiempo > turno. */
+const expiryPriority = (expiry: Expiry): number =>
+  expiry.kind === 'grace' ? 0 : expiry.kind === 'global' ? 1 : 2
+
+/** Estado final de un equipo, tal como lo publica el resultado (contrato §5). */
+const standingOf = (life: TeamLife): TeamStanding => ({
+  teamLabel: life.teamLabel,
+  remainingHealth: life.remaining,
+  maxHealth: life.max,
+  lifePercent: lifePercentForDisplay(life.remaining, life.max),
+  eliminated: life.allEliminated,
+})
+
+/** Resultado por participante, en el orden de la cola de turnos (contrato §5). */
+const participantOutcomes = (
+  turnOrder: readonly TurnOrderEntry[],
+  outcome: BattleOutcome,
+  winnerTeamLabel: string | null,
+): readonly ParticipantOutcome[] =>
+  turnOrder.map((entry) => ({
+    teamLabel: entry.teamLabel,
+    seat: entry.seat,
+    kind: entry.kind,
+    playerId: entry.playerId,
+    displayName: entry.displayName,
+    heroId: entry.heroId,
+    result:
+      outcome === 'NO_WINNER'
+        ? ParticipantResults.NoWinner
+        : entry.teamLabel === winnerTeamLabel
+          ? ParticipantResults.Won
+          : ParticipantResults.Lost,
+  }))

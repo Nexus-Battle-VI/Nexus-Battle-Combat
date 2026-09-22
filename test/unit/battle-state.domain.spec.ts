@@ -10,6 +10,7 @@ import {
 } from '../../src/domain/errors/BattleErrors'
 import { RoomNotLeavableError } from '../../src/domain/errors/BattleRoomErrors'
 import { NOW, ROOM_ID, inBattleRoom, labels, memberOf, preparingRoom } from '../fixtures/battle'
+import { battleWithCombat, combatProfileFixture } from '../fixtures/basic-attack'
 
 const LATER = new Date('2026-09-21T10:05:00.000Z')
 
@@ -27,8 +28,8 @@ describe('BattleState — cola inmutable y unico contador de progreso (HU-17)', 
 
   it('avanzar pasa al siguiente elemento y, tras el ultimo, VUELVE al primero (rondas siguientes)', () => {
     const first = BattleState.start(order, NOW)
-    const second = first.completeTurn()
-    const third = second.completeTurn()
+    const second = first.completeTurn(LATER)
+    const third = second.completeTurn(LATER)
 
     expect([first, second, third].map((state) => state.currentPosition)).toEqual([0, 1, 0])
     expect([first, second, third].map((state) => state.round)).toEqual([1, 1, 2])
@@ -36,7 +37,7 @@ describe('BattleState — cola inmutable y unico contador de progreso (HU-17)', 
 
   it('el orden NO cambia al avanzar: misma cola, misma referencia, mismo contenido', () => {
     const first = BattleState.start(order, NOW)
-    const later = first.completeTurn().completeTurn().completeTurn()
+    const later = first.completeTurn(LATER).completeTurn(LATER).completeTurn(LATER)
 
     expect(later.turnOrder).toBe(first.turnOrder)
     expect(labels(later.turnOrder)).toEqual(['B1', 'A1'])
@@ -48,7 +49,7 @@ describe('BattleState — cola inmutable y unico contador de progreso (HU-17)', 
 
     for (let turn = 0; turn < 30; turn += 1) {
       actors.push(`${state.currentEntry.teamLabel}${String(state.currentEntry.seat + 1)}`)
-      state = state.completeTurn()
+      state = state.completeTurn(LATER)
     }
 
     expect(actors.slice(0, 3)).toEqual(['A1', 'B1', 'A2'])
@@ -74,6 +75,7 @@ describe('BattleState — cola inmutable y unico contador de progreso (HU-17)', 
       'combatants',
       'startedAt',
       'turnOrder',
+      'turnStartedAt',
       'turnsCompleted',
     ])
   })
@@ -88,6 +90,7 @@ describe('BattleState — cola inmutable y unico contador de progreso (HU-17)', 
       'battleId',
       'combatants',
       'currentTurn',
+      'deadlines',
       'round',
       'startedAt',
       'turnOrder',
@@ -359,4 +362,116 @@ describe('BattleRoom — restauracion y consultas de la batalla', () => {
       'teamLabel',
     ])
   })
+})
+
+describe('BattleState - HU-21: turno vigente, saltos, Poder y deadlines (contrato §3, §4.1 y §6.3)', () => {
+  it('el turno arranca con la batalla y se renueva con el instante de cada avance', () => {
+    const started = BattleState.start([memberOf('A', 0), memberOf('B', 0)], NOW)
+
+    expect(started.turnStartedAt).toEqual(NOW)
+
+    const advanced = started.completeTurn(LATER)
+
+    expect(advanced.turnStartedAt).toEqual(LATER)
+  })
+
+  it('una batalla anterior a HU-21 (sin `turnStartedAt`) lo restaura desde `startedAt`', () => {
+    const state = BattleState.restore({
+      startedAt: NOW,
+      turnOrder: [memberOf('A', 0), memberOf('B', 0)],
+      turnsCompleted: 1,
+    })
+
+    expect(state.turnStartedAt).toEqual(NOW)
+    expect(state.toSnapshot().turnStartedAt).toEqual(NOW)
+  })
+
+  it('la vista trae los deadlines (turno y global) y la final los omite', () => {
+    const state = BattleState.start([memberOf('A', 0), memberOf('B', 0)], NOW)
+    const view = state.toView('sala')
+
+    expect(view.deadlines).toEqual({
+      turnEndsAt: new Date(NOW.getTime() + 30_000).toISOString(),
+      battleEndsAt: new Date(NOW.getTime() + 360_000).toISOString(),
+    })
+    expect(state.toView('sala', { withDeadlines: false }).deadlines).toBeUndefined()
+  })
+
+  it('el avance SALTA a quien no tiene Vida y suma cada posicion saltada', () => {
+    const room = battleWithCombat({ teamSizes: [2, 2], health: { 'B#0': 0 } })
+    const state = room.battle
+
+    if (state === null) {
+      throw new Error('La sala de prueba necesita batalla.')
+    }
+
+    // Cola A0, B0, A1, B1: B0 esta eliminado, asi que de A0 se pasa a A1.
+    const advanced = state.completeTurn(LATER)
+
+    expect(advanced.turnsCompleted).toBe(2)
+    expect(advanced.currentEntry).toMatchObject({ teamLabel: 'A', seat: 1 })
+  })
+
+  it('sin nadie con Vida lanza DomainError (la batalla ya deberia haber finalizado)', () => {
+    const room = battleWithCombat({ health: { 'A#0': 0, 'B#0': 0 } })
+    const state = room.battle
+
+    if (state === null) {
+      throw new Error('La sala de prueba necesita batalla.')
+    }
+
+    expect(() => state.completeTurn(LATER)).toThrow(DomainError)
+  })
+
+  it('restoreAllPower deja el Poder al maximo y conserva la instancia si no hay nada que restaurar', () => {
+    const room = battleWithCombat({
+      profiles: {
+        a1: combatProfileFixture({ maxPower: 10 }),
+        b1: combatProfileFixture({ maxPower: 10 }),
+      },
+    })
+    const state = room.battle
+
+    if (state === null) {
+      throw new Error('La sala de prueba necesita batalla.')
+    }
+
+    expect(state.restoreAllPower()).toBe(state)
+
+    const drained = state.withCombatant(
+      (() => {
+        const combatant = state.combatantFor({ teamLabel: 'A', seat: 0 })
+
+        if (combatant === undefined) {
+          throw new Error('sin combatiente')
+        }
+
+        return combatant.withPower(2)
+      })(),
+    )
+    const restored = drained.restoreAllPower()
+
+    expect(restored.combatantFor({ teamLabel: 'A', seat: 0 })?.currentPower).toBe(10)
+    expect(restored).not.toBe(drained)
+  })
+
+  it.each([
+    ['A', 0],
+    ['B', 1],
+  ] as const)(
+    'sin snapshot de combate no hay saltos ni Poder que restaurar (%s#%i)',
+    (label, seat) => {
+      const room = battleWithCombat({ withCombat: false })
+      const state = room.battle
+
+      if (state === null) {
+        throw new Error('La sala de prueba necesita batalla.')
+      }
+
+      // Sin combatientes, el avance es el de siempre: una posicion por llamada.
+      expect(state.completeTurn(LATER).turnsCompleted).toBe(1)
+      expect(state.restoreAllPower()).toBe(state)
+      expect(state.combatantFor({ teamLabel: label, seat })).toBeUndefined()
+    },
+  )
 })

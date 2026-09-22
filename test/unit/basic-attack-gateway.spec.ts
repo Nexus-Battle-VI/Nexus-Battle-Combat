@@ -1,10 +1,7 @@
 import 'reflect-metadata'
 
 import { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicAttackRealtimeHandler'
-import type { SkillRealtimeHandler } from '../../src/adapters/inbound/ws/SkillRealtimeHandler'
-import { BattleRoomRealtimeGateway } from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
 import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
-import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryRealtimeTicketStore } from '../../src/adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import type { RealtimeTicketCodecPort } from '../../src/application/ports/RealtimeTicketPort'
@@ -18,6 +15,7 @@ import { RandomEffectType } from '../../src/domain/random-effects/RandomEffectTy
 import { ROOM_ID, clock, scriptedSequence, silentLogger } from '../fixtures/battle'
 import { battleWithCombat, indexForEffect, indexForFace } from '../fixtures/basic-attack'
 import { FakeSocket, flush } from '../fixtures/fake-socket'
+import { buildGateway } from '../fixtures/gateway'
 
 /**
  * `attack` (HU-18) a traves del GATEWAY REAL, con el caso de uso y el handler reales,
@@ -35,14 +33,6 @@ const codec: RealtimeTicketCodecPort = {
 }
 
 /** La habilidad (HU-19) tiene su propia suite: aqui el gateway solo ejerce `attack`. */
-const noSkill = { handle: jest.fn() } as unknown as SkillRealtimeHandler
-
-const noChat = {
-  handle: jest.fn(),
-  onDisconnect: jest.fn(),
-  onRoomUpdated: jest.fn(),
-} as unknown as ChatRealtimeHandler
-
 const ATTACK_DIE = indexForFace(5, 6)
 const DAMAGE = indexForEffect('GUERRERO_ARMAS', RandomEffectType.Damage)
 const DAMAGE_DIE = indexForFace(4, 6)
@@ -54,15 +44,12 @@ const world = async (indices: readonly number[] = HIT) => {
   const issue = new IssueRealtimeTicket(codec, store, clock)
   const sequence = scriptedSequence(indices)
   const attack = new ExecuteBasicAttack(repo, clock, sequence, new ChannelLock())
-  const gateway = new BattleRoomRealtimeGateway(
-    new ConsumeRealtimeTicket(codec, store, clock),
-    repo,
-    new ResumeBattle(repo),
-    silentLogger,
-    noChat,
-    new BasicAttackRealtimeHandler(attack, silentLogger),
-    noSkill,
-  )
+  const gateway = buildGateway({
+    consumeTicket: new ConsumeRealtimeTicket(codec, store, clock),
+    rooms: repo,
+    resumeBattle: new ResumeBattle(repo),
+    attack: new BasicAttackRealtimeHandler(attack, silentLogger),
+  })
 
   await repo.save(battleWithCombat(), 0)
 
@@ -358,6 +345,7 @@ describe('Gateway — comando attack (HU-18)', () => {
       'battleId',
       'combatants',
       'currentTurn',
+      'deadlines',
       'round',
       'startedAt',
       'turnOrder',

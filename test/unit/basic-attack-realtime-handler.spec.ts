@@ -14,7 +14,10 @@ import type {
   ExecuteBasicAttack,
   ExecuteBasicAttackResult,
 } from '../../src/application/use-cases/ExecuteBasicAttack'
+import type { BattleFinalizer } from '../../src/application/services/BattleFinalizer'
+import type { BattleRoom } from '../../src/domain/entities/BattleRoom'
 import type { BattleEvent } from '../../src/domain/entities/BattleEvent'
+import { BattleEventType } from '../../src/domain/entities/BattleEvent'
 import {
   ActorUnavailableError,
   BattleNotInProgressError,
@@ -26,6 +29,7 @@ import {
   UnsupportedCombatProfileError,
 } from '../../src/domain/errors/BattleErrors'
 import { ROOM_ID, silentLogger } from '../fixtures/battle'
+import { battleWithCombat } from '../fixtures/basic-attack'
 import { FakeSocket } from '../fixtures/fake-socket'
 
 /**
@@ -81,7 +85,10 @@ const EVENT: BattleEvent = {
   },
 }
 
-const handlerWith = (execute: () => Promise<ExecuteBasicAttackResult>) => {
+const handlerWith = (
+  execute: () => Promise<ExecuteBasicAttackResult>,
+  finalizer: BattleFinalizer | null = null,
+) => {
   const attack = { execute: jest.fn(execute) } as unknown as ExecuteBasicAttack
   const errors: Record<string, unknown>[] = []
   const logger = {
@@ -97,13 +104,18 @@ const handlerWith = (execute: () => Promise<ExecuteBasicAttackResult>) => {
   const socket = new FakeSocket()
 
   return {
-    handler: new BasicAttackRealtimeHandler(attack, logger),
+    handler: new BasicAttackRealtimeHandler(attack, logger, finalizer),
     attack: attack as unknown as { execute: jest.Mock },
     publish,
     socket,
     errors,
     send: (message: Record<string, unknown> = VALID) =>
-      new BasicAttackRealtimeHandler(attack, logger).handle(socket, 'sub-a', message, publish),
+      new BasicAttackRealtimeHandler(attack, logger, finalizer).handle(
+        socket,
+        'sub-a',
+        message,
+        publish,
+      ),
     sent: () => socket.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>),
   }
 }
@@ -212,7 +224,9 @@ describe('BasicAttackRealtimeHandler', () => {
   })
 
   it('el atacante es el `sub` de la conexion, nunca un dato del mensaje', async () => {
-    const { send, attack } = handlerWith(() => Promise.resolve({ event: EVENT, replayed: false }))
+    const { send, attack } = handlerWith(() =>
+      Promise.resolve({ event: EVENT, replayed: false, followUp: [], finished: null }),
+    )
 
     await send()
 
@@ -226,7 +240,7 @@ describe('BasicAttackRealtimeHandler', () => {
 
   it('un ataque nuevo se DIFUNDE una vez con el evento persistido y el remitente no recibe un duplicado directo', async () => {
     const { send, publish, sent } = handlerWith(() =>
-      Promise.resolve({ event: EVENT, replayed: false }),
+      Promise.resolve({ event: EVENT, replayed: false, followUp: [], finished: null }),
     )
 
     await send()
@@ -238,7 +252,7 @@ describe('BasicAttackRealtimeHandler', () => {
 
   it('una repeticion (replayed) NO se difunde: se reenvia SOLO a quien la repite, con los mismos bytes', async () => {
     const { send, publish, sent } = handlerWith(() =>
-      Promise.resolve({ event: EVENT, replayed: true }),
+      Promise.resolve({ event: EVENT, replayed: true, followUp: [], finished: null }),
     )
 
     await send()
@@ -250,14 +264,14 @@ describe('BasicAttackRealtimeHandler', () => {
   it('la difusion se hace DESPUES de que el caso de uso termino (persistir antes de difundir)', async () => {
     const order: string[] = []
     const { handler, attack, publish, socket } = handlerWith(() =>
-      Promise.resolve({ event: EVENT, replayed: false }),
+      Promise.resolve({ event: EVENT, replayed: false, followUp: [], finished: null }),
     )
 
     attack.execute.mockImplementation(async () => {
       await Promise.resolve()
       order.push('persistido')
 
-      return { event: EVENT, replayed: false }
+      return { event: EVENT, replayed: false, followUp: [], finished: null }
     })
     publish.mockImplementation(() => order.push('difundido'))
 
@@ -276,7 +290,7 @@ describe('BasicAttackRealtimeHandler', () => {
 
   it('un fallo al difundir no revierte ni rechaza: el estado ya esta persistido (resume lo recupera)', async () => {
     const { send, publish, sent, errors } = handlerWith(() =>
-      Promise.resolve({ event: EVENT, replayed: false }),
+      Promise.resolve({ event: EVENT, replayed: false, followUp: [], finished: null }),
     )
 
     publish.mockImplementation(() => {
@@ -335,5 +349,101 @@ describe('BasicAttackRealtimeHandler', () => {
     await send()
 
     expect(sent()).toEqual([])
+  })
+})
+
+describe('BasicAttackRealtimeHandler — finalizacion (HU-21): difundir y despues liberar', () => {
+  const FINAL_EVENT: BattleEvent = {
+    seq: 3,
+    type: BattleEventType.BattleFinished,
+    occurredAt: new Date('2026-09-21T10:05:00.000Z'),
+    payload: {
+      result: {
+        reason: 'ELIMINATION',
+        outcome: 'WIN',
+        winnerTeamLabel: 'A',
+        finishedAt: '2026-09-21T10:05:00.000Z',
+        tiebreak: null,
+        disconnected: null,
+        teams: [],
+        participants: [],
+      },
+      battle: EVENT.payload.battle as never,
+    },
+  } as unknown as BattleEvent
+
+  const finishedRoom = (): BattleRoom =>
+    battleWithCombat({ health: { 'B#0': 0 } }).finish(
+      { reason: 'ELIMINATION', winnerTeamLabel: 'A' },
+      new Date('2026-09-21T10:05:00.000Z'),
+    )
+
+  const spyFinalizer = (order: string[]): BattleFinalizer =>
+    ({
+      afterFinished: () => {
+        order.push('finalizado')
+      },
+    }) as unknown as BattleFinalizer
+
+  it('un golpe letal difunde la accion y `battleFinished` y DESPUES finaliza (una sola vez)', async () => {
+    const order: string[] = []
+    const finalizer = spyFinalizer(order)
+    const { handler, publish, socket } = handlerWith(
+      () =>
+        Promise.resolve({
+          event: EVENT,
+          replayed: false,
+          followUp: [FINAL_EVENT],
+          finished: finishedRoom(),
+        }),
+      finalizer,
+    )
+
+    publish.mockImplementation(() => order.push('difundido'))
+
+    await handler.handle(socket, 'sub-a', VALID, publish)
+
+    expect(publish).toHaveBeenCalledWith(ROOM_ID, [EVENT, FINAL_EVENT])
+    expect(order).toEqual(['difundido', 'finalizado'])
+  })
+
+  it('una repeticion (replayed) NO difunde ni finaliza: el resultado ya salio', async () => {
+    const order: string[] = []
+    const { handler, publish, socket } = handlerWith(
+      () =>
+        Promise.resolve({
+          event: EVENT,
+          replayed: true,
+          followUp: [],
+          finished: null,
+        }),
+      spyFinalizer(order),
+    )
+
+    await handler.handle(socket, 'sub-a', VALID, publish)
+
+    expect(publish).not.toHaveBeenCalled()
+    expect(order).toEqual([])
+  })
+
+  it('un fallo al difundir no impide la liberacion: el estado ya esta persistido', async () => {
+    const order: string[] = []
+    const { handler, publish, socket } = handlerWith(
+      () =>
+        Promise.resolve({
+          event: EVENT,
+          replayed: false,
+          followUp: [FINAL_EVENT],
+          finished: finishedRoom(),
+        }),
+      spyFinalizer(order),
+    )
+
+    publish.mockImplementation(() => {
+      throw new Error('socket roto')
+    })
+
+    await expect(handler.handle(socket, 'sub-a', VALID, publish)).resolves.toBeUndefined()
+    expect(order).toEqual(['finalizado'])
   })
 })

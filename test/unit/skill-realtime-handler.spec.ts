@@ -11,7 +11,10 @@ import {
   RoomNotFoundError,
 } from '../../src/application/errors/ApplicationError'
 import type { UseSkill, UseSkillResult } from '../../src/application/use-cases/UseSkill'
+import type { BattleFinalizer } from '../../src/application/services/BattleFinalizer'
+import type { BattleRoom } from '../../src/domain/entities/BattleRoom'
 import type { BattleEvent } from '../../src/domain/entities/BattleEvent'
+import { BattleEventType } from '../../src/domain/entities/BattleEvent'
 import {
   ActorUnavailableError,
   BattleNotInProgressError,
@@ -27,8 +30,8 @@ import {
   UnsupportedSkillEffectError,
 } from '../../src/domain/errors/BattleErrors'
 import { ROOM_ID, silentLogger } from '../fixtures/battle'
+import { battleWithSkills, SHIELD_STRIKE_ID } from '../fixtures/skills'
 import { FakeSocket } from '../fixtures/fake-socket'
-import { SHIELD_STRIKE_ID } from '../fixtures/skills'
 
 /**
  * Comando `useSkill` de HU-19 en el adaptador de WebSocket: forma estricta del mensaje,
@@ -93,7 +96,10 @@ const EVENT: BattleEvent = {
   },
 }
 
-const handlerWith = (execute: () => Promise<UseSkillResult>) => {
+const handlerWith = (
+  execute: () => Promise<UseSkillResult>,
+  finalizer: BattleFinalizer | null = null,
+) => {
   const skill = { execute: jest.fn(execute) } as unknown as UseSkill
   const errors: Record<string, unknown>[] = []
   const infos: Record<string, unknown>[] = []
@@ -116,14 +122,14 @@ const handlerWith = (execute: () => Promise<UseSkillResult>) => {
   const socket = new FakeSocket()
 
   return {
-    handler: new SkillRealtimeHandler(skill, logger),
+    handler: new SkillRealtimeHandler(skill, logger, finalizer),
     skill: skill as unknown as { execute: jest.Mock },
     publish,
     socket,
     errors,
     infos,
     send: (message: Record<string, unknown> = VALID) =>
-      new SkillRealtimeHandler(skill, logger).handle(socket, 'sub-a', message, publish),
+      new SkillRealtimeHandler(skill, logger, finalizer).handle(socket, 'sub-a', message, publish),
     sent: () => socket.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>),
   }
 }
@@ -240,7 +246,9 @@ describe('SkillRealtimeHandler', () => {
   })
 
   it('el actor es el `sub` de la conexion y la habilidad viaja SOLO como identificador', async () => {
-    const { send, skill } = handlerWith(() => Promise.resolve({ event: EVENT, replayed: false }))
+    const { send, skill } = handlerWith(() =>
+      Promise.resolve({ event: EVENT, replayed: false, followUp: [], finished: null }),
+    )
 
     await send()
 
@@ -255,7 +263,7 @@ describe('SkillRealtimeHandler', () => {
 
   it('una habilidad nueva se DIFUNDE una vez con el evento persistido y el remitente no recibe un duplicado directo', async () => {
     const { send, publish, sent } = handlerWith(() =>
-      Promise.resolve({ event: EVENT, replayed: false }),
+      Promise.resolve({ event: EVENT, replayed: false, followUp: [], finished: null }),
     )
 
     await send()
@@ -267,7 +275,7 @@ describe('SkillRealtimeHandler', () => {
 
   it('una repeticion (replayed) NO se difunde: se reenvia SOLO a quien la repite, con los mismos bytes', async () => {
     const { send, publish, sent } = handlerWith(() =>
-      Promise.resolve({ event: EVENT, replayed: true }),
+      Promise.resolve({ event: EVENT, replayed: true, followUp: [], finished: null }),
     )
 
     await send()
@@ -306,7 +314,7 @@ describe('SkillRealtimeHandler', () => {
       },
     }
     const { send, publish } = handlerWith(() =>
-      Promise.resolve({ event: degraded, replayed: false }),
+      Promise.resolve({ event: degraded, replayed: false, followUp: [], finished: null }),
     )
 
     await send()
@@ -325,14 +333,14 @@ describe('SkillRealtimeHandler', () => {
   it('la difusion se hace DESPUES de que el caso de uso termino (persistir antes de difundir)', async () => {
     const order: string[] = []
     const { handler, skill, publish, socket } = handlerWith(() =>
-      Promise.resolve({ event: EVENT, replayed: false }),
+      Promise.resolve({ event: EVENT, replayed: false, followUp: [], finished: null }),
     )
 
     skill.execute.mockImplementation(async () => {
       await Promise.resolve()
       order.push('persistido')
 
-      return { event: EVENT, replayed: false }
+      return { event: EVENT, replayed: false, followUp: [], finished: null }
     })
     publish.mockImplementation(() => order.push('difundido'))
 
@@ -351,7 +359,7 @@ describe('SkillRealtimeHandler', () => {
 
   it('un fallo al difundir no revierte ni rechaza: el estado ya esta persistido (resume lo recupera)', async () => {
     const { send, publish, sent, errors } = handlerWith(() =>
-      Promise.resolve({ event: EVENT, replayed: false }),
+      Promise.resolve({ event: EVENT, replayed: false, followUp: [], finished: null }),
     )
 
     publish.mockImplementation(() => {
@@ -429,5 +437,77 @@ describe('SkillRealtimeHandler', () => {
     await send()
 
     expect(sent()).toEqual([])
+  })
+})
+
+describe('SkillRealtimeHandler — finalizacion (HU-21): difundir y despues liberar', () => {
+  const FINAL_EVENT: BattleEvent = {
+    seq: 3,
+    type: BattleEventType.BattleFinished,
+    occurredAt: new Date('2026-09-21T10:05:00.000Z'),
+    payload: {
+      result: {
+        reason: 'ELIMINATION',
+        outcome: 'WIN',
+        winnerTeamLabel: 'A',
+        finishedAt: '2026-09-21T10:05:00.000Z',
+        tiebreak: null,
+        disconnected: null,
+        teams: [],
+        participants: [],
+      },
+      battle: EVENT.payload.battle as never,
+    },
+  } as unknown as BattleEvent
+
+  const finishedRoom = (): BattleRoom =>
+    battleWithSkills({ health: { 'B#0': 0 } }).finish(
+      { reason: 'ELIMINATION', winnerTeamLabel: 'A' },
+      new Date('2026-09-21T10:05:00.000Z'),
+    )
+
+  it('una habilidad letal difunde ambos eventos en orden y DESPUES finaliza', async () => {
+    const order: string[] = []
+    const finalizer = {
+      afterFinished: () => order.push('finalizado'),
+    } as unknown as BattleFinalizer
+    const { handler, publish, socket } = handlerWith(
+      () =>
+        Promise.resolve({
+          event: EVENT,
+          replayed: false,
+          followUp: [FINAL_EVENT],
+          finished: finishedRoom(),
+        }),
+      finalizer,
+    )
+
+    publish.mockImplementation(() => order.push('difundido'))
+
+    await handler.handle(socket, 'sub-a', VALID, publish)
+
+    expect(publish).toHaveBeenCalledWith(ROOM_ID, [EVENT, FINAL_EVENT])
+    expect(order).toEqual(['difundido', 'finalizado'])
+  })
+
+  it('una repeticion no difunde ni finaliza', async () => {
+    const order: string[] = []
+    const { handler, publish, socket } = handlerWith(
+      () =>
+        Promise.resolve({
+          event: EVENT,
+          replayed: true,
+          followUp: [],
+          finished: null,
+        }),
+      {
+        afterFinished: () => order.push('finalizado'),
+      } as unknown as BattleFinalizer,
+    )
+
+    await handler.handle(socket, 'sub-a', VALID, publish)
+
+    expect(publish).not.toHaveBeenCalled()
+    expect(order).toEqual([])
   })
 })

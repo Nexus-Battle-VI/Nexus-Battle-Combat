@@ -20,6 +20,10 @@ import {
   type TokenVerifierPort,
   type VerifiedIdentity,
 } from '../../src/application/ports/TokenVerifierPort'
+import {
+  BATTLE_ROOM_REPOSITORY,
+  type BattleRoomRepositoryPort,
+} from '../../src/application/ports/BattleRoomRepositoryPort'
 import { AppModule } from '../../src/infrastructure/bootstrap/app.module'
 import { equippedHeroFixture, equippedProductNotOwnedBlocker } from '../fixtures/equipped-hero'
 
@@ -141,6 +145,24 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
 
   const http = () => request(app.getHttpServer())
   const auth = (token: string) => `Bearer ${token}`
+
+  /**
+   * HU-21: cierra la sala en curso por vencimiento global, escribiendo por el
+   * repositorio real del modulo (sin atajos). El resultado queda persistido y la
+   * sala pasa a FINISHED, que es lo que comprueban las rutas HTTP.
+   */
+  const finishRoom = async (roomId: string): Promise<void> => {
+    const repo = app.get<BattleRoomRepositoryPort>(BATTLE_ROOM_REPOSITORY)
+    const room = await repo.findById(roomId)
+
+    if (room === null) {
+      throw new Error('la sala debia existir')
+    }
+
+    const finished = room.finish({ reason: 'TIME_LIMIT' }, new Date())
+
+    await repo.save(finished, room.version)
+  }
 
   /** Crea una sala con `token-a` y une a `token-b`: queda PREPARING. */
   const preparingRoom = async (): Promise<string> => {
@@ -288,6 +310,28 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
       expect(b.body.lastSeq).toBe(1)
     })
 
+    it('HU-21: iniciar una sala FINISHED responde el conflicto de estado ya existente (409)', async () => {
+      const roomId = await preparingRoom()
+
+      await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+      await finishRoom(roomId)
+
+      const again = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-b'))
+
+      expect(again.status).toBe(409)
+
+      const read = await http()
+        .get(`/api/v1/combat/rooms/${roomId}`)
+        .set('Authorization', auth('token-a'))
+
+      expect(read.body.status).toBe('FINISHED')
+      expect(read.body.lastSeq).toBe(2)
+    })
+
     it('un participante que ya no es elegible bloquea el inicio: 422 con blockers, sin cola', async () => {
       const roomId = await preparingRoom()
 
@@ -405,6 +449,48 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
       expect(read.status).toBe(200)
       expect(read.body.status).toBe('IN_BATTLE')
       expect(read.body.battle.turnOrder).toHaveLength(2)
+    })
+
+    it('HU-21: una sala FINISHED trae el `result` y su vista final sin `deadlines`', async () => {
+      const roomId = await preparingRoom()
+
+      await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+      await finishRoom(roomId)
+
+      const read = await http()
+        .get(`/api/v1/combat/rooms/${roomId}`)
+        .set('Authorization', auth('token-b'))
+
+      expect(read.status).toBe(200)
+      expect(read.body.status).toBe('FINISHED')
+      expect(read.body.result).toMatchObject({
+        reason: 'TIME_LIMIT',
+        outcome: 'NO_WINNER',
+        winnerTeamLabel: null,
+        tiebreak: null,
+        disconnected: null,
+      })
+      expect(read.body.result.participants.map((p: { result: string }) => p.result)).toEqual([
+        'NO_WINNER',
+        'NO_WINNER',
+      ])
+      expect(read.body.battle).not.toHaveProperty('deadlines')
+    })
+
+    it('HU-21: en una sala en curso `result` es null', async () => {
+      const roomId = await preparingRoom()
+
+      await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+
+      const read = await http()
+        .get(`/api/v1/combat/rooms/${roomId}`)
+        .set('Authorization', auth('token-b'))
+
+      expect(read.body.result).toBeNull()
     })
 
     it('la respuesta no contiene semilla, estado del generador ni datos internos', async () => {

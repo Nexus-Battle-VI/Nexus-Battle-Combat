@@ -117,8 +117,14 @@ const viewOf = (room: BattleRoom, label: string) => {
   return found
 }
 
+/**
+ * Payload de la ULTIMA habilidad ejecutada. HU-21: tras un golpe letal la sala
+ * anade `battleFinished` como ultimo evento, asi que buscar `skillUsed` es mas
+ * preciso que leer el ultimo evento a ciegas.
+ */
 const payloadOf = (room: BattleRoom): SkillUsedPayload =>
-  room.events.at(-1)?.payload as SkillUsedPayload
+  room.events.filter((event) => event.type === BattleEventType.SkillUsed).at(-1)
+    ?.payload as SkillUsedPayload
 
 describe('BattleRoom.planSkill — validacion previa (0 sorteos)', () => {
   it('una habilidad valida: costo, bonos y Poder antes y despues salen del snapshot', () => {

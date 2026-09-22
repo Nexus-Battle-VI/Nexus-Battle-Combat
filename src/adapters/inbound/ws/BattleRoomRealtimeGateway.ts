@@ -1,4 +1,4 @@
-import { Inject, Optional } from '@nestjs/common'
+import { Inject, Optional, forwardRef } from '@nestjs/common'
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -12,10 +12,21 @@ import {
   RoomNotFoundError,
 } from '../../../application/errors/ApplicationError'
 import type { BattleEventPublisherPort } from '../../../application/ports/BattleEventPublisherPort'
+import type { BattleConnectionsPort } from '../../../application/ports/BattleConnectionsPort'
+import {
+  BATTLE_DEADLINE_BOOK,
+  type BattleDeadlineBookPort,
+} from '../../../application/ports/BattleDeadlineBookPort'
+import {
+  BATTLE_PRESENCE,
+  type BattlePresencePort,
+} from '../../../application/ports/BattlePresencePort'
 import {
   BATTLE_ROOM_REPOSITORY,
   type BattleRoomRepositoryPort,
 } from '../../../application/ports/BattleRoomRepositoryPort'
+import type { BattleRoomReleasePort } from '../../../application/ports/BattleRoomReleasePort'
+import { CLOCK, type ClockPort } from '../../../application/ports/ClockPort'
 import type {
   BattleRoomUpdatedEvent,
   RealtimeNotifierPort,
@@ -23,6 +34,8 @@ import type {
 import type { ResumeBattle } from '../../../application/use-cases/ResumeBattle'
 import type { ConsumeRealtimeTicket } from '../../../application/use-cases/RealtimeTickets'
 import type { BattleEvent } from '../../../domain/entities/BattleEvent'
+import { graceDeadline } from '../../../domain/policies/BattleTimingPolicy'
+import { BattleRoomStatus } from '../../../domain/value-objects/BattleRoomStatus'
 import type { Logger } from '../../../infrastructure/observability/logger'
 import { LOGGER } from '../../../infrastructure/observability/logger-token'
 import { CONSUME_REALTIME_TICKET, RESUME_BATTLE } from '../http/tokens'
@@ -148,7 +161,9 @@ export class BattleRoomRealtimeGateway
     OnGatewayConnection<RealtimeSocket>,
     OnGatewayDisconnect<RealtimeSocket>,
     RealtimeNotifierPort,
-    BattleEventPublisherPort
+    BattleEventPublisherPort,
+    BattleRoomReleasePort,
+    BattleConnectionsPort
 {
   @WebSocketServer()
   server: unknown
@@ -163,8 +178,17 @@ export class BattleRoomRealtimeGateway
     @Inject(RESUME_BATTLE) private readonly resumeBattle: ResumeBattle,
     @Inject(LOGGER) private readonly logger: Logger,
     @Inject(ChatRealtimeHandler) private readonly chat: ChatRealtimeHandler,
-    @Inject(BasicAttackRealtimeHandler) private readonly basicAttack: BasicAttackRealtimeHandler,
-    @Inject(SkillRealtimeHandler) private readonly skill: SkillRealtimeHandler,
+    // HU-21: los comandos de combate dependen (a traves del `Settler`) del
+    // publicador, que es ESTE gateway. `forwardRef` rompe el ciclo: las
+    // dependencias se resuelven despues de construirse el gateway, y ningun
+    // mensaje llega antes de que el contenedor termine de arrancar.
+    @Inject(forwardRef(() => BasicAttackRealtimeHandler))
+    private readonly basicAttack: BasicAttackRealtimeHandler,
+    @Inject(forwardRef(() => SkillRealtimeHandler))
+    private readonly skill: SkillRealtimeHandler,
+    @Inject(BATTLE_PRESENCE) private readonly presence: BattlePresencePort,
+    @Inject(BATTLE_DEADLINE_BOOK) private readonly book: BattleDeadlineBookPort,
+    @Inject(CLOCK) private readonly clock: ClockPort,
     @Optional() @Inject(REALTIME_GATEWAY_OPTIONS) options: RealtimeGatewayOptions = {},
   ) {
     this.authTimeoutMs = options.authTimeoutMs ?? AUTH_TIMEOUT_MS
@@ -245,6 +269,74 @@ export class BattleRoomRealtimeGateway
     // socket muerto.
     this.connections.delete(client)
     this.chat.onDisconnect(client)
+
+    // HU-21 (contrato §4.2): la desconexion solo abre gracia cuando se pierde la
+    // ULTIMA conexion de batalla de ese participante (varias pestanas cuentan
+    // una vez). La suscripcion de lobby no cuenta.
+    this.noteBattleDisconnection(state)
+  }
+
+  /**
+   * `BattleRoomReleasePort` (HU-21, contrato §8): las conexiones de esa sala
+   * dejan de ser conexiones de BATALLA y se olvida su suscripcion de lobby a esa
+   * misma sala. Los sockets NO se cierran: el cliente puede seguir recibiendo su
+   * resultado y hacer `resume`. Se invoca DESPUES de difundir `battleFinished`
+   * (lo garantiza el `BattleFinalizer`).
+   */
+  release(roomId: string): void {
+    for (const state of this.connections.values()) {
+      if (state.battleRoomId === roomId) {
+        state.battleRoomId = null
+
+        if (state.roomId === roomId) {
+          state.roomId = null
+        }
+      }
+    }
+  }
+
+  /**
+   * `BattleConnectionsPort` (HU-21): quien esta conectado AHORA a la sala como
+   * batalla. Solo lectura: `StartBattle` la usa para sembrar la gracia de quien
+   * no tiene conexion al iniciar.
+   */
+  isConnected(roomId: string, playerId: string): boolean {
+    for (const [client, state] of this.connections) {
+      if (
+        client.readyState === OPEN_STATE &&
+        state.battleRoomId === roomId &&
+        state.subject === playerId
+      ) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  /**
+   * Si la conexion que se va era de batalla y no queda otra del mismo sujeto en
+   * la misma sala, el participante queda ausente y empieza su gracia de 30 s.
+   * `markAbsent` conserva el `since` mas antiguo si ya estaba ausente.
+   */
+  private noteBattleDisconnection(state: ConnectionState | undefined): void {
+    const roomId = state?.battleRoomId
+    const subject = state?.subject
+
+    if (roomId === null || roomId === undefined || subject === null || subject === undefined) {
+      return
+    }
+
+    for (const other of this.connections.values()) {
+      if (other.battleRoomId === roomId && other.subject === subject) {
+        return
+      }
+    }
+
+    const now = this.clock.now()
+
+    this.presence.markAbsent(roomId, subject, now)
+    this.book.ensureDueBy(roomId, graceDeadline(now))
   }
 
   /**
@@ -523,6 +615,7 @@ export class BattleRoomRealtimeGateway
       return
     }
 
+    const subject = state.subject
     const roomId = message.roomId
 
     if (typeof roomId !== 'string' || roomId.length === 0) {
@@ -539,7 +632,7 @@ export class BattleRoomRealtimeGateway
     state.pendingResume = pending
 
     try {
-      const result = await this.resumeBattle.execute(roomId, state.subject, message.lastSeq)
+      const result = await this.resumeBattle.execute(roomId, subject, message.lastSeq)
 
       // Desde aqui TODO es sincrono: ningun `publish` puede intercalarse entre la
       // entrega de la recuperacion, la del bufer y la suscripcion.
@@ -573,8 +666,23 @@ export class BattleRoomRealtimeGateway
       }
 
       state.roomId = roomId
-      state.battleRoomId = roomId
-      sendJson(client, { type: 'resume.ok', roomId, seq: delivered })
+
+      // HU-21 (contrato §8): un `resume` sobre una sala FINISHED entrega el
+      // estado (que ya trae `result`) y NO registra presencia ni conexion de
+      // batalla; el socket sigue abierto para leer el resultado.
+      if (result.status !== BattleRoomStatus.Finished) {
+        state.battleRoomId = roomId
+        this.presence.markPresent(roomId, subject)
+      }
+
+      sendJson(client, {
+        type: 'resume.ok',
+        roomId,
+        seq: delivered,
+        // HU-21 (contrato §6.3): instante del servidor al confirmar, para que Web
+        // muestre las cuentas atras sin fiarse de su reloj.
+        serverTime: this.clock.now().toISOString(),
+      })
     } catch (error: unknown) {
       if (error instanceof RoomAccessForbiddenError) {
         sendJson(client, { type: 'command.rejected', code: 'NOT_A_PARTICIPANT' })

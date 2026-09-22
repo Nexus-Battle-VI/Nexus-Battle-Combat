@@ -29,6 +29,14 @@ export class InMemoryBattleRoomRepository implements BattleRoomRepositoryPort {
     return Promise.resolve(rooms)
   }
 
+  findInBattle(): Promise<readonly BattleRoom[]> {
+    const rooms = [...this.byId.values()]
+      .filter((snapshot) => snapshot.status === 'IN_BATTLE')
+      .map((snapshot) => BattleRoom.restore(snapshot))
+
+    return Promise.resolve(rooms)
+  }
+
   save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom> {
     const stored = this.byId.get(room.id)
     const storedVersion = stored?.version ?? 0

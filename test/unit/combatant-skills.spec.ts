@@ -4,6 +4,7 @@ import { createCombatProfile } from '../../src/domain/entities/CombatProfile'
 import { DomainError } from '../../src/domain/errors/DomainError'
 import { InvalidCombatProfileError } from '../../src/domain/errors/BattleErrors'
 import { battleWithCombat, combatProfileFixture } from '../fixtures/basic-attack'
+import { NOW } from '../fixtures/battle'
 import {
   EMBATE,
   EMBATE_ID,
@@ -340,7 +341,7 @@ describe('BattleState.completeTurn — cierra el turno propio y abre el siguient
       .withCombatant(combatant(start, 'A').withCooldown(SHIELD_STRIKE_ID, 1).withPower(5))
       .withCombatant(combatant(start, 'B').withPower(4))
 
-    const next = withState.completeTurn()
+    const next = withState.completeTurn(NOW)
 
     // A termina su turno: su recarga se cierra, su Poder no cambia.
     expect(combatant(next, 'A').cooldownOf(SHIELD_STRIKE_ID)).toBe(0)
@@ -350,7 +351,7 @@ describe('BattleState.completeTurn — cierra el turno propio y abre el siguient
   })
 
   it('el primer turno no regenera nada: la batalla inicia con el Poder completo', () => {
-    const next = stateOf().completeTurn()
+    const next = stateOf().completeTurn(NOW)
 
     expect(combatant(next, 'B').currentPower).toBe(10)
   })
@@ -380,7 +381,7 @@ describe('BattleState.completeTurn — cierra el turno propio y abre el siguient
       state = state.withCombatant(low(label, seat))
     }
 
-    const next = state.completeTurn()
+    const next = state.completeTurn(NOW)
     const seen = (label: string, seat: number): { power: number | null; cooldown: number } => {
       const found = next.combatantFor({ teamLabel: label, seat })
 
@@ -410,21 +411,21 @@ describe('BattleState.completeTurn — cierra el turno propio y abre el siguient
   it('una batalla anterior a HU-19 conserva el snapshot TAL CUAL (misma referencia)', () => {
     const old = stateOf(battleWithCombat())
 
-    expect(old.completeTurn().combatants).toBe(old.combatants)
+    expect(old.completeTurn(NOW).combatants).toBe(old.combatants)
   })
 
   it('una batalla sin snapshot de combate avanza igual y sigue sin combatientes', () => {
     const none = stateOf(battleWithCombat({ withCombat: false }))
 
-    expect(none.completeTurn().combatants).toBeNull()
-    expect(none.completeTurn().turnsCompleted).toBe(1)
+    expect(none.completeTurn(NOW).combatants).toBeNull()
+    expect(none.completeTurn(NOW).turnsCompleted).toBe(1)
   })
 
   it('el Poder regenerado nunca supera el maximo', () => {
     const start = stateOf()
     const almostFull = start.withCombatant(combatant(start, 'B').withPower(9))
 
-    expect(combatant(almostFull.completeTurn(), 'B').currentPower).toBe(10)
+    expect(combatant(almostFull.completeTurn(NOW), 'B').currentPower).toBe(10)
   })
 })
 

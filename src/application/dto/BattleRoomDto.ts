@@ -1,4 +1,5 @@
 import type { BattleRoom } from '../../domain/entities/BattleRoom'
+import type { BattleResult } from '../../domain/entities/BattleResult'
 import type { BattleView } from '../../domain/entities/BattleState'
 
 export interface ParticipantDto {
@@ -34,6 +35,11 @@ export interface BattleRoomDto {
   readonly lastSeq: number
   /** Batalla en curso (HU-17); `null` mientras la sala no este `IN_BATTLE`. */
   readonly battle: BattleView | null
+  /**
+   * HU-21: resultado unico si la sala esta `FINISHED`; `null` en otro caso. Misma
+   * visibilidad que `battle` (el `GET` autenticado ya exigia ser participante).
+   */
+  readonly result: BattleResult | null
 }
 
 export const toBattleRoomDto = (room: BattleRoom): BattleRoomDto => {
@@ -50,6 +56,7 @@ export const toBattleRoomDto = (room: BattleRoom): BattleRoomDto => {
     version: snapshot.version,
     lastSeq: room.lastSeq,
     battle: room.battleView(),
+    result: room.result,
   }
 }
 

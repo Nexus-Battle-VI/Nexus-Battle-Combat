@@ -33,7 +33,7 @@
 | Moderación                | Fuera de HU-13 (§7.3.3 habla de comentarios, no del chat de juego); se conserva el remitente en el servidor para no cerrar esa puerta | —                                         |
 | Persistencia              | Se persiste con caducidad configurable                                                                                                | `CHAT_RETENTION_HOURS`                    |
 
-**Sin ninguna fuente, elegido por quien implementó** (el PO debe fijarlo o confirmarlo): **retención de 7 días** (`CHAT_RETENTION_HOURS=168`); historial de 50 mensajes al suscribirse (`CHAT_HISTORY_LIMIT`); umbral de consumidor lento de 1 MiB; 64 comandos de chat en cola por conexión; formato exacto de los mensajes y códigos de rechazo; **chat abierto también durante la batalla (`IN_BATTLE`)**, derivado de «sala activa» (ningún documento trata el chat de sala en batalla; el estado de batalla terminada lo decidirá HU-21).
+**Sin ninguna fuente, elegido por quien implementó** (el PO debe fijarlo o confirmarlo): **retención de 7 días** (`CHAT_RETENTION_HOURS=168`); historial de 50 mensajes al suscribirse (`CHAT_HISTORY_LIMIT`); umbral de consumidor lento de 1 MiB; 64 comandos de chat en cola por conexión; formato exacto de los mensajes y códigos de rechazo; **chat abierto también durante la batalla (`IN_BATTLE`)** y **cerrado al finalizar (`FINISHED`, HU-21)**, derivado de «sala activa» (ningún documento trata el chat de sala en batalla: pendiente de ratificar por el PO).
 
 ## Protocolo
 
@@ -122,7 +122,7 @@ HU-17 (PR #26, ya en `develop`) implementó el ticket de un solo uso, `seq` por 
 | Migración                | La de HU-17 es `005-battle-rooms-battle-state`; la del chat pasó a `006-chat-messages`. Ambas eran «la 005». El registro (`_migrations`) identifica cada migración por su **nombre completo**, así que con nombres distintos se habrían aplicado igual en el orden de la lista de `database.ts`; se renumeró para conservar una secuencia única y evitar la confusión de dos «005». |
 | Estados de sala          | HU-17 añadió `IN_BATTLE`. La tabla exhaustiva de `ChatAccessPolicy` **impidió compilar** hasta decidirlo: queda abierto (ver «Clasificación»).                                                                                                                                                                                                                                      |
 
-**Lo que sigue pendiente de coordinar con quien lleva HU-17:** (a) el contrato `docs/contracts/hu-13-chat-v1.md` ya se alineó con el ticket (Infrastructure #118, integrado en `develop`); falta que quien lleva HU-17 confirme que su descripción del ticket y del latido coincide con lo que implementó; (b) HU-21 (fin de batalla) añadirá un estado final y decidirá si su chat se cierra; (c) HU-18/HU-19 añadirán comandos de combate por este mismo gateway y por la misma vía de enrutado.
+**Lo que sigue pendiente de coordinar con quien lleva HU-17:** (a) el contrato `docs/contracts/hu-13-chat-v1.md` ya se alineó con el ticket (Infrastructure #118, integrado en `develop`); falta que quien lleva HU-17 confirme que su descripción del ticket y del latido coincide con lo que implementó; (b) HU-21 (fin de batalla) ya añadió el estado terminal `FINISHED` y **cierra el chat de la sala**; la decisión está pendiente de ratificar por el PO; (c) HU-18/HU-19 añadieron comandos de combate por este mismo gateway y por la misma vía de enrutado.
 
 ## Seguridad y privacidad
 

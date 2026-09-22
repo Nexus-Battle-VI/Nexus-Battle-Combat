@@ -116,7 +116,7 @@ El cliente no aporta costo, Poder, recarga, efectos, Ataque, Defensa, Daño, Vid
 - **HU-17 / HU-18:** se reutiliza la cola, `seq`, `resume`/`snapshot`, `BattleState.completeTurn` y el ataque básico (para la degradación). `basicAttackResolved` gana el campo opcional `degradedFrom` (aditivo).
 - **HU-20 / HU-24 / HU-25:** se reutilizan sin reescribirlos.
 - **HU-12 (abierta):** la habilidad **rechaza** objetivos del mismo equipo (`SAME_TEAM_TARGET`); no implementa curación ni habilidades sobre aliados.
-- **HU-21 (abierta):** una Vida en 0 no finaliza la batalla; un participante sin Vida no puede ser objetivo ni actuar (igual que HU-18).
+- **HU-21 (implementada):** una Vida en 0 finaliza la batalla si deja a un equipo sin héroes (la habilidad letal arrastra `battleFinished` en su misma escritura); un participante sin Vida no puede ser objetivo ni actuar (igual que HU-18).
 - **HU-31 (abierta):** la épica queda fuera.
 
 ## Pruebas

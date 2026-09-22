@@ -1,14 +1,11 @@
 import 'reflect-metadata'
 
-import type { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicAttackRealtimeHandler'
-import type { SkillRealtimeHandler } from '../../src/adapters/inbound/ws/SkillRealtimeHandler'
 import {
   AUTH_TIMEOUT_MS,
-  BattleRoomRealtimeGateway,
   HEARTBEAT_INTERVAL_MS,
   MAX_MESSAGE_BYTES,
+  type BattleRoomRealtimeGateway,
 } from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
-import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryRealtimeTicketStore } from '../../src/adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import type { RealtimeTicketCodecPort } from '../../src/application/ports/RealtimeTicketPort'
@@ -18,7 +15,11 @@ import {
   IssueRealtimeTicket,
 } from '../../src/application/use-cases/RealtimeTickets'
 import { ResumeBattle } from '../../src/application/use-cases/ResumeBattle'
-import { ROOM_ID, clock, inBattleRoom, preparingRoom, silentLogger } from '../fixtures/battle'
+import { ROOM_ID, NOW, clock, inBattleRoom, preparingRoom } from '../fixtures/battle'
+import { buildGateway } from '../fixtures/gateway'
+import { mutableClock } from '../fixtures/finalization'
+import { InMemoryBattleDeadlineBook } from '../../src/adapters/outbound/system/InMemoryBattleDeadlineBook'
+import { InMemoryBattlePresenceRegistry } from '../../src/adapters/outbound/system/InMemoryBattlePresenceRegistry'
 
 /**
  * Gateway WebSocket de Combat (ADR-020, HU-17): ticket de un solo uso, `seq`,
@@ -104,36 +105,15 @@ const codec: RealtimeTicketCodecPort = {
   hash: (ticket) => `h:${ticket}`,
 }
 
-/**
- * Esta suite prueba tickets, `seq`, `resume` y latido, no el chat (HU-13): el
- * manejador de chat es un doble inerte. El chat sobre el gateway real lo cubren
- * `chat-gateway.spec.ts` y `test/integration/chat-realtime.spec.ts`.
- */
-const noChat = {
-  handle: jest.fn().mockResolvedValue(undefined),
-  onDisconnect: jest.fn(),
-  onRoomUpdated: jest.fn().mockResolvedValue(undefined),
-} as unknown as ChatRealtimeHandler
-
-/** El ataque basico (HU-18) tiene su propia suite: aqui el gateway no lo ejerce. */
-const noAttack = { handle: jest.fn() } as unknown as BasicAttackRealtimeHandler
-
-/** La habilidad (HU-19) tiene su propia suite: aqui el gateway no la ejerce. */
-const noSkill = { handle: jest.fn() } as unknown as SkillRealtimeHandler
-
 const world = (resume?: (repo: InMemoryBattleRoomRepository) => ResumeBattle) => {
   const repo = new InMemoryBattleRoomRepository()
   const store = new InMemoryRealtimeTicketStore()
   const issue = new IssueRealtimeTicket(codec, store, clock)
-  const gateway = new BattleRoomRealtimeGateway(
-    new ConsumeRealtimeTicket(codec, store, clock),
-    repo,
-    resume?.(repo) ?? new ResumeBattle(repo),
-    silentLogger,
-    noChat,
-    noAttack,
-    noSkill,
-  )
+  const gateway = buildGateway({
+    consumeTicket: new ConsumeRealtimeTicket(codec, store, clock),
+    rooms: repo,
+    resumeBattle: resume?.(repo) ?? new ResumeBattle(repo),
+  })
 
   const connect = async (subject: string | null): Promise<FakeSocket> => {
     const socket = new FakeSocket()
@@ -202,15 +182,11 @@ describe('BattleRoomRealtimeGateway — autenticacion por ticket (ADR-020)', () 
     const repo = new InMemoryBattleRoomRepository()
     const store = new InMemoryRealtimeTicketStore()
     const past = { now: () => new Date(clock.now().getTime() - 60_000) }
-    const gateway = new BattleRoomRealtimeGateway(
-      new ConsumeRealtimeTicket(codec, store, clock),
-      repo,
-      new ResumeBattle(repo),
-      silentLogger,
-      noChat,
-      noAttack,
-      noSkill,
-    )
+    const gateway = buildGateway({
+      consumeTicket: new ConsumeRealtimeTicket(codec, store, clock),
+      rooms: repo,
+      resumeBattle: new ResumeBattle(repo),
+    })
     const { ticket } = new IssueRealtimeTicket(codec, store, past).execute('a1')
     const socket = new FakeSocket()
 
@@ -389,9 +365,9 @@ describe('BattleRoomRealtimeGateway — batalla: battleStarted, seq, resume y sn
       seq: 1,
       status: 'IN_BATTLE',
     })
-    expect(ok).toEqual({ type: 'resume.ok', roomId: ROOM_ID, seq: 1 })
+    // HU-21 (aditivo): `resume.ok` gana `serverTime`; lo demas no cambia.
+    expect(ok).toMatchObject({ type: 'resume.ok', roomId: ROOM_ID, seq: 1 })
   })
-
   it('resume con lastSeq: REENVIA en orden los eventos posteriores (replay) y termina con resume.ok', async () => {
     const { connect, repo } = await setup()
     const useCase = new CompleteBattleTurn(repo, clock, { publish: () => undefined })
@@ -687,7 +663,7 @@ describe('BattleRoomRealtimeGateway — resume sin perdida de eventos (carrera l
     const received = socket.messages().slice(1)
 
     expect(received.map((message) => message.seq)).toEqual([4, 4])
-    expect(received.at(-1)).toEqual({ type: 'resume.ok', roomId: ROOM_ID, seq: 4 })
+    expect(received.at(-1)).toMatchObject({ type: 'resume.ok', roomId: ROOM_ID, seq: 4 })
   })
 
   it('un NO participante nunca recibe lo retenido: command.rejected y nada mas, tampoco despues', async () => {
@@ -778,5 +754,160 @@ describe('BattleRoomRealtimeGateway — latido (ADR-020)', () => {
     jest.advanceTimersByTime(HEARTBEAT_INTERVAL_MS * 4)
 
     expect(socket.pings).toBe(0)
+  })
+})
+
+describe('BattleRoomRealtimeGateway — presencia, gracia y liberacion (HU-21)', () => {
+  const at = (offsetMs: number): Date => new Date(NOW.getTime() + offsetMs)
+
+  const presenceWorld = async (room = inBattleRoom()) => {
+    const repo = new InMemoryBattleRoomRepository()
+    const store = new InMemoryRealtimeTicketStore()
+    const time = mutableClock(NOW)
+    const issue = new IssueRealtimeTicket(codec, store, time)
+    const presence = new InMemoryBattlePresenceRegistry()
+    const book = new InMemoryBattleDeadlineBook()
+    const gateway = buildGateway({
+      consumeTicket: new ConsumeRealtimeTicket(codec, store, time),
+      rooms: repo,
+      resumeBattle: new ResumeBattle(repo),
+      presence,
+      book,
+      clock: time,
+      options: { authTimeoutMs: 60_000, heartbeatIntervalMs: 60_000 },
+    })
+
+    await repo.save(room, 0)
+
+    const connect = async (subject: string): Promise<FakeSocket> => {
+      const socket = new FakeSocket()
+
+      gateway.handleConnection(socket)
+      socket.emit({ type: 'auth', ticket: issue.execute(subject).ticket })
+      await flush()
+
+      return socket
+    }
+    const resume = async (socket: FakeSocket, lastSeq?: number): Promise<void> => {
+      socket.emit({
+        type: 'resume',
+        roomId: ROOM_ID,
+        ...(lastSeq === undefined ? {} : { lastSeq }),
+      })
+      await flush()
+    }
+
+    return { repo, gateway, presence, book, time, connect, resume, room }
+  }
+
+  it('S-07: cerrar una de dos pestanas NO ausenta; cerrar la ultima si, y programa la gracia', async () => {
+    const { gateway, presence, book, connect, resume, time } = await presenceWorld()
+    const first = await connect('a1')
+    const second = await connect('a1')
+
+    await resume(first)
+    await resume(second)
+
+    expect(presence.absences(ROOM_ID).size).toBe(0)
+
+    first.close()
+
+    expect(presence.absences(ROOM_ID).has('a1')).toBe(false)
+
+    time.advance(5_000)
+    second.close()
+
+    expect(presence.absences(ROOM_ID).get('a1')).toEqual(at(5_000))
+    expect(book.dueRooms(at(34_999))).toEqual([])
+    expect(book.dueRooms(at(35_000))).toEqual([ROOM_ID])
+    expect(gateway.isConnected(ROOM_ID, 'a1')).toBe(false)
+  })
+
+  it('S-06: un resume dentro de la gracia la cancela', async () => {
+    const { presence, connect, resume } = await presenceWorld()
+    const first = await connect('a1')
+
+    await resume(first)
+    first.close()
+
+    expect(presence.absences(ROOM_ID).has('a1')).toBe(true)
+
+    const again = await connect('a1')
+
+    await resume(again)
+
+    expect(presence.absences(ROOM_ID).has('a1')).toBe(false)
+  })
+
+  it('la suscripcion de lobby NO cuenta como conexion de batalla', async () => {
+    const { presence, book, connect } = await presenceWorld()
+    const socket = await connect('a1')
+
+    socket.emit({ type: 'subscribe', roomId: ROOM_ID })
+    await flush()
+    socket.close()
+
+    expect(presence.absences(ROOM_ID).size).toBe(0)
+    expect(book.dueRooms(new Date(NOW.getTime() + 999_999))).toEqual([])
+  })
+
+  it('`resume.ok` trae el instante del servidor para las cuentas atras', async () => {
+    const { connect, resume } = await presenceWorld()
+    const socket = await connect('a1')
+
+    await resume(socket)
+
+    expect(socket.messages().find((message) => message.type === 'resume.ok')).toMatchObject({
+      roomId: ROOM_ID,
+      serverTime: NOW.toISOString(),
+    })
+  })
+
+  it('`release` desuscribe sin cerrar sockets y deja de difundir a esas conexiones', async () => {
+    const { gateway, connect, resume, room } = await presenceWorld()
+    const socket = await connect('a1')
+
+    await resume(socket)
+    gateway.release(ROOM_ID)
+
+    socket.sent.length = 0
+
+    const event = room.events[0]
+
+    if (event === undefined) {
+      throw new Error('la sala de prueba necesita su primer evento')
+    }
+
+    gateway.publish(ROOM_ID, [event])
+
+    expect(socket.readyState).toBe(1)
+    expect(socket.sent).toEqual([])
+  })
+
+  it('cerrar una conexion ya liberada NO abre gracia', async () => {
+    const { gateway, presence, connect, resume } = await presenceWorld()
+    const socket = await connect('a1')
+
+    await resume(socket)
+    gateway.release(ROOM_ID)
+    socket.close()
+
+    expect(presence.absences(ROOM_ID).size).toBe(0)
+  })
+
+  it('S-22: un `resume` sobre una sala FINISHED entrega el resultado y no registra presencia', async () => {
+    const finished = inBattleRoom().finish({ reason: 'TIME_LIMIT' }, NOW)
+    const { gateway, presence, connect, resume } = await presenceWorld(finished)
+    const socket = await connect('a1')
+
+    await resume(socket)
+
+    expect(socket.messages().find((message) => message.type === 'snapshot')).toMatchObject({
+      status: 'FINISHED',
+      result: { reason: 'TIME_LIMIT', outcome: 'NO_WINNER' },
+    })
+    expect(socket.messages().some((message) => message.type === 'resume.ok')).toBe(true)
+    expect(presence.absences(ROOM_ID).size).toBe(0)
+    expect(gateway.isConnected(ROOM_ID, 'a1')).toBe(false)
   })
 })

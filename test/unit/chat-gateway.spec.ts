@@ -1,11 +1,6 @@
 import 'reflect-metadata'
 
-import {
-  BattleRoomRealtimeGateway,
-  type RealtimeGatewayOptions,
-} from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
-import type { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicAttackRealtimeHandler'
-import type { SkillRealtimeHandler } from '../../src/adapters/inbound/ws/SkillRealtimeHandler'
+import type { RealtimeGatewayOptions } from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
 import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
 import type { RealtimeSocket } from '../../src/adapters/inbound/ws/RealtimeSocket'
 import { InMemoryRealtimeTicketStore } from '../../src/adapters/outbound/realtime/InMemoryRealtimeTicketStore'
@@ -25,6 +20,7 @@ import {
   uuid,
 } from '../fixtures/chat-harness'
 import { FakeSocket, flush } from '../fixtures/fake-socket'
+import { buildGateway } from '../fixtures/gateway'
 
 /**
  * El chat dentro del gateway (HU-13). El gateway y su autenticacion por ticket
@@ -60,16 +56,14 @@ describe('BattleRoomRealtimeGateway con chat (HU-13)', () => {
     const harness = buildChatHarness()
     const { logger, logs } = recordingLogger()
     const { consume, issue } = ticketing(harness.clock)
-    const gateway = new BattleRoomRealtimeGateway(
-      consume,
-      harness.rooms,
-      new ResumeBattle(harness.rooms),
+    const gateway = buildGateway({
+      consumeTicket: consume,
+      rooms: harness.rooms,
+      resumeBattle: new ResumeBattle(harness.rooms),
       logger,
-      chat ?? harness.handler,
-      { handle: jest.fn() } as unknown as BasicAttackRealtimeHandler,
-      { handle: jest.fn() } as unknown as SkillRealtimeHandler,
+      chat: chat ?? harness.handler,
       options,
-    )
+    })
 
     /** Conecta y se autentica con un ticket real del almacen (consumirlo es sincrono). */
     const connect = (subject = 'ana'): FakeSocket => {

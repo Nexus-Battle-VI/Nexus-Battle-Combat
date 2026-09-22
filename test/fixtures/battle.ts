@@ -211,6 +211,7 @@ export const loggingRepository = (
 ): BattleRoomRepositoryPort => ({
   findById: (id) => inner.findById(id),
   findWaitingForPlayers: () => inner.findWaitingForPlayers(),
+  findInBattle: () => inner.findInBattle(),
   save: async (room, expectedVersion) => {
     const saved = await inner.save(room, expectedVersion)
 
