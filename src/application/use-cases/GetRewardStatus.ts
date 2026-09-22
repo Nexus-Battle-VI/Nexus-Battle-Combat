@@ -8,6 +8,14 @@ export const RewardDeliveryStatus = {
   None: 'NONE',
   Pending: 'PENDING',
   Confirmed: 'CONFIRMED',
+  /**
+   * `TERMINAL_FAILURE` (HU-22, corregido en revision): un estado terminal
+   * PUBLICO y distinguible de `Pending`, para que el consumidor deje de
+   * sondear -- un `TERMINAL_FAILURE` nunca avanza solo (contrato §8), asi
+   * que devolverlo como `Pending` invitaba a un sondeo indefinido sin que
+   * nada fuera a cambiar jamas.
+   */
+  Failed: 'FAILED',
 } as const
 
 export type RewardDeliveryStatus = (typeof RewardDeliveryStatus)[keyof typeof RewardDeliveryStatus]
@@ -83,9 +91,14 @@ const deliveryStatusOf = (workflow: RewardWorkflowSnapshot): RewardDeliveryStatu
     return RewardDeliveryStatus.Pending
   }
 
-  if (workflow.state === RewardWorkflowState.TerminalFailure && workflow.chestEarned === true) {
-    // Nunca se muestra "entregado" sin confirmacion real (HU-22 §88/§9).
-    return RewardDeliveryStatus.Pending
+  if (workflow.state === RewardWorkflowState.TerminalFailure) {
+    // Terminal SIEMPRE se distingue de "en curso": nada va a cambiar sin
+    // intervencion (ningun barrido reintenta un TERMINAL_FAILURE, contrato
+    // §8). Independiente de `chestEarned`: tanto un credito rechazado
+    // (chestEarned aun null) como una entrega de cofre que nunca completo
+    // (chestEarned true) son, para quien consulta, la misma cosa -- "esto ya
+    // no va a resolverse solo".
+    return RewardDeliveryStatus.Failed
   }
 
   return RewardDeliveryStatus.None

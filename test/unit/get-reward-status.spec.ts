@@ -131,7 +131,7 @@ describe('GetRewardStatus', () => {
     expect(status.rewardDelivery).toBe(RewardDeliveryStatus.None)
   })
 
-  it('TERMINAL_FAILURE con cofre ganado: delivery PENDING, nunca CONFIRMED sin confirmacion real', async () => {
+  it('TERMINAL_FAILURE con cofre ganado: delivery FAILED, nunca CONFIRMED sin confirmacion real ni PENDING indefinido', async () => {
     const repository = new InMemoryRewardWorkflowRepository()
     const workflow = await repository.createIfAbsent(intent(), 'op-1')
     await repository.applyWalletResult(workflow.id, {
@@ -144,7 +144,21 @@ describe('GetRewardStatus', () => {
 
     const status = await new GetRewardStatus(repository).execute('room-1', 'sub-1')
 
-    expect(status.rewardDelivery).toBe(RewardDeliveryStatus.Pending)
+    expect(status.rewardDelivery).toBe(RewardDeliveryStatus.Failed)
+    // El saldo y el progreso ya confirmados por Wallet siguen visibles: solo
+    // fallo la entrega del cofre, el credito ya acreditado no se revierte.
+    expect(status).toMatchObject({ balance: 20, chestEarned: true })
+  })
+
+  it('TERMINAL_FAILURE antes de confirmar el credito (Wallet rechazo terminal): delivery FAILED, no NONE ni PENDING', async () => {
+    const repository = new InMemoryRewardWorkflowRepository()
+    const workflow = await repository.createIfAbsent(intent(), 'op-1')
+    await repository.applyTerminalFailure(workflow.id, 'wallet: monto_invalido')
+
+    const status = await new GetRewardStatus(repository).execute('room-1', 'sub-1')
+
+    expect(status.rewardDelivery).toBe(RewardDeliveryStatus.Failed)
+    expect(status.balance).toBeNull()
   })
 
   it('solo devuelve el estado del jugador consultado, no el de otro', async () => {

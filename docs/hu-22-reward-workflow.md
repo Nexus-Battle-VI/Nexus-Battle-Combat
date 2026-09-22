@@ -69,6 +69,8 @@ Cada llamada saliente (Wallet, Inventory) ocurre solo después de persistir la i
 
 Ningún fallo revierte un crédito ya acreditado por Wallet (HU-22 §66). Un fallo transitorio (503, timeout) dobla como reintentable: no cambia de estado, queda para el siguiente barrido. Un rechazo terminal (409 con payload distinto, 422) mueve el workflow a `TERMINAL_FAILURE`: no se reintenta solo.
 
+**Corrección** (encontrada en revisión): `GetRewardStatus` mapeaba un `TERMINAL_FAILURE` con `chestEarned === true` a `rewardDelivery: PENDING` — indistinguible, para quien consulta, de una entrega que sigue en curso. Como ningún barrido reintenta un `TERMINAL_FAILURE` (no es transitorio, es terminal por diseño), esa entrega jamás iba a resolverse sola: un consumidor que se detiene solo en `CONFIRMED` (Web, por ejemplo) quedaba sondeando para siempre algo que nunca iba a cambiar. Se añadió `rewardDelivery: FAILED`, devuelto para CUALQUIER `TERMINAL_FAILURE` (con o sin cofre ganado — un crédito rechazado antes de saber si corresponde cofre es el mismo problema para quien consulta). `balance`/`victoryProgress`/`chestEarned` ya confirmados por Wallet, si los hubo, se siguen mostrando: fallar la entrega del cofre no revierte el crédito.
+
 ## Events
 
 `GET /v1/combat/rooms/:roomId/reward` es la vía de recuperación; Web se entera de que algo cambió por `battle-room.updated` (ya existente, HU-21) y reconsulta — no se añade un segundo socket ni un tipo de evento WS nuevo.
