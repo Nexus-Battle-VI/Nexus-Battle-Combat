@@ -320,16 +320,19 @@ describe('BattleRoom.applyBasicAttack — UNA sola transicion', () => {
     },
   )
 
-  it('overkill: la Vida queda en 0 (nunca negativa) y se conserva el dano calculado', () => {
+  it('overkill: la Vida queda en 0 y el golpe letal finaliza con el evento de la accion intacto', () => {
     const room = battleWithCombat({ health: { 'B#0': 3 } })
     const { after } = applied(hit({ effect: 'CRITICAL_DAMAGE', percent: 180, baseDamage: 6 }), room)
 
     expect(healthOf(after, 'B')).toEqual({ current: 0, max: 44 })
-    expect((after.events.at(-1)?.payload as { resolution: unknown }).resolution).toMatchObject({
+    // HU-21: el golpe letal anade `battleFinished` DESPUES del evento de la accion,
+    // que conserva su resolucion (calculado 10, aplicado 3).
+    expect(after.status).toBe('FINISHED')
+    expect((after.events.at(-2)?.payload as { resolution: unknown }).resolution).toMatchObject({
       calculatedDamage: 10,
       appliedDamage: 3,
     })
-    expect(after.battle?.turnsCompleted).toBe(1)
+    expect(after.events.at(-1)?.type).toBe(BattleEventType.BattleFinished)
   })
 
   it('SOLO cambia la Vida del objetivo: el atacante y los demas quedan intactos (2v2)', () => {
@@ -580,7 +583,7 @@ describe('Snapshot de combate en BattleState', () => {
   it('completeTurn conserva el snapshot de combate', () => {
     const state = battleWithCombat().battle
 
-    expect(state?.completeTurn().combatants).toBe(state?.combatants)
+    expect(state?.completeTurn(NOW).combatants).toBe(state?.combatants)
   })
 
   it('ROOM_ID de los fixtures sigue siendo el battleId de la vista', () => {

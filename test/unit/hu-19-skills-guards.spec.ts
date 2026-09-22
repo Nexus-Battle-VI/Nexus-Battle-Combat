@@ -148,7 +148,8 @@ describe('HU-19 — una sola escritura', () => {
     expect(apply).toMatch(/\.withPower\(/)
     expect(apply).toMatch(/\.withCooldown\(/)
     expect(apply).toMatch(/\.withCombatant\(/)
-    expect(apply).toMatch(/\.completeTurn\(\)/)
+    // HU-21: el avance recibe el instante del servidor (`completeTurn(at)`).
+    expect(apply).toMatch(/\.completeTurn\(at\)/)
     expect(apply).toMatch(/handledCommands: \[\.\.\.this\.handledCommands/)
     expect(apply).toMatch(/BattleEventType\.SkillUsed/)
   })

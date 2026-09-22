@@ -129,11 +129,14 @@ export class UseSkill {
     // comprobo (planSkill) o se comprueba en `prepare`, que no sortea.
     const prepared = this.prepare(plan)
     const outcome = this.resolve(plan, prepared)
+    // HU-21: una habilidad letal arrastra `battleFinished` en la misma escritura;
+    // el evento de la ACCION es el que se construye con este `seq`.
+    const actionSeq = room.lastSeq + 1
     const next = room.applySkill(plan, outcome, input.commandId, this.clock.now())
 
     try {
       const saved = await this.rooms.save(next, room.version)
-      const event = saved.events[saved.events.length - 1]
+      const event = saved.events.find((candidate) => candidate.seq === actionSeq)
 
       if (event === undefined) {
         throw new DomainError('La habilidad se guardo sin su evento.')

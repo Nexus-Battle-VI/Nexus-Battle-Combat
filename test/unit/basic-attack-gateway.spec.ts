@@ -358,6 +358,7 @@ describe('Gateway — comando attack (HU-18)', () => {
       'battleId',
       'combatants',
       'currentTurn',
+      'deadlines',
       'round',
       'startedAt',
       'turnOrder',

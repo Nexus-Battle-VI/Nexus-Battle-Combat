@@ -1,6 +1,7 @@
 import { Int32 } from 'mongodb'
 
 import type { BattleRoomSnapshot } from '../../../domain/entities/BattleRoom'
+import { parseBattleResult } from '../../../domain/entities/BattleResult'
 import type { BattleEvent, HandledCommand } from '../../../domain/entities/BattleEvent'
 import type { BattleStateSnapshot } from '../../../domain/entities/BattleState'
 import type { CombatantSnapshot } from '../../../domain/entities/Combatant'
@@ -58,6 +59,12 @@ export interface RewardDocument {
  */
 export interface BattleDocument {
   readonly startedAt: Date
+  /**
+   * HU-21 (migracion 009): inicio del turno vigente. Aditivo y opcional: una
+   * batalla anterior a HU-21 no lo tiene y su turno se considera iniciado en
+   * `startedAt`; no hay backfill.
+   */
+  readonly turnStartedAt?: Date
   readonly turnOrder: readonly TurnOrderEntry[]
   readonly turnsCompleted: Int32 | number
   /**
@@ -98,6 +105,12 @@ export interface BattleRoomDocument {
   readonly battle?: BattleDocument | null
   readonly events?: readonly BattleEventDocument[]
   readonly handledCommands?: readonly HandledCommandDocument[]
+  /**
+   * HU-21 (migracion 009): resultado unico de una sala FINISHED. JSON puro con
+   * la forma exacta del contrato §5. Aditivo y opcional: un documento anterior a
+   * HU-21 no lo tiene y se restaura como `null` (y su estado nunca es FINISHED).
+   */
+  readonly result?: Readonly<Record<string, unknown>> | null
 }
 
 const toInt = (value: Int32 | number, field: string, roomId: string): number => {
@@ -150,6 +163,10 @@ export const toSnapshot = (document: BattleRoomDocument): BattleRoomSnapshot => 
       commandId: handled.commandId,
       seq: toInt(handled.seq, 'handledCommands.seq', document._id),
     })),
+    result:
+      document.result === undefined || document.result === null
+        ? null
+        : parseBattleResult(document.result),
   }
 }
 
@@ -158,6 +175,11 @@ const toBattleSnapshot = (document: BattleRoomDocument): BattleStateSnapshot | n
     ? null
     : {
         startedAt: document.battle.startedAt,
+        // Aditivo (HU-21): ausente en una batalla anterior; `BattleState.restore`
+        // lo trata como `startedAt`, sin reescribir el documento.
+        ...(document.battle.turnStartedAt === undefined
+          ? {}
+          : { turnStartedAt: document.battle.turnStartedAt }),
         turnOrder: document.battle.turnOrder.map((entry) => ({ ...entry })),
         turnsCompleted: toInt(
           document.battle.turnsCompleted,
@@ -201,6 +223,7 @@ export const toDocument = (snapshot: BattleRoomSnapshot): BattleRoomDocument => 
       ? null
       : {
           startedAt: snapshot.battle.startedAt,
+          turnStartedAt: snapshot.battle.turnStartedAt ?? snapshot.battle.startedAt,
           turnOrder: snapshot.battle.turnOrder.map((entry) => ({ ...entry })),
           turnsCompleted: snapshot.battle.turnsCompleted,
           // Solo se escribe cuando existe: una batalla anterior a HU-18 no se rellena.
@@ -215,4 +238,7 @@ export const toDocument = (snapshot: BattleRoomSnapshot): BattleRoomDocument => 
     payload: event.payload as unknown as Readonly<Record<string, unknown>>,
   })),
   handledCommands: snapshot.handledCommands.map((handled) => ({ ...handled })),
+  // JSON puro, igual que el `payload` de un evento: el documento guarda la
+  // forma validada por `parseBattleResult`, no el objeto tipado del dominio.
+  result: snapshot.result as unknown as Readonly<Record<string, unknown>> | null,
 })

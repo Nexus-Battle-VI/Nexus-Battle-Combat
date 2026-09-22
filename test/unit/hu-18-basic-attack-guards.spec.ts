@@ -136,7 +136,8 @@ describe('HU-18 — una sola escritura y ninguna resta de Ataque', () => {
     )
 
     expect(apply).toMatch(/withCombatant\(/)
-    expect(apply).toMatch(/\.completeTurn\(\)/)
+    // HU-21: el avance recibe el instante del servidor (`completeTurn(at)`).
+    expect(apply).toMatch(/\.completeTurn\(at\)/)
     expect(apply).toMatch(/handledCommands: \[\.\.\.this\.handledCommands/)
     expect(apply).toMatch(/BattleEventType\.BasicAttackResolved/)
   })

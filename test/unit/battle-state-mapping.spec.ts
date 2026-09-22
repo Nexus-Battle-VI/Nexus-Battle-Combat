@@ -50,6 +50,7 @@ describe('battle-room-mapping — batalla, eventos y comandos (HU-17, migracion 
     expect(Object.keys(document.battle ?? {}).sort()).toEqual([
       'startedAt',
       'turnOrder',
+      'turnStartedAt',
       'turnsCompleted',
     ])
     expect(document.battle?.turnOrder).toHaveLength(2)
@@ -147,6 +148,7 @@ describe('battle-room-mapping — snapshot de combate y ataque basico (HU-18, mi
       'combatants',
       'startedAt',
       'turnOrder',
+      'turnStartedAt',
       'turnsCompleted',
     ])
     expect(document.battle?.combatants).toHaveLength(2)

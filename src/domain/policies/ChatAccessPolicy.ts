@@ -21,13 +21,18 @@ import { BattleRoomStatus } from '../value-objects/BattleRoomStatus'
  * `IN_BATTLE` queda ABIERTO: es la sala mas activa que existe, y cerrar el chat
  * al empezar la batalla dejaria sin sentido «chat en sala de batalla». Ningun
  * documento lo fija (el oficial no trata el chat de sala): es una decision
- * tecnica derivada de «sala activa», pendiente de confirmar por el PO. Cuando
- * HU-21 anada el estado de batalla terminada, decidira ahi si su chat se cierra.
+ * tecnica derivada de «sala activa», pendiente de confirmar por el PO.
+ *
+ * HU-21 cierra el chat de una sala `FINISHED` (D8 del plan y contrato §8):
+ * terminada la batalla la sala ya no esta activa, y la notificacion
+ * `battle-room.updated` con ese estado hace que los suscriptores revaliden el
+ * acceso.
  */
 const ROOM_CHAT_OPEN: Readonly<Record<BattleRoomStatus, boolean>> = {
   [BattleRoomStatus.WaitingForPlayers]: true,
   [BattleRoomStatus.Preparing]: true,
   [BattleRoomStatus.InBattle]: true,
+  [BattleRoomStatus.Finished]: false,
   [BattleRoomStatus.Cancelled]: false,
 }
 

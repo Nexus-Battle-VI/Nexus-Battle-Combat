@@ -1,5 +1,6 @@
 import { DomainError } from '../errors/DomainError'
 import { InvalidBattleRosterError } from '../errors/BattleErrors'
+import { battleDeadline, turnDeadline } from '../policies/BattleTimingPolicy'
 import {
   Combatant,
   type CombatantKey,
@@ -13,6 +14,12 @@ export interface BattleStateSnapshot {
   readonly startedAt: Date
   readonly turnOrder: readonly TurnOrderEntry[]
   readonly turnsCompleted: number
+  /**
+   * HU-21: instante en que arranco el turno vigente. Ausente en las batallas
+   * anteriores a HU-21: el turno se considera iniciado en `startedAt` (contrato
+   * §12), sin rellenar el documento ni migrar nada.
+   */
+  readonly turnStartedAt?: Date
   /**
    * HU-18: snapshot de combate (perfil congelado y Vida actual por participante).
    * Ausente o `null` en las batallas anteriores a HU-18: se restauran sin Vida y
@@ -47,6 +54,25 @@ export interface BattleView {
    * ni efectos.
    */
   readonly combatants: readonly CombatantView[]
+  /**
+   * HU-21 (aditivo): instantes ABSOLUTOS en que vencen el turno y la batalla, para
+   * que Web pueda mostrar las cuentas atras con el reloj del servidor. Presente
+   * mientras la batalla esta en curso; AUSENTE en la vista final y en vistas
+   * anteriores a HU-21 (contrato §6.3). No es autoridad: llegar a 0 en pantalla no
+   * ejecuta nada.
+   */
+  readonly deadlines?: BattleViewDeadlines
+}
+
+/** Vencimientos publicados en la vista (contrato §6.3). */
+export interface BattleViewDeadlines {
+  readonly turnEndsAt: string
+  readonly battleEndsAt: string
+}
+
+/** Opciones de `BattleState.toView`: la vista final se construye sin `deadlines`. */
+export interface BattleViewOptions {
+  readonly withDeadlines?: boolean
 }
 
 const MIN_PARTICIPANTS = 2
@@ -65,6 +91,8 @@ export class BattleState {
   readonly startedAt: Date
   readonly turnOrder: readonly TurnOrderEntry[]
   readonly turnsCompleted: number
+  /** HU-21: instante en que arranco el turno vigente (para su temporizador de 30 s). */
+  readonly turnStartedAt: Date
   /** Snapshot de combate por participante (HU-18); `null` en una batalla anterior a HU-18. */
   readonly combatants: readonly Combatant[] | null
 
@@ -73,11 +101,13 @@ export class BattleState {
     turnOrder: readonly TurnOrderEntry[],
     turnsCompleted: number,
     combatants: readonly Combatant[] | null,
+    turnStartedAt: Date,
   ) {
     this.startedAt = startedAt
     this.turnOrder = turnOrder
     this.turnsCompleted = turnsCompleted
     this.combatants = combatants
+    this.turnStartedAt = turnStartedAt
   }
 
   /**
@@ -91,6 +121,7 @@ export class BattleState {
   ): BattleState {
     return BattleState.restore({
       startedAt,
+      turnStartedAt: startedAt,
       turnOrder,
       turnsCompleted: 0,
       combatants:
@@ -102,6 +133,14 @@ export class BattleState {
   static restore(snapshot: BattleStateSnapshot): BattleState {
     if (Number.isNaN(snapshot.startedAt.getTime())) {
       throw new DomainError('La fecha de inicio de la batalla no es valida.')
+    }
+
+    // HU-21: una batalla anterior no trae `turnStartedAt`; su turno vigente
+    // empezo con la batalla (contrato §12), sin reescribir el documento.
+    const turnStartedAt = snapshot.turnStartedAt ?? snapshot.startedAt
+
+    if (Number.isNaN(turnStartedAt.getTime())) {
+      throw new DomainError('La fecha de inicio del turno no es valida.')
     }
 
     if (
@@ -146,6 +185,7 @@ export class BattleState {
       Object.freeze(order.map((entry) => Object.freeze({ ...entry }))),
       snapshot.turnsCompleted,
       BattleState.restoreCombatants(snapshot.combatants ?? null, keys),
+      turnStartedAt,
     )
   }
 
@@ -210,16 +250,39 @@ export class BattleState {
    * le falta un turno menos) y abre el turno propio del siguiente (recupera +2 de Poder,
    * con tope). Es la unica regla de avance: `attack`, `useSkill` y el avance de HU-17 la
    * comparten, asi que ninguna accion puede olvidarse de la recarga ni de la regeneracion.
+   *
+   * HU-21 (contrato §4.1): el avance SALTA a los participantes sin Vida; cada
+   * posicion saltada cuenta como turno completado (`turnsCompleted` sube y la
+   * ronda se deriva igual). Los saltados no abren ni cierran turno propio: no
+   * juegan. Sin nadie con Vida lanza `DomainError` (una batalla en ese estado ya
+   * deberia haber finalizado por eliminacion).
+   *
+   * `at` es el instante del servidor (`ClockPort`) en que arranca el turno
+   * siguiente: es el origen de su temporizador de 30 s.
    */
-  completeTurn(): BattleState {
-    const turnsCompleted = this.turnsCompleted + 1
+  completeTurn(at: Date): BattleState {
+    const size = this.turnOrder.length
+    const finishing = this.currentEntry
 
     if (this.combatants === null) {
-      return new BattleState(this.startedAt, this.turnOrder, turnsCompleted, null)
+      // Batalla anterior a HU-18: sin Vida no hay saltos que dar.
+      return new BattleState(this.startedAt, this.turnOrder, this.turnsCompleted + 1, null, at)
     }
 
-    const finishing = this.currentEntry
-    const starting = this.turnOrder[turnsCompleted % this.turnOrder.length]
+    let advance = 1
+
+    while (
+      advance <= size &&
+      !BattleState.hasLifeAt(this.turnOrder, this.turnsCompleted + advance, this.combatants)
+    ) {
+      advance += 1
+    }
+
+    if (advance > size) {
+      throw new DomainError('No queda ningun participante con Vida al que ceder el turno.')
+    }
+
+    const starting = this.turnOrder[(this.turnsCompleted + advance) % size]
     const same = (combatant: Combatant, entry: CombatantKey | undefined): boolean =>
       combatant.teamLabel === entry?.teamLabel && combatant.seat === entry.seat
 
@@ -235,8 +298,68 @@ export class BattleState {
     return new BattleState(
       this.startedAt,
       this.turnOrder,
-      turnsCompleted,
+      this.turnsCompleted + advance,
       unchanged ? this.combatants : Object.freeze(advanced),
+      at,
+    )
+  }
+
+  /** `true` si el participante de esa posicion (absoluta) existe y tiene Vida. */
+  private static hasLifeAt(
+    turnOrder: readonly TurnOrderEntry[],
+    position: number,
+    combatants: readonly Combatant[],
+  ): boolean {
+    const entry = turnOrder[position % turnOrder.length]
+
+    if (entry === undefined) {
+      return false
+    }
+
+    const combatant = combatants.find(
+      (candidate) => candidate.teamLabel === entry.teamLabel && candidate.seat === entry.seat,
+    )
+
+    return combatant?.alive ?? false
+  }
+
+  /**
+   * HU-11 aplicada al FIN de la batalla (HU-21): devuelve el estado con el Poder
+   * de todos los combatientes al maximo. Sin cambios (o sin snapshot) devuelve
+   * ESTA misma instancia: la vista final no crea objetos que no hacen falta.
+   */
+  restoreAllPower(): BattleState {
+    if (this.combatants === null) {
+      return this
+    }
+
+    /** Maximo que le falta por restaurar, o `null` si no hay nada que hacer. */
+    const powerToRestore = (combatant: Combatant): number | null => {
+      const max = combatant.profile?.maxPower
+
+      if (combatant.currentPower === null || max === undefined || combatant.currentPower === max) {
+        return null
+      }
+
+      return max
+    }
+
+    if (!this.combatants.some((combatant) => powerToRestore(combatant) !== null)) {
+      return this
+    }
+
+    return new BattleState(
+      this.startedAt,
+      this.turnOrder,
+      this.turnsCompleted,
+      Object.freeze(
+        this.combatants.map((combatant) => {
+          const max = powerToRestore(combatant)
+
+          return max === null ? combatant : combatant.withPower(max)
+        }),
+      ),
+      this.turnStartedAt,
     )
   }
 
@@ -270,12 +393,14 @@ export class BattleState {
             : combatant,
         ),
       ),
+      this.turnStartedAt,
     )
   }
 
   toSnapshot(): BattleStateSnapshot {
     return {
       startedAt: this.startedAt,
+      turnStartedAt: this.turnStartedAt,
       turnOrder: this.turnOrder.map((entry) => ({ ...entry })),
       turnsCompleted: this.turnsCompleted,
       combatants:
@@ -285,7 +410,13 @@ export class BattleState {
     }
   }
 
-  toView(battleId: string): BattleView {
+  /**
+   * Vista visible de la batalla. Por defecto incluye los `deadlines` (HU-21,
+   * contrato §6.3): el turno vigente y el global, en ISO, para que Web muestre
+   * las cuentas atras sin fiarse de su reloj. La vista FINAL de una batalla
+   * terminada se construye con `{ withDeadlines: false }` (contrato §6.2).
+   */
+  toView(battleId: string, options: BattleViewOptions = {}): BattleView {
     const withPosition = (entry: TurnOrderEntry, position: number): TurnOrderEntryView => ({
       position,
       ...entry,
@@ -304,6 +435,14 @@ export class BattleState {
 
         return combatant === undefined ? [] : [combatant.toView()]
       }),
+      ...(options.withDeadlines === false
+        ? {}
+        : {
+            deadlines: {
+              turnEndsAt: turnDeadline(this.turnStartedAt).toISOString(),
+              battleEndsAt: battleDeadline(this.startedAt).toISOString(),
+            },
+          }),
     }
   }
 }

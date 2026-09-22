@@ -122,6 +122,10 @@ export class ExecuteBasicAttack {
     // ya se comprobo (planBasicAttack) o se comprueba en `prepare`, que no sortea.
     const prepared = this.prepare(plan)
     const outcome = this.resolve(plan, prepared)
+    // HU-21: la accion puede arrastrar `battleFinished` en la misma escritura, asi
+    // que el evento de la ACCION es el que se construye con este `seq`, no el
+    // ultimo guardado.
+    const actionSeq = room.lastSeq + 1
     const next = room.applyBasicAttack(
       plan,
       outcome,
@@ -132,7 +136,7 @@ export class ExecuteBasicAttack {
 
     try {
       const saved = await this.rooms.save(next, room.version)
-      const event = saved.events[saved.events.length - 1]
+      const event = saved.events.find((candidate) => candidate.seq === actionSeq)
 
       if (event === undefined) {
         throw new DomainError('El ataque se guardo sin su evento.')

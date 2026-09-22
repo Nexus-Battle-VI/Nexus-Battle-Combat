@@ -1,3 +1,4 @@
+import type { BattleResult } from './BattleResult'
 import type { BattleView } from './BattleState'
 import type { CombatantKey } from './Combatant'
 import type { CombatPowerCost } from './CombatProfile'
@@ -18,6 +19,10 @@ export const BattleEventType = {
   BasicAttackResolved: 'basicAttackResolved',
   /** HU-19: una habilidad especial ejecutada, con el estado YA avanzado (un solo `seq` por accion). */
   SkillUsed: 'skillUsed',
+  /** HU-21: el turno vigente vencio sin accion y paso al siguiente participante con Vida. */
+  TurnTimedOut: 'turnTimedOut',
+  /** HU-21: la batalla termino; lleva el resultado unico y la vista FINAL sin `deadlines`. */
+  BattleFinished: 'battleFinished',
 } as const
 
 export type BattleEventType = (typeof BattleEventType)[keyof typeof BattleEventType]
@@ -29,6 +34,30 @@ export interface BattleStartedPayload {
 export interface TurnAdvancedPayload {
   /** Posicion (0-based) del turno que acaba de cerrarse. */
   readonly completedPosition: number
+  readonly battle: BattleView
+}
+
+/**
+ * El turno vigente vencio sin accion (HU-21, contrato §6.1): se cerro sin
+ * resolver nada, el avance salta a los participantes con Vida y arranca su
+ * temporizador. NO finaliza la batalla.
+ */
+export interface TurnTimedOutPayload {
+  /** Posicion (0-based) del turno que se perdio. */
+  readonly completedPosition: number
+  /** Quien perdio el turno. */
+  readonly timedOut: CombatantKey
+  /** Vista POSTERIOR: turno ya avanzado y `deadlines` nuevos. */
+  readonly battle: BattleView
+}
+
+/**
+ * La batalla termino (HU-21, contrato §6.2): resultado unico y vista FINAL
+ * (Vida final, Poder restaurado al maximo, SIN `deadlines`). Tras este evento
+ * no hay mas eventos en la sala.
+ */
+export interface BattleFinishedPayload {
+  readonly result: BattleResult
   readonly battle: BattleView
 }
 
@@ -115,7 +144,12 @@ export interface BattleEvent {
   readonly type: BattleEventType
   readonly occurredAt: Date
   readonly payload:
-    BattleStartedPayload | TurnAdvancedPayload | BasicAttackResolvedPayload | SkillUsedPayload
+    | BattleStartedPayload
+    | TurnAdvancedPayload
+    | BasicAttackResolvedPayload
+    | SkillUsedPayload
+    | TurnTimedOutPayload
+    | BattleFinishedPayload
 }
 
 /** Comando ya procesado (ADR-020: repetir un `commandId` no ejecuta dos veces). */
