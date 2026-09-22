@@ -51,6 +51,17 @@ export class InMemoryBattleRoomRepository implements BattleRoomRepositoryPort {
     return Promise.resolve(rooms)
   }
 
+  findCancelledSince(since: Date): Promise<readonly BattleRoom[]> {
+    const rooms = [...this.byId.values()]
+      .filter(
+        (snapshot) =>
+          snapshot.status === 'CANCELLED' && snapshot.createdAt.getTime() >= since.getTime(),
+      )
+      .map((snapshot) => BattleRoom.restore(snapshot))
+
+    return Promise.resolve(rooms)
+  }
+
   save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom> {
     const stored = this.byId.get(room.id)
     const storedVersion = stored?.version ?? 0

@@ -29,6 +29,7 @@ import {
   PROCESS_BATTLE_DEADLINES,
   PROCESS_REWARD_WORKFLOW,
   RECONCILE_REWARD_WORKFLOWS,
+  RECONCILE_STAKES,
   RECOVER_BATTLE_DEADLINES,
   REWARD_CREDIT_PORT,
   REWARD_GRANT_PORT,
@@ -37,6 +38,10 @@ import {
   REWARD_WORKFLOW_SCHEDULER_OPTIONS,
   RESUME_BATTLE,
   ROOM_COMMAND_LOCK,
+  STAKE_RELEASER,
+  STAKE_RESERVER,
+  STAKE_SCHEDULER_OPTIONS,
+  STAKE_SETTLER,
   START_BATTLE,
 } from '../../adapters/inbound/http/tokens'
 import { AnonymousIdentityGuard } from '../../adapters/inbound/http/auth/anonymous.guard'
@@ -53,6 +58,7 @@ import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClien
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
 import { PlayerInventoryGrantHttpClient } from '../../adapters/outbound/http/PlayerInventoryGrantHttpClient'
 import { WalletHttpClient } from '../../adapters/outbound/http/WalletHttpClient'
+import { WalletStakeHttpClient } from '../../adapters/outbound/http/WalletStakeHttpClient'
 import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryChatMessageRepository } from '../../adapters/outbound/persistence/InMemoryChatMessageRepository'
 import { InMemoryRewardWorkflowRepository } from '../../adapters/outbound/persistence/InMemoryRewardWorkflowRepository'
@@ -72,6 +78,10 @@ import {
   DEFAULT_REWARD_WORKFLOW_SCHEDULER_OPTIONS,
   IntervalRewardWorkflowScheduler,
 } from '../../adapters/outbound/system/IntervalRewardWorkflowScheduler'
+import {
+  DEFAULT_STAKE_SCHEDULER_OPTIONS,
+  IntervalStakeScheduler,
+} from '../../adapters/outbound/system/IntervalStakeScheduler'
 import { RewardWorkflowResultPublisher } from '../../adapters/outbound/system/RewardWorkflowResultPublisher'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
@@ -117,6 +127,7 @@ import {
 import type { RewardCreditPort } from '../../application/ports/RewardCreditPort'
 import type { RewardGrantPort } from '../../application/ports/RewardGrantPort'
 import type { RewardWorkflowRepositoryPort } from '../../application/ports/RewardWorkflowRepositoryPort'
+import { WALLET_STAKE_PORT, type WalletStakePort } from '../../application/ports/WalletStakePort'
 import {
   RANDOM_SEQUENCE_FACTORY,
   type RandomSequenceFactoryPort,
@@ -140,11 +151,15 @@ import {
 import { createBoundedRandom } from '../../application/services/BoundedRandom'
 import { BattleDeadlineSettler } from '../../application/services/BattleDeadlineSettler'
 import { BattleFinalizer } from '../../application/services/BattleFinalizer'
+import { StakeReleaser } from '../../application/services/StakeReleaser'
+import { StakeReserver } from '../../application/services/StakeReserver'
+import { StakeSettler } from '../../application/services/StakeSettler'
 import { RandomSeed } from '../../domain/value-objects/RandomSeed'
 import type { BoundedRandom } from '../../domain/policies/TurnOrderPolicy'
 import { CompleteBattleTurn } from '../../application/use-cases/CompleteBattleTurn'
 import { CreateRewardWorkflows } from '../../application/use-cases/CreateRewardWorkflows'
 import { ReconcileRewardWorkflows } from '../../application/use-cases/ReconcileRewardWorkflows'
+import { ReconcileStakes } from '../../application/use-cases/ReconcileStakes'
 import { ExecuteBasicAttack } from '../../application/use-cases/ExecuteBasicAttack'
 import { GetRewardStatus } from '../../application/use-cases/GetRewardStatus'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
@@ -427,8 +442,9 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         rooms: BattleRoomRepositoryPort,
         ids: IdGeneratorPort,
         clock: ClockPort,
-      ): CreateBattleRoom => new CreateBattleRoom(rooms, ids, clock),
-      inject: [BATTLE_ROOM_REPOSITORY, ID_GENERATOR, CLOCK],
+        stakeReserver: StakeReserver,
+      ): CreateBattleRoom => new CreateBattleRoom(rooms, ids, clock, stakeReserver),
+      inject: [BATTLE_ROOM_REPOSITORY, ID_GENERATOR, CLOCK, STAKE_RESERVER],
     },
     {
       provide: LIST_AVAILABLE_BATTLE_ROOMS,
@@ -438,9 +454,9 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     },
     {
       provide: CANCEL_BATTLE_ROOM,
-      useFactory: (rooms: BattleRoomRepositoryPort): CancelBattleRoom =>
-        new CancelBattleRoom(rooms),
-      inject: [BATTLE_ROOM_REPOSITORY],
+      useFactory: (rooms: BattleRoomRepositoryPort, releaser: StakeReleaser): CancelBattleRoom =>
+        new CancelBattleRoom(rooms, releaser),
+      inject: [BATTLE_ROOM_REPOSITORY, STAKE_RELEASER],
     },
     {
       provide: JOIN_BATTLE_ROOM,
@@ -449,18 +465,22 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         clock: ClockPort,
         accountProfiles: AccountBattleProfilePort,
         equippedHeroes: PlayerInventoryEquippedHeroPort,
-      ): JoinBattleRoom => new JoinBattleRoom(rooms, clock, accountProfiles, equippedHeroes),
+        stakeReserver: StakeReserver,
+      ): JoinBattleRoom =>
+        new JoinBattleRoom(rooms, clock, accountProfiles, equippedHeroes, stakeReserver),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
         ACCOUNT_BATTLE_PROFILE,
         PLAYER_INVENTORY_EQUIPPED_HERO,
+        STAKE_RESERVER,
       ],
     },
     {
       provide: LEAVE_BATTLE_ROOM,
-      useFactory: (rooms: BattleRoomRepositoryPort): LeaveBattleRoom => new LeaveBattleRoom(rooms),
-      inject: [BATTLE_ROOM_REPOSITORY],
+      useFactory: (rooms: BattleRoomRepositoryPort, releaser: StakeReleaser): LeaveBattleRoom =>
+        new LeaveBattleRoom(rooms, releaser),
+      inject: [BATTLE_ROOM_REPOSITORY, STAKE_RELEASER],
     },
     // HU-13 (RF-13): chat del lobby y de las salas. Mensajes propios de Combat
     // (ADR-019, data-ownership). `PERSISTENCE_DRIVER=memory` respalda pruebas y
@@ -612,14 +632,32 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       // HU-22: reemplaza a `LoggingBattleResultPublisher` (que sigue en el
       // repositorio, documentada como el adaptador de HU-21, pero ya no se
       // conecta aqui). Conserva su MISMO registro `battle_finished` y ADEMAS
-      // crea y procesa el RewardWorkflow -- ver `RewardWorkflowResultPublisher`.
+      // crea y procesa el RewardWorkflow (HU-22) y liquida/libera las apuestas
+      // (HU-23) -- ver `RewardWorkflowResultPublisher`.
       useFactory: (
         createWorkflows: CreateRewardWorkflows,
         processWorkflow: ProcessRewardWorkflow,
+        rooms: BattleRoomRepositoryPort,
+        stakeSettler: StakeSettler,
+        stakeReleaser: StakeReleaser,
         logger: Logger,
       ): BattleResultPublisherPort =>
-        new RewardWorkflowResultPublisher(createWorkflows, processWorkflow, logger),
-      inject: [CREATE_REWARD_WORKFLOWS, PROCESS_REWARD_WORKFLOW, LOGGER],
+        new RewardWorkflowResultPublisher(
+          createWorkflows,
+          processWorkflow,
+          rooms,
+          stakeSettler,
+          stakeReleaser,
+          logger,
+        ),
+      inject: [
+        CREATE_REWARD_WORKFLOWS,
+        PROCESS_REWARD_WORKFLOW,
+        BATTLE_ROOM_REPOSITORY,
+        STAKE_SETTLER,
+        STAKE_RELEASER,
+        LOGGER,
+      ],
     },
     {
       provide: BATTLE_ROOM_RELEASE,
@@ -852,6 +890,84 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         LOGGER,
         REWARD_WORKFLOW_SCHEDULER_OPTIONS,
       ],
+    },
+    // HU-23 (`hu-23-battle-stake-v1`): apuesta de creditos. Reutiliza la MISMA
+    // configuracion de Wallet que HU-22 (`WALLET_SERVICE_BASE_URL` +
+    // `INTERNAL_SERVICE_AUTH_SECRET`), no unas variables nuevas.
+    {
+      provide: WALLET_STAKE_PORT,
+      useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): WalletStakePort => {
+        if (config.internalServiceAuthSecret === null || config.walletServiceBaseUrl === null) {
+          logger.warn('wallet_stake_client_sin_configurar', {
+            detail: 'WALLET_SERVICE_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET no configurados.',
+          })
+
+          const unconfigured = (): Promise<never> =>
+            Promise.reject(new UpstreamServiceError('wallet', 'no_configurado'))
+
+          return { reserve: unconfigured, release: unconfigured, settle: unconfigured }
+        }
+
+        return new WalletStakeHttpClient({
+          baseUrl: config.walletServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
+    {
+      provide: STAKE_RESERVER,
+      useFactory: (walletStake: WalletStakePort, clock: ClockPort, logger: Logger): StakeReserver =>
+        new StakeReserver(walletStake, clock, logger),
+      inject: [WALLET_STAKE_PORT, CLOCK, LOGGER],
+    },
+    {
+      provide: STAKE_RELEASER,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        walletStake: WalletStakePort,
+        logger: Logger,
+      ): StakeReleaser => new StakeReleaser(rooms, walletStake, logger),
+      inject: [BATTLE_ROOM_REPOSITORY, WALLET_STAKE_PORT, LOGGER],
+    },
+    {
+      provide: STAKE_SETTLER,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        walletStake: WalletStakePort,
+        releaser: StakeReleaser,
+        logger: Logger,
+      ): StakeSettler => new StakeSettler(rooms, walletStake, releaser, logger),
+      inject: [BATTLE_ROOM_REPOSITORY, WALLET_STAKE_PORT, STAKE_RELEASER, LOGGER],
+    },
+    {
+      // HU-23: recuperacion de apuestas pendientes al arrancar (contrato §7).
+      provide: RECONCILE_STAKES,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        settler: StakeSettler,
+        releaser: StakeReleaser,
+        clock: ClockPort,
+      ): ReconcileStakes => new ReconcileStakes(rooms, settler, releaser, clock),
+      inject: [BATTLE_ROOM_REPOSITORY, STAKE_SETTLER, STAKE_RELEASER, CLOCK],
+    },
+    {
+      provide: STAKE_SCHEDULER_OPTIONS,
+      useValue: DEFAULT_STAKE_SCHEDULER_OPTIONS,
+    },
+    {
+      provide: IntervalStakeScheduler,
+      useFactory: (
+        reconcile: ReconcileStakes,
+        clock: ClockPort,
+        logger: Logger,
+        options: typeof DEFAULT_STAKE_SCHEDULER_OPTIONS,
+      ): IntervalStakeScheduler => new IntervalStakeScheduler(reconcile, clock, logger, options),
+      inject: [RECONCILE_STAKES, CLOCK, LOGGER, STAKE_SCHEDULER_OPTIONS],
     },
     {
       provide: START_BATTLE,

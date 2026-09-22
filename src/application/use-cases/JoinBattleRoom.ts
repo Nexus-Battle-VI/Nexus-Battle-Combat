@@ -2,6 +2,7 @@ import {
   assessPrecombatEligibility,
   isIndividualFormat,
 } from '../../domain/policies/PrecombatEligibilityPolicy'
+import type { ParticipantStakeInput } from '../../domain/value-objects/ParticipantStake'
 import { RoomNotFoundError } from '../errors/ApplicationError'
 import { PrecombatEligibilityBlockedError } from '../errors/PrecombatEligibilityError'
 import { PlayerWithoutEquippedHeroError } from '../errors/UpstreamErrors'
@@ -10,6 +11,8 @@ import type { AccountBattleProfilePort } from '../ports/AccountBattleProfilePort
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../ports/ClockPort'
 import type { PlayerInventoryEquippedHeroPort } from '../ports/PlayerInventoryEquippedHeroPort'
+import { stakeReserveOperationIdOf } from '../services/StakeOperationIds'
+import type { StakeReserver } from '../services/StakeReserver'
 
 /**
  * Une un jugador autenticado a una sala de batalla existente (HU-15.2, RF-15).
@@ -69,9 +72,15 @@ export class JoinBattleRoom {
     private readonly clock: ClockPort,
     private readonly accountProfiles: AccountBattleProfilePort,
     private readonly equippedHeroes: PlayerInventoryEquippedHeroPort,
+    private readonly stakeReserver: StakeReserver,
   ) {}
 
-  async execute(roomId: string, playerId: string, team: string | null): Promise<BattleRoomDto> {
+  async execute(
+    roomId: string,
+    playerId: string,
+    team: string | null,
+    stake: ParticipantStakeInput | null = null,
+  ): Promise<BattleRoomDto> {
     const profile = await this.accountProfiles.getBattleProfile(playerId)
     const equippedHero = await this.equippedHeroes.getEquippedHero(playerId)
 
@@ -96,6 +105,13 @@ export class JoinBattleRoom {
       throw new PrecombatEligibilityBlockedError(playerId, eligibility.blockers)
     }
 
+    // HU-23 (D8): el `holdOperationId` se resuelve aqui (determinista, con el
+    // roomId real) y la reserva es SINCRONA antes de persistir la union.
+    const stakeInput =
+      stake === null || stake.amount === 0
+        ? null
+        : { amount: stake.amount, holdOperationId: stakeReserveOperationIdOf(room.id, playerId) }
+
     const joined = room.join(
       playerId,
       team,
@@ -103,9 +119,11 @@ export class JoinBattleRoom {
       profile.displayName,
       equippedHero.heroId,
       equippedHero.loadoutVersion,
+      stakeInput,
     )
-    const saved = await this.rooms.save(joined, room.version)
+    const withStakes = await this.stakeReserver.reservePending(joined)
+    const saved = await this.rooms.save(withStakes, room.version)
 
-    return toBattleRoomDto(saved)
+    return toBattleRoomDto(saved, playerId)
   }
 }

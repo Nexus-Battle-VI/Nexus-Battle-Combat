@@ -108,6 +108,9 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
       // HU-22 (Task HU-22.3): mismo patron de barrido que el planificador de
       // vencimientos, para el RewardWorkflow.
       'adapters/outbound/system/IntervalRewardWorkflowScheduler.ts',
+      // HU-23 (Task #435): barrido de recuperacion de apuestas pendientes,
+      // mismo patron que los dos anteriores.
+      'adapters/outbound/system/IntervalStakeScheduler.ts',
     ])
   })
 
@@ -193,7 +196,16 @@ describe('HU-21 — el cliente no aporta el resultado y los adaptadores no acred
     // (incluye REWARD_CREDIT_PORT): no es logica de negocio ni un mensaje al
     // cliente. Esta guarda sigue vigente para los handlers de COMBATE
     // (ataque, habilidad, sala, WS): esos no deben saber nada de economia.
-    const excusedFromCheck = ['reward-status.controller.ts', 'reward-status.dto.ts', 'tokens.ts']
+    const excusedFromCheck = [
+      'reward-status.controller.ts',
+      'reward-status.dto.ts',
+      'tokens.ts',
+      // HU-23 (Task #435): el DTO de sala documenta la apuesta del PROPIO
+      // jugador en la unidad del producto (creditos) -- es vocabulario del
+      // contrato §10, no logica de acreditacion: ningun adaptador de entrada
+      // toca Wallet ni decide economia.
+      'battle-room.dto.ts',
+    ]
 
     for (const path of allSources(join(ROOT, 'adapters', 'inbound'))) {
       if (excusedFromCheck.some((name) => path.endsWith(name))) {

@@ -7,6 +7,10 @@ import type { BattleStateSnapshot } from '../../../domain/entities/BattleState'
 import type { CombatantSnapshot } from '../../../domain/entities/Combatant'
 import type { TeamSnapshot } from '../../../domain/entities/Team'
 import type { TurnOrderEntry } from '../../../domain/entities/TurnOrder'
+import type {
+  ParticipantStakeInput,
+  StakeStatus,
+} from '../../../domain/value-objects/ParticipantStake'
 
 /**
  * Traduccion entre el documento de MongoDB y la instantanea de la sala de
@@ -39,6 +43,16 @@ export interface ParticipantDocument {
    * backfill.
    */
   readonly heroLoadoutVersion?: number | null
+  /**
+   * HU-23 (migracion 011): apuesta del participante. Aditivo y opcional:
+   * documentos escritos antes de esta version no lo tienen (no aposto), y
+   * `toSnapshot` lo trata como ausente -- ningun documento se reescribe.
+   */
+  readonly stake?: {
+    readonly amount: number
+    readonly holdOperationId: string
+    readonly status: string
+  }
   readonly joinedAt: Date
 }
 
@@ -134,9 +148,37 @@ const toTeamSnapshot = (team: TeamDocument, roomId: string): TeamSnapshot => ({
     heroId: participant.heroId,
     heroLoadoutVersion: participant.heroLoadoutVersion ?? null,
     displayName: participant.displayName ?? null,
+    ...(participant.stake === undefined
+      ? {}
+      : {
+          stake: {
+            amount: participant.stake.amount,
+            holdOperationId: participant.stake.holdOperationId,
+            status: parseStakeStatus(participant.stake.status, roomId),
+          },
+        }),
     joinedAt: participant.joinedAt,
   })),
 })
+
+const ALL_STAKE_STATUSES: readonly StakeStatus[] = [
+  'PENDING_RESERVE',
+  'ACTIVE',
+  'RESERVE_FAILED',
+  'RELEASED',
+  'CAPTURED',
+  'SETTLED_WON',
+]
+
+const parseStakeStatus = (value: string, roomId: string): StakeStatus => {
+  if (!(ALL_STAKE_STATUSES as readonly string[]).includes(value)) {
+    throw new BattleRoomMappingError(
+      `El estado de apuesta "${value}" de la sala "${roomId}" no es reconocido.`,
+    )
+  }
+
+  return value as StakeStatus
+}
 
 export const toSnapshot = (document: BattleRoomDocument): BattleRoomSnapshot => {
   if (!(document.createdAt instanceof Date) || Number.isNaN(document.createdAt.getTime())) {
@@ -194,7 +236,24 @@ const toEvent = (event: BattleEventDocument, roomId: string): BattleEvent => ({
   payload: event.payload as unknown as BattleEvent['payload'],
 })
 
-const toTeamDocument = (team: TeamSnapshot): TeamDocument => ({
+const toStakeDocument = (
+  stake: ParticipantStakeInput,
+  roomId: string,
+): { readonly amount: number; readonly holdOperationId: string; readonly status: StakeStatus } => {
+  if (stake.holdOperationId === undefined || stake.holdOperationId.length === 0) {
+    throw new BattleRoomMappingError(
+      `Una apuesta de la sala "${roomId}" no tiene holdOperationId; no se puede persistir.`,
+    )
+  }
+
+  return {
+    amount: stake.amount,
+    holdOperationId: stake.holdOperationId,
+    status: stake.status ?? 'PENDING_RESERVE',
+  }
+}
+
+const toTeamDocument = (team: TeamSnapshot, roomId: string): TeamDocument => ({
   label: team.label,
   capacity: new Int32(team.capacity),
   participants: team.participants.map((participant) => ({
@@ -203,6 +262,9 @@ const toTeamDocument = (team: TeamSnapshot): TeamDocument => ({
     heroId: participant.heroId ?? null,
     heroLoadoutVersion: participant.heroLoadoutVersion ?? null,
     displayName: participant.displayName ?? null,
+    ...(participant.stake === undefined
+      ? {}
+      : { stake: toStakeDocument(participant.stake, roomId) }),
     joinedAt: participant.joinedAt ?? new Date(0),
   })),
 })
@@ -211,7 +273,10 @@ export const toDocument = (snapshot: BattleRoomSnapshot): BattleRoomDocument => 
   _id: snapshot.id,
   mode: snapshot.mode,
   status: snapshot.status,
-  teams: [toTeamDocument(snapshot.teams[0]), toTeamDocument(snapshot.teams[1])],
+  teams: [
+    toTeamDocument(snapshot.teams[0], snapshot.id),
+    toTeamDocument(snapshot.teams[1], snapshot.id),
+  ],
   reward: { amount: snapshot.reward.amount },
   createdBy: snapshot.createdBy,
   createdAt: snapshot.createdAt,

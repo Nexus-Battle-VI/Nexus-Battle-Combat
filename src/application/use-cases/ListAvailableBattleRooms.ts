@@ -14,9 +14,11 @@ import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort
 export class ListAvailableBattleRooms {
   constructor(private readonly rooms: BattleRoomRepositoryPort) {}
 
-  async execute(): Promise<readonly BattleRoomDto[]> {
+  async execute(viewerId: string | null = null): Promise<readonly BattleRoomDto[]> {
     const candidates = await this.rooms.findWaitingForPlayers()
 
-    return candidates.filter((room) => room.isAvailable()).map(toBattleRoomDto)
+    return candidates
+      .filter((room) => room.isAvailable())
+      .map((room) => toBattleRoomDto(room, viewerId))
   }
 }

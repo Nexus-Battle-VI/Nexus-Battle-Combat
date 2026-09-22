@@ -8,6 +8,8 @@ import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../ports/ClockPort'
 import type { IdGeneratorPort } from '../ports/IdGeneratorPort'
+import { stakeReserveOperationIdOf } from '../services/StakeOperationIds'
+import type { StakeReserver } from '../services/StakeReserver'
 
 /**
  * Crea una sala de batalla (HU-14, RF-14, CA-01).
@@ -25,36 +27,69 @@ import type { IdGeneratorPort } from '../ports/IdGeneratorPort'
  * lo infiere: si esta resolucion se omitiera aqui, declarar un `HUMAN`
  * inicial seria imposible desde la API.
  *
+ * HU-23 (D8): si algun participante declara apuesta, el `holdOperationId` se
+ * resuelve AQUI (determinista, con el `roomId` ya generado) y la reserva
+ * contra Wallet es SINCRONA, antes de persistir: si Wallet rechaza, el
+ * `execute()` completo lanza y no queda ninguna sala. La sala se guarda con
+ * las apuestas ya `ACTIVE`.
+ *
  * LAS DEMAS REGLAS DE NEGOCIO VIVEN EN `BattleRoom.create()`: este caso de
  * uso solo orquesta generar el id, resolver la identidad del creador para
- * los participantes declarados, invocar al dominio y persistir.
+ * los participantes declarados, invocar al dominio, reservar y persistir.
  */
 export class CreateBattleRoom {
   constructor(
     private readonly rooms: BattleRoomRepositoryPort,
     private readonly ids: IdGeneratorPort,
     private readonly clock: ClockPort,
+    private readonly stakeReserver: StakeReserver,
   ) {}
 
   async execute(createdBy: string, input: CreateBattleRoomInput): Promise<BattleRoomDto> {
+    const roomId = this.ids.generate()
     const resolved: CreateBattleRoomInput = {
       ...input,
-      teamConfigs: input.teamConfigs.map((config) => resolveTeamConfig(config, createdBy)),
+      teamConfigs: input.teamConfigs.map((config) => resolveTeamConfig(config, createdBy, roomId)),
     }
 
-    const room = BattleRoom.create(this.ids.generate(), createdBy, resolved, this.clock.now())
-    const saved = await this.rooms.save(room, 0)
+    const room = BattleRoom.create(roomId, createdBy, resolved, this.clock.now())
+    const withStakes = await this.stakeReserver.reservePending(room)
+    const saved = await this.rooms.save(withStakes, 0)
 
-    return toBattleRoomDto(saved)
+    return toBattleRoomDto(saved, createdBy)
   }
 }
 
-const resolveTeamConfig = (config: TeamConfigInput, createdBy: string): TeamConfigInput => ({
+const resolveTeamConfig = (
+  config: TeamConfigInput,
+  createdBy: string,
+  roomId: string,
+): TeamConfigInput => ({
   ...config,
   initialParticipants: config.initialParticipants?.map((participant) =>
-    resolveParticipant(participant, createdBy),
+    resolveParticipant(participant, createdBy, roomId),
   ),
 })
 
-const resolveParticipant = (participant: ParticipantInput, createdBy: string): ParticipantInput =>
-  participant.kind === ParticipantKind.Human ? { ...participant, playerId: createdBy } : participant
+const resolveParticipant = (
+  participant: ParticipantInput,
+  createdBy: string,
+  roomId: string,
+): ParticipantInput => {
+  if (participant.kind !== ParticipantKind.Human) {
+    return participant
+  }
+
+  return {
+    ...participant,
+    playerId: createdBy,
+    ...(participant.stake === undefined
+      ? {}
+      : {
+          stake: {
+            amount: participant.stake.amount,
+            holdOperationId: stakeReserveOperationIdOf(roomId, createdBy),
+          },
+        }),
+  }
+}

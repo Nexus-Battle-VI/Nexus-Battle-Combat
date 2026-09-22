@@ -98,7 +98,7 @@ export class StartBattle {
     }
 
     if (room.status === BattleRoomStatus.InBattle) {
-      return toBattleRoomDto(room)
+      return toBattleRoomDto(room, requesterId)
     }
 
     if (room.status !== BattleRoomStatus.Preparing) {
@@ -121,7 +121,7 @@ export class StartBattle {
         const current = await this.rooms.findById(roomId)
 
         if (current?.status === BattleRoomStatus.InBattle) {
-          return toBattleRoomDto(current)
+          return toBattleRoomDto(current, requesterId)
         }
       }
 
@@ -131,7 +131,7 @@ export class StartBattle {
     this.publish(saved.id, saved.events)
     this.seedPresence(saved)
 
-    return toBattleRoomDto(saved)
+    return toBattleRoomDto(saved, requesterId)
   }
 
   /**

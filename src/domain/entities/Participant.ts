@@ -1,4 +1,9 @@
 import { DomainError } from '../errors/DomainError'
+import {
+  createParticipantStake,
+  type ParticipantStake,
+  type ParticipantStakeInput,
+} from '../value-objects/ParticipantStake'
 
 /**
  * Composicion humano/IA de un puesto ocupado en un equipo (RF-14: "si se
@@ -63,6 +68,13 @@ export interface Participant {
    * campo aditivo y retrocompatible, no una migracion destructiva.
    */
   readonly displayName: string | null
+  /**
+   * HU-23 (RF-23): apuesta de creditos del participante. AUSENTE cuando no
+   * aposto (`0`/sin `stake`), mismo criterio aditivo que `BattleView.deadlines?`
+   * de HU-21 -- nunca `null`, para no cambiar la forma de las salas sin
+   * apuesta. Un `AI` nunca lo lleva (D4).
+   */
+  readonly stake?: ParticipantStake
   readonly joinedAt: Date
 }
 
@@ -72,6 +84,8 @@ export interface ParticipantInput {
   readonly heroId?: string | null
   readonly heroLoadoutVersion?: number | null
   readonly displayName?: string | null
+  /** HU-23: monto y `holdOperationId` determinista de la reserva. */
+  readonly stake?: ParticipantStakeInput
   /** Cuando se restaura desde persistencia, la fecha guardada. */
   readonly joinedAt?: Date
 }
@@ -95,6 +109,7 @@ export const createParticipant = (input: ParticipantInput, at: Date): Participan
   const heroLoadoutVersion = normalizeVersion(input.heroLoadoutVersion)
   const displayName = normalizeOptional(input.displayName)
   const joinedAt = input.joinedAt ?? at
+  const stake = normalizeStake(input)
 
   if (Number.isNaN(joinedAt.getTime())) {
     throw new DomainError('La fecha de incorporacion del participante no es valida.')
@@ -113,6 +128,7 @@ export const createParticipant = (input: ParticipantInput, at: Date): Participan
       heroId,
       heroLoadoutVersion,
       displayName,
+      ...(stake === null ? {} : { stake }),
       joinedAt,
     }
   }
@@ -129,6 +145,15 @@ export const createParticipant = (input: ParticipantInput, at: Date): Participan
     displayName,
     joinedAt,
   }
+}
+
+/** `null` cuando no hay apuesta o el monto es `0` (D5: `0` = no apostar). */
+const normalizeStake = (input: ParticipantInput): ParticipantStake | null => {
+  if (input.stake === undefined) {
+    return null
+  }
+
+  return createParticipantStake(input.stake)
 }
 
 const normalizeOptional = (value: string | null | undefined): string | null => {

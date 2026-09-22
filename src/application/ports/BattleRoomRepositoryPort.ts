@@ -43,6 +43,15 @@ export interface BattleRoomRepositoryPort {
    * su firma es la de `BattleResultPublisherPort`, ya cerrada por HU-21).
    */
   findFinishedSince(since: Date): Promise<readonly BattleRoom[]>
+
+  /**
+   * Salas `CANCELLED` creadas en o despues de `since` (HU-23, recuperacion de
+   * apuestas): la cancelacion no persiste su propio instante, y cualquier
+   * apuesta `ACTIVE` de una sala cancelada fue reservada con la sala o despues
+   * -- su hold de 24 h (D11) acota la ventana por si solo. La usa
+   * `ReconcileStakes` para liberar lo que quedo pendiente tras una caida.
+   */
+  findCancelledSince(since: Date): Promise<readonly BattleRoom[]>
 }
 
 export const BATTLE_ROOM_REPOSITORY = Symbol('BattleRoomRepositoryPort')

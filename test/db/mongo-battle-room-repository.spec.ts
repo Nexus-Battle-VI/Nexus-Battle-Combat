@@ -463,4 +463,74 @@ describe('MongoBattleRoomRepository', () => {
       }),
     ).rejects.toThrow()
   })
+
+  it('el motor acepta una apuesta tras la migracion 011, y el repositorio la persiste y recupera', async () => {
+    const id = nextId()
+    const room = BattleRoom.create(
+      id,
+      CREATOR,
+      validInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+      AT,
+    )
+    await repository.save(room, 0)
+
+    const found = await repository.findById(id)
+    if (found === null) throw new Error('la sala debia existir')
+
+    const withStake = found
+      .join('jugador-b', 'B', AT, 'Nombre Visible', 'heroe-b', 4, {
+        amount: 25,
+        holdOperationId: `battle:${id}:player:jugador-b:stake:reserve`,
+      })
+      .withStakesActivated()
+    await repository.save(withStake, found.version)
+
+    const reloaded = await repository.findById(id)
+
+    expect(reloaded?.stakeOf('jugador-b')).toEqual({
+      amount: 25,
+      holdOperationId: `battle:${id}:player:jugador-b:stake:reserve`,
+      status: 'ACTIVE',
+    })
+  })
+
+  it('el motor rechaza una apuesta con estado desconocido (migracion 011)', async () => {
+    const id = nextId()
+    const room = BattleRoom.create(id, CREATOR, validInput(), AT)
+    await repository.save(room, 0)
+
+    const document = await rooms().findOne({ _id: id })
+    const teams = (document?.teams ?? []) as {
+      label: string
+      capacity: number
+      participants: Record<string, unknown>[]
+    }[]
+
+    await expect(
+      rooms().insertOne({
+        ...document,
+        _id: nextId(),
+        teams: [
+          {
+            ...teams[0],
+            participants: [
+              {
+                kind: 'HUMAN',
+                playerId: 'jugador-1',
+                heroId: null,
+                displayName: null,
+                joinedAt: AT,
+                stake: {
+                  amount: 10,
+                  holdOperationId: 'hold-1',
+                  status: 'PENDING_RELEASE',
+                },
+              },
+            ],
+          },
+          teams[1],
+        ],
+      }),
+    ).rejects.toThrow()
+  })
 })
