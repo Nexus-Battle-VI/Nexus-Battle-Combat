@@ -13,6 +13,7 @@ import {
   down as downSkillsMigration,
   up as upSkillsMigration,
 } from '../../src/adapters/outbound/persistence/migrations/008-battle-rooms-skills'
+import { up as upFinishMigration } from '../../src/adapters/outbound/persistence/migrations/009-battle-rooms-finish'
 import {
   ACCOUNT_BATTLE_PROFILE,
   type AccountBattleProfilePort,
@@ -1030,7 +1031,11 @@ describe('HU-19 de extremo a extremo (protocolo): habilidades entre dos clientes
         occurredAt: new Date(),
         payload: {},
       }
-
+      // HU-21: el documento actual se escribe con `battle.turnStartedAt` (y con
+      // los campos de HU-19), que los validadores de 007/008 no conocen; el
+      // rechazo del motor sigue siendo la garantia de que ninguna escritura no
+      // autorizada prospera. Con 008 y luego 009 restablecidos, el evento vuelve
+      // a escribirse.
       await downSkillsMigration(db)
       try {
         await expect(
@@ -1046,6 +1051,7 @@ describe('HU-19 de extremo a extremo (protocolo): habilidades entre dos clientes
         ).rejects.toBeInstanceOf(MongoServerError)
       } finally {
         await upSkillsMigration(db)
+        await upFinishMigration(db)
       }
 
       await expect(

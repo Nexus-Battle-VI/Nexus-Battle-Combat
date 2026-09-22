@@ -419,6 +419,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       const racing: BattleRoomRepositoryPort = {
         findById: (id) => inner.findById(id),
         findWaitingForPlayers: () => inner.findWaitingForPlayers(),
+        findInBattle: () => inner.findInBattle(),
         save: async (room, expectedVersion) => {
           if (!intercepted) {
             intercepted = true
@@ -447,6 +448,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       const conflicting: BattleRoomRepositoryPort = {
         findById: (id) => inner.findById(id),
         findWaitingForPlayers: () => inner.findWaitingForPlayers(),
+        findInBattle: () => inner.findInBattle(),
         save: () => Promise.reject(new RoomConflictError(ROOM_ID)),
       }
 
@@ -477,6 +479,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       const failing: BattleRoomRepositoryPort = {
         findById: (id) => inner.findById(id),
         findWaitingForPlayers: () => inner.findWaitingForPlayers(),
+        findInBattle: () => inner.findInBattle(),
         save: () => Promise.reject(new Error('mongo caido')),
       }
 

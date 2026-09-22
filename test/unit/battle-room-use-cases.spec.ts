@@ -263,6 +263,7 @@ describe('JoinBattleRoom', () => {
     const conflictingRepo: BattleRoomRepositoryPort = {
       findById: (id) => repo.findById(id),
       findWaitingForPlayers: () => repo.findWaitingForPlayers(),
+      findInBattle: () => repo.findInBattle(),
       save: () => Promise.reject(new RoomConflictError(created.id)),
     }
     const join = new JoinBattleRoom(

@@ -4,6 +4,9 @@ import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/
 import { type Collection, type Db, type MongoClient } from 'mongodb'
 
 import { BattleRoom, type CreateBattleRoomInput } from '../../src/domain/entities/BattleRoom'
+import { Combatant } from '../../src/domain/entities/Combatant'
+import { createCombatProfile } from '../../src/domain/entities/CombatProfile'
+import type { TurnOrderEntry } from '../../src/domain/entities/TurnOrder'
 import { RoomConflictError } from '../../src/application/errors/ApplicationError'
 import { MongoBattleRoomRepository } from '../../src/adapters/outbound/persistence/MongoBattleRoomRepository'
 import { describeError } from '../../src/infrastructure/observability/describe-error'
@@ -338,6 +341,125 @@ describe('MongoBattleRoomRepository', () => {
         createdBy: CREATOR,
         createdAt: AT,
         version: 0,
+      }),
+    ).rejects.toThrow()
+  })
+
+  /**
+   * HU-21 (migracion 009): `findInBattle` solo devuelve salas con batalla EN
+   * CURSO, y una sala FINISHED sobrevive al viaje con su `result` intacto.
+   */
+  const startedRoom = (id: string): BattleRoom => {
+    let room = BattleRoom.create(id, CREATOR, validInput(), AT)
+
+    room = room.join(CREATOR, 'A', AT, 'Creador', 'hero-a', 0)
+    room = room.join('jugador-b', 'B', AT, 'Rival', 'hero-b', 0)
+
+    const order: TurnOrderEntry[] = [
+      {
+        teamLabel: 'A',
+        seat: 0,
+        kind: 'HUMAN',
+        playerId: CREATOR,
+        displayName: 'Creador',
+        heroId: 'hero-a',
+        heroSubtype: 'GUERRERO_ARMAS',
+      },
+      {
+        teamLabel: 'B',
+        seat: 0,
+        kind: 'HUMAN',
+        playerId: 'jugador-b',
+        displayName: 'Rival',
+        heroId: 'hero-b',
+        heroSubtype: 'GUERRERO_ARMAS',
+      },
+    ]
+    const combatants = order.map((entry) =>
+      Combatant.start(
+        entry,
+        createCombatProfile({
+          heroId: entry.heroId ?? 'hero',
+          subtype: 'GUERRERO_ARMAS',
+          maxHealth: 44,
+          attack: 10,
+          defense: 11,
+          damage: { mode: 'DICE', count: 1, sides: 6 },
+          activeEffects: [],
+        }),
+      ),
+    )
+
+    return room.startBattle(order, AT, combatants)
+  }
+
+  it('findInBattle devuelve solo salas IN_BATTLE', async () => {
+    const inBattleId = nextId()
+    const waitingId = nextId()
+    const finishedId = nextId()
+
+    await repository.save(startedRoom(inBattleId), 0)
+    await repository.save(BattleRoom.create(waitingId, CREATOR, validInput(), AT), 0)
+
+    const finished = await repository.save(startedRoom(finishedId), 0)
+    await repository.save(finished.finish({ reason: 'TIME_LIMIT' }, AT), finished.version)
+
+    const found = await repository.findInBattle()
+    const ids = found.map((room) => room.id)
+
+    expect(ids).toContain(inBattleId)
+    expect(ids).not.toContain(waitingId)
+    expect(ids).not.toContain(finishedId)
+    expect(found.every((room) => room.status === 'IN_BATTLE')).toBe(true)
+  })
+
+  it('una sala FINISHED viaja con su resultado y su turno, y no se reescribe', async () => {
+    const id = nextId()
+    const saved = await repository.save(startedRoom(id), 0)
+    const finished = saved.finish({ reason: 'ELIMINATION', winnerTeamLabel: 'A' }, AT)
+    const persisted = await repository.save(finished, saved.version)
+
+    expect(persisted.version).toBe(saved.version + 1)
+
+    const reloaded = await repository.findById(id)
+
+    expect(reloaded?.status).toBe('FINISHED')
+    expect(reloaded?.result).toEqual(finished.result)
+    expect(reloaded?.result?.reason).toBe('ELIMINATION')
+    expect(reloaded?.battle?.turnStartedAt).toEqual(AT)
+    expect(reloaded?.events.at(-1)?.type).toBe('battleFinished')
+    expect(reloaded?.battle?.combatants?.[0]?.currentHealth).toBe(44)
+  })
+
+  it('el motor rechaza un `result` con causa desconocida (migracion 009)', async () => {
+    const id = nextId()
+    const saved = await repository.save(startedRoom(id), 0)
+    const finished = saved.finish({ reason: 'TIME_LIMIT' }, AT)
+
+    await repository.save(finished, saved.version)
+
+    const document = await rooms().findOne({ _id: id })
+    const result = document?.result as Record<string, unknown>
+
+    await expect(
+      rooms().insertOne({ ...document, _id: nextId(), result: { ...result, reason: 'SURRENDER' } }),
+    ).rejects.toThrow()
+  })
+
+  it('el motor rechaza un evento de tipo desconocido (migracion 009)', async () => {
+    const id = nextId()
+    const saved = await repository.save(startedRoom(id), 0)
+
+    await repository.save(saved.finish({ reason: 'TIME_LIMIT' }, AT), saved.version)
+
+    const document = await rooms().findOne({ _id: id })
+    const events = (document?.events ?? []) as { type: string }[]
+
+    await expect(
+      rooms().insertOne({
+        ...document,
+        _id: nextId(),
+        events: [{ ...events[0], type: 'battleExploded' }, ...events.slice(1)],
       }),
     ).rejects.toThrow()
   })

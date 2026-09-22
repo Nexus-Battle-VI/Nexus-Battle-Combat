@@ -175,11 +175,9 @@ const toBattleSnapshot = (document: BattleRoomDocument): BattleStateSnapshot | n
     ? null
     : {
         startedAt: document.battle.startedAt,
-        // Aditivo (HU-21): ausente en una batalla anterior; `BattleState.restore`
-        // lo trata como `startedAt`, sin reescribir el documento.
-        ...(document.battle.turnStartedAt === undefined
-          ? {}
-          : { turnStartedAt: document.battle.turnStartedAt }),
+        // Aditivo (HU-21): ausente en una batalla anterior, y entonces su turno
+        // empezo con la batalla (contrato §12), sin reescribir el documento.
+        turnStartedAt: document.battle.turnStartedAt ?? document.battle.startedAt,
         turnOrder: document.battle.turnOrder.map((entry) => ({ ...entry })),
         turnsCompleted: toInt(
           document.battle.turnsCompleted,

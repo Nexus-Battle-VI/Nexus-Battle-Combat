@@ -193,6 +193,7 @@ describe('CompleteBattleTurn — avance server-side, idempotente y sin saltos (H
       const conflicting: BattleRoomRepositoryPort = {
         findById: (id) => inner.findById(id),
         findWaitingForPlayers: () => inner.findWaitingForPlayers(),
+        findInBattle: () => inner.findInBattle(),
         save: () => {
           saves += 1
 

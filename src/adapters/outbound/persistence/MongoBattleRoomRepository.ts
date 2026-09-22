@@ -37,6 +37,12 @@ export class MongoBattleRoomRepository implements BattleRoomRepositoryPort {
     return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
   }
 
+  async findInBattle(): Promise<readonly BattleRoom[]> {
+    const documents = await this.rooms.find({ status: 'IN_BATTLE' }).toArray()
+
+    return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
+  }
+
   async save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom> {
     const next: BattleRoomDocument = {
       ...toDocument(room.toSnapshot()),

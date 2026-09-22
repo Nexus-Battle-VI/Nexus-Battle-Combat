@@ -80,6 +80,7 @@ const setup = async (
   const counting: BattleRoomRepositoryPort = {
     findById: (id) => inner.findById(id),
     findWaitingForPlayers: () => inner.findWaitingForPlayers(),
+    findInBattle: () => inner.findInBattle(),
     save: (room, expectedVersion) => {
       saves += 1
 
@@ -582,6 +583,7 @@ describe('UseSkill — conflicto de version: NUNCA se vuelve a sortear', () => {
     return {
       findById: (id) => inner.findById(id),
       findWaitingForPlayers: () => inner.findWaitingForPlayers(),
+      findInBattle: () => inner.findInBattle(),
       save: (room, expectedVersion) => {
         if (!thrown) {
           thrown = true
