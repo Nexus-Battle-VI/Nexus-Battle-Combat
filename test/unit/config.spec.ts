@@ -56,9 +56,29 @@ describe('Configuracion del servicio', () => {
       AUTH_MODE: 'jwt',
       COGNITO_USER_POOL_ID: 'us-east-1_abc',
       COGNITO_CLIENT_ID: 'cliente',
+      // HU-15.2 (RF-15): produccion tambien exige poder resolver
+      // displayName/heroId al unirse (ver la prueba dedicada mas abajo,
+      // "exige ACCOUNT_SERVICE_BASE_URL...").
+      ACCOUNT_SERVICE_BASE_URL: 'https://account.internal',
+      PLAYER_INVENTORY_SERVICE_BASE_URL: 'https://player-inventory.internal',
+      // HU-22: produccion tambien exige poder acreditar creditos de batalla.
+      WALLET_SERVICE_BASE_URL: 'https://wallet.internal',
     })
 
     expect(config.swaggerEnabled).toBe(false)
+  })
+
+  it('exige ACCOUNT_SERVICE_BASE_URL y PLAYER_INVENTORY_SERVICE_BASE_URL en produccion (HU-15.2, RF-15)', () => {
+    expect(() =>
+      loadConfig({
+        NODE_ENV: 'production',
+        PERSISTENCE_DRIVER: 'mongo',
+        MONGODB_URI: 'mongodb://db/combat',
+        AUTH_MODE: 'jwt',
+        COGNITO_USER_POOL_ID: 'us-east-1_abc',
+        COGNITO_CLIENT_ID: 'cliente',
+      }),
+    ).toThrow(/ACCOUNT_SERVICE_BASE_URL/)
   })
 
   it('exige MONGODB_URI con el driver de MongoDB', () => {

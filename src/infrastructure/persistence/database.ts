@@ -1,5 +1,17 @@
 import { MongoClient, type Db } from 'mongodb'
 
+import * as battleRoomsMigration from '../../adapters/outbound/persistence/migrations/001-battle-rooms'
+import * as battleRoomsPreparingStatusMigration from '../../adapters/outbound/persistence/migrations/002-battle-rooms-preparing-status'
+import * as battleRoomsDisplayNameMigration from '../../adapters/outbound/persistence/migrations/003-battle-rooms-participant-display-name'
+import * as battleRoomsHeroLoadoutVersionMigration from '../../adapters/outbound/persistence/migrations/004-battle-rooms-participant-hero-loadout-version'
+import * as battleRoomsBattleStateMigration from '../../adapters/outbound/persistence/migrations/005-battle-rooms-battle-state'
+import * as chatMessagesMigration from '../../adapters/outbound/persistence/migrations/006-chat-messages'
+import * as battleRoomsCombatSnapshotMigration from '../../adapters/outbound/persistence/migrations/007-battle-rooms-combat-snapshot'
+import * as battleRoomsSkillsMigration from '../../adapters/outbound/persistence/migrations/008-battle-rooms-skills'
+import * as battleRoomsFinishMigration from '../../adapters/outbound/persistence/migrations/009-battle-rooms-finish'
+import * as rewardWorkflowsMigration from '../../adapters/outbound/persistence/migrations/010-reward-workflows'
+import * as battleRoomsStakeMigration from '../../adapters/outbound/persistence/migrations/011-battle-rooms-stake'
+
 export interface DatabaseOptions {
   readonly uri: string
   readonly databaseName?: string
@@ -42,11 +54,26 @@ export interface MongoMigration {
  * Leer el directorio en tiempo de ejecucion fallaria en la imagen de
  * produccion, donde ese directorio contiene JavaScript compilado con otra ruta.
  *
- * Vacia a proposito: el andamiaje no inventa colecciones. Cada Historia de
- * Usuario anade aqui su migracion, con prefijo numerico que fija el orden, y
- * declara su validador `$jsonSchema` como en Catalog y Player/Inventory.
+ * Cada Historia de Usuario anade aqui su migracion, con prefijo numerico que
+ * fija el orden, y declara su validador `$jsonSchema` como en Catalog y
+ * Player/Inventory.
  */
-export const MIGRATIONS: readonly MongoMigration[] = []
+export const MIGRATIONS: readonly MongoMigration[] = [
+  { name: '001-battle-rooms', up: battleRoomsMigration.up },
+  { name: '002-battle-rooms-preparing-status', up: battleRoomsPreparingStatusMigration.up },
+  { name: '003-battle-rooms-participant-display-name', up: battleRoomsDisplayNameMigration.up },
+  {
+    name: '004-battle-rooms-participant-hero-loadout-version',
+    up: battleRoomsHeroLoadoutVersionMigration.up,
+  },
+  { name: '005-battle-rooms-battle-state', up: battleRoomsBattleStateMigration.up },
+  { name: '006-chat-messages', up: chatMessagesMigration.up },
+  { name: '007-battle-rooms-combat-snapshot', up: battleRoomsCombatSnapshotMigration.up },
+  { name: '008-battle-rooms-skills', up: battleRoomsSkillsMigration.up },
+  { name: '009-battle-rooms-finish', up: battleRoomsFinishMigration.up },
+  { name: '010-reward-workflows', up: rewardWorkflowsMigration.up },
+  { name: '011-battle-rooms-stake', up: battleRoomsStakeMigration.up },
+]
 
 const REGISTRY = '_migrations'
 

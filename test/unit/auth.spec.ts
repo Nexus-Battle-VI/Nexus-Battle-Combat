@@ -322,6 +322,14 @@ describe('Configuracion de autenticacion', () => {
       AUTH_MODE: 'jwt',
       COGNITO_USER_POOL_ID: 'us-east-1_abc',
       COGNITO_CLIENT_ID: 'cliente',
+      // HU-15.2 (RF-15): produccion tambien exige poder resolver
+      // displayName/heroId al unirse (config.spec.ts cubre esa validacion
+      // en detalle; aqui solo se satisface para no interferir con esta
+      // prueba de autenticacion).
+      ACCOUNT_SERVICE_BASE_URL: 'https://account.internal',
+      PLAYER_INVENTORY_SERVICE_BASE_URL: 'https://player-inventory.internal',
+      // HU-22: produccion tambien exige poder acreditar creditos de batalla.
+      WALLET_SERVICE_BASE_URL: 'https://wallet.internal',
     })
 
     expect(config.cognito).toEqual({ userPoolId: 'us-east-1_abc', clientId: 'cliente' })

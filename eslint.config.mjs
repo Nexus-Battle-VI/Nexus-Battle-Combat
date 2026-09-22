@@ -63,9 +63,10 @@ export default defineConfig([
                 'rxjs',
                 '**/adapters/**',
                 '**/infrastructure/**',
+                '**/application/**',
               ],
               message:
-                'El dominio no puede importar NestJS, SDK, ORM, HTTP, drivers ni adaptadores. Se define un puerto en application/ports y se inyecta la implementacion.',
+                'El dominio no puede importar NestJS, SDK, ORM, HTTP, drivers, adaptadores ni la capa de aplicacion. Un error de regla de negocio que el propio agregado puede determinar por si mismo se define como subclase de DomainError en domain/errors/; application/errors es solo para lo que depende de orquestacion/persistencia (ver domain/errors/BattleRoomErrors.ts).',
             },
           ],
         },
