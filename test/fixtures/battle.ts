@@ -82,6 +82,8 @@ export interface PreparingRoomOptions {
   /** Participantes AI declarados al crear (equipo A, luego B). */
   readonly aiInTeamA?: number
   readonly aiInTeamB?: number
+  /** HU-23: monto apostado por jugador (`{ a1: 10 }`); los demas no apuestan. */
+  readonly stakes?: Readonly<Record<string, number>>
 }
 
 /** Jugadores humanos de una sala: `a1..an` (equipo A) y `b1..bn` (equipo B). */
@@ -118,12 +120,41 @@ export const preparingRoom = (options: PreparingRoomOptions = {}): BattleRoom =>
 
   for (const [index, playerId] of humanIds(size, aiA, aiB).entries()) {
     const team = index < size[0] - aiA ? 'A' : 'B'
+    const stakeAmount = options.stakes?.[playerId]
 
-    room = room.join(playerId, team, NOW, `Nombre ${playerId}`, `hero-${playerId}`, 3)
+    room = room.join(
+      playerId,
+      team,
+      NOW,
+      `Nombre ${playerId}`,
+      `hero-${playerId}`,
+      3,
+      stakeAmount === undefined
+        ? null
+        : {
+            amount: stakeAmount,
+            holdOperationId: `battle:${room.id}:player:${playerId}:stake:reserve`,
+          },
+    )
   }
 
-  return room
+  // HU-23: el fixture no habla con Wallet, asi que la reserva se da por
+  // confirmada (en produccion lo hace `StakeReserver` antes de persistir).
+  return room.withStakesActivated()
 }
+
+/** HU-23: sala ya terminada con ganador explicito (sin pasar por la batalla). */
+export const finishedRoom = (
+  options: PreparingRoomOptions & { readonly winnerTeamLabel?: string } = {},
+): BattleRoom =>
+  inBattleRoom(options).finish(
+    { reason: 'ELIMINATION', winnerTeamLabel: options.winnerTeamLabel ?? 'A' },
+    NOW,
+  )
+
+/** HU-23: sala terminada por vencimiento global con vidas iguales -> `NO_WINNER`. */
+export const timedOutRoom = (options: PreparingRoomOptions = {}): BattleRoom =>
+  inBattleRoom(options).finish({ reason: 'TIME_LIMIT' }, NOW)
 
 /** Sala YA en batalla con la cola generada por el orden de roster (sin sorteo). */
 export const inBattleRoom = (options: PreparingRoomOptions = {}): BattleRoom => {
@@ -213,6 +244,7 @@ export const loggingRepository = (
   findWaitingForPlayers: () => inner.findWaitingForPlayers(),
   findInBattle: () => inner.findInBattle(),
   findFinishedSince: (since) => inner.findFinishedSince(since),
+  findCancelledSince: (since) => inner.findCancelledSince(since),
   save: async (room, expectedVersion) => {
     const saved = await inner.save(room, expectedVersion)
 

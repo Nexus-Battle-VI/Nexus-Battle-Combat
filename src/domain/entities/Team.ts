@@ -103,6 +103,18 @@ export class Team {
   }
 
   /**
+   * Devuelve un equipo nuevo con la MISMA composicion y otros datos por
+   * participante (HU-23: cambiar el estado de una apuesta sin tocar el cupo).
+   * Solo lo invoca `BattleRoom`, que ya garantiza que la lista tiene el mismo
+   * numero de puestos: este metodo no revalida capacidad porque no puede
+   * cambiar el cupo — mismo reparto de responsabilidades que
+   * `withParticipant()`.
+   */
+  withParticipants(participants: readonly Participant[]): Team {
+    return new Team(this.label, this.capacity, participants)
+  }
+
+  /**
    * Devuelve un equipo nuevo sin el participante `HUMAN` con ese `playerId`
    * (HU-15.2, `leave()`). Si nadie coincide, devuelve un equipo equivalente
    * sin cambios -- `BattleRoom.leave()` ya verifico antes de llamar que el

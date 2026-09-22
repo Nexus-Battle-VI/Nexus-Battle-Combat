@@ -10,6 +10,7 @@ import * as battleRoomsCombatSnapshotMigration from '../../adapters/outbound/per
 import * as battleRoomsSkillsMigration from '../../adapters/outbound/persistence/migrations/008-battle-rooms-skills'
 import * as battleRoomsFinishMigration from '../../adapters/outbound/persistence/migrations/009-battle-rooms-finish'
 import * as rewardWorkflowsMigration from '../../adapters/outbound/persistence/migrations/010-reward-workflows'
+import * as battleRoomsStakeMigration from '../../adapters/outbound/persistence/migrations/011-battle-rooms-stake'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -71,6 +72,7 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '008-battle-rooms-skills', up: battleRoomsSkillsMigration.up },
   { name: '009-battle-rooms-finish', up: battleRoomsFinishMigration.up },
   { name: '010-reward-workflows', up: rewardWorkflowsMigration.up },
+  { name: '011-battle-rooms-stake', up: battleRoomsStakeMigration.up },
 ]
 
 const REGISTRY = '_migrations'

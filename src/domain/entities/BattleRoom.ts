@@ -39,6 +39,13 @@ import {
 import { BattleRoomId } from '../value-objects/BattleRoomId'
 import { BattleMode, parseBattleMode } from '../value-objects/BattleMode'
 import { BattleRoomStatus, parseBattleRoomStatus } from '../value-objects/BattleRoomStatus'
+import {
+  StakeStatus,
+  type ParticipantStake,
+  type ParticipantStakeInput,
+  type StakeAtRisk,
+} from '../value-objects/ParticipantStake'
+import { StakeNotAllowedInPveError } from '../errors/StakeErrors'
 import { RewardConfig, type RewardConfigSnapshot } from '../value-objects/RewardConfig'
 import {
   findEliminatedTeam,
@@ -331,6 +338,18 @@ export class BattleRoom {
 
     BattleRoom.validateModeComposition(mode, teams)
 
+    // HU-23 (D4): una sala PVE no admite apuesta -- un participante AI no
+    // tiene cuenta en Wallet. Se rechaza ANTES de que la aplicacion pueda
+    // llamar a Wallet (el caso de uso construye el agregado antes de reservar).
+    if (
+      mode === BattleMode.Pve &&
+      [...teamA.participants, ...teamB.participants].some(
+        (participant) => participant.stake !== undefined,
+      )
+    ) {
+      throw new StakeNotAllowedInPveError()
+    }
+
     const reward = RewardConfig.create(input.reward.amount)
 
     return new BattleRoom(
@@ -491,13 +510,29 @@ export class BattleRoom {
     displayName: string | null = null,
     heroId: string | null = null,
     heroLoadoutVersion: number | null = null,
+    stake: ParticipantStakeInput | null = null,
   ): BattleRoom {
     if (this.status !== BattleRoomStatus.WaitingForPlayers) {
       throw new RoomNotJoinableError(this.id, this.status)
     }
 
+    // HU-23 (D4): `0` = no apostar; cualquier monto > 0 en PVE se rechaza
+    // antes de que la aplicacion llame a Wallet.
+    const stakeInput = stake !== null && stake.amount !== 0 ? stake : null
+
+    if (this.mode === BattleMode.Pve && stakeInput !== null) {
+      throw new StakeNotAllowedInPveError()
+    }
+
     const participant = createParticipant(
-      { kind: ParticipantKind.Human, playerId, heroId, heroLoadoutVersion, displayName },
+      {
+        kind: ParticipantKind.Human,
+        playerId,
+        heroId,
+        heroLoadoutVersion,
+        displayName,
+        ...(stakeInput === null ? {} : { stake: stakeInput }),
+      },
       at,
     )
     const allParticipants = [...this.teams[0].participants, ...this.teams[1].participants]
@@ -685,6 +720,123 @@ export class BattleRoom {
     return [...this.teams[0].participants, ...this.teams[1].participants].some(
       (participant) =>
         participant.kind === ParticipantKind.Human && participant.playerId === playerId,
+    )
+  }
+
+  /**
+   * Apuestas de la sala con la posicion de cada participante (HU-23), en el
+   * orden de los equipos. Base de `BattleStakePolicy` y de los servicios de
+   * reserva/liberacion/liquidacion.
+   */
+  stakesAtRisk(): readonly StakeAtRisk[] {
+    const stakes: StakeAtRisk[] = []
+
+    for (const team of this.teams) {
+      team.participants.forEach((participant, seat) => {
+        if (participant.stake === undefined || participant.playerId === null) {
+          return
+        }
+
+        stakes.push({
+          teamLabel: team.label,
+          seat,
+          playerId: participant.playerId,
+          amount: participant.stake.amount,
+          holdOperationId: participant.stake.holdOperationId,
+          status: participant.stake.status,
+        })
+      })
+    }
+
+    return stakes
+  }
+
+  /** La apuesta de un jugador, o `null` si no aposto o no es participante. */
+  stakeOf(playerId: string): ParticipantStake | null {
+    for (const team of this.teams) {
+      for (const participant of team.participants) {
+        if (participant.kind === ParticipantKind.Human && participant.playerId === playerId) {
+          return participant.stake ?? null
+        }
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * Pasa TODAS las apuestas `PENDING_RESERVE` a `ACTIVE`. Lo invoca la
+   * aplicacion DESPUES de que Wallet confirmo cada reserva (D8: la reserva es
+   * sincrona) y ANTES de persistir: una sala guardada nunca tiene una apuesta
+   * `PENDING_RESERVE`.
+   */
+  withStakesActivated(): BattleRoom {
+    return this.withStakeStatuses(
+      this.stakesAtRisk()
+        .filter((stake) => stake.status === StakeStatus.PendingReserve)
+        .map((stake) => ({ holdOperationId: stake.holdOperationId, status: StakeStatus.Active })),
+    )
+  }
+
+  /**
+   * Devuelve una sala nueva con el estado de las apuestas indicadas
+   * actualizado, en la MISMA escritura que el resto del agregado. Un
+   * `holdOperationId` que no corresponda a ninguna apuesta de la sala es una
+   * inconsistencia (no un no-op silencioso): el llamador solo actualiza holds
+   * que acaba de confirmar contra Wallet.
+   */
+  withStakeStatuses(
+    updates: readonly { readonly holdOperationId: string; readonly status: StakeStatus }[],
+  ): BattleRoom {
+    if (updates.length === 0) {
+      return this
+    }
+
+    const byHold = new Map(updates.map((update) => [update.holdOperationId, update.status]))
+    const applied = new Set<string>()
+
+    const updateTeam = (team: Team): Team =>
+      team.withParticipants(
+        team.participants.map((participant) => {
+          if (participant.stake === undefined) {
+            return participant
+          }
+
+          const status = byHold.get(participant.stake.holdOperationId)
+
+          if (status === undefined) {
+            return participant
+          }
+
+          applied.add(participant.stake.holdOperationId)
+
+          return { ...participant, stake: { ...participant.stake, status } }
+        }),
+      )
+
+    const teams: readonly [Team, Team] = [updateTeam(this.teams[0]), updateTeam(this.teams[1])]
+
+    if (applied.size !== byHold.size) {
+      throw new DomainError(
+        'Se intento actualizar una apuesta que no pertenece a esta sala (hold desconocido).',
+      )
+    }
+
+    return new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle: this.battle,
+        events: this.events,
+        handledCommands: this.handledCommands,
+        result: this.result,
+      },
     )
   }
 
