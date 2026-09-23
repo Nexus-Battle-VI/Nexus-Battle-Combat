@@ -49,7 +49,7 @@ Este repositorio contiene código y Pull Requests. No contiene Issues ni Product
 
 ### Salas activas del jugador (volver a mi sala)
 
-`GET /api/v1/combat/me/rooms` devuelve las salas **no terminales** (`WAITING_FOR_PLAYERS`, `PREPARING`, `IN_BATTLE`) en las que participa el jugador autenticado, de la más reciente a la más antigua, con la misma vista que `GET /rooms/{id}` (la apuesta ajena no se expone). El jugador sale **solo** del testimonio. Existe porque el listado público solo muestra salas en espera con cupo: una sala propia llena, preparándose o en batalla solo se recuperaba conociendo su id. Un jugador puede estar en varias salas a la vez. Migración `012` (índice `teams.participants.playerId` + `status`, solo aditiva).
+`GET /api/v1/combat/me/rooms` devuelve las salas **no terminales** (`WAITING_FOR_PLAYERS`, `PREPARING`, `IN_BATTLE`) en las que participa el jugador autenticado, más las que **creó** y siguen esperando jugadores (crear una sala no une al creador salvo que apueste), de la más reciente a la más antigua, con la misma vista que `GET /rooms/{id}` (la apuesta ajena no se expone). El jugador sale **solo** del testimonio. Existe porque el listado público solo muestra salas en espera con cupo: una sala propia llena, preparándose o en batalla solo se recuperaba conociendo su id. Un jugador puede estar en varias salas a la vez. Migración `012` (índices `teams.participants.playerId` + `status` y `createdBy` + `status`, solo aditiva).
 
 ### Chat del lobby y de las salas (HU-13)
 

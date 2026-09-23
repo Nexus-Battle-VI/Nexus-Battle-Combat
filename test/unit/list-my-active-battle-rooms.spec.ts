@@ -77,11 +77,28 @@ describe('ListMyActiveBattleRooms', () => {
     expect(await new ListMyActiveBattleRooms(repo).execute('ana')).toEqual([])
   })
 
-  it('crear una sala NO basta: el creador que no se unio no participa', async () => {
+  it('incluye la sala que el jugador CREO y sigue esperando jugadores, aunque no se uniera', async () => {
     const repo = new InMemoryBattleRoomRepository()
     await persist(repo, waitingRoom(uuid(8), T1, [], 'ana'))
 
-    expect(await new ListMyActiveBattleRooms(repo).execute('ana')).toEqual([])
+    const rooms = await new ListMyActiveBattleRooms(repo).execute('ana')
+
+    expect(rooms.map((room) => room.id)).toEqual([uuid(8)])
+  })
+
+  it('pasada la espera, el creador que NO participa ya no la ve (no podria leerla)', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    let full = BattleRoom.create(
+      uuid(13),
+      'creadora',
+      { mode: 'PVP', teamConfigs: [{ capacity: 1 }, { capacity: 1 }], reward: { amount: 0 } },
+      T1,
+    )
+    full = full.join('x', null, T1, 'X', 'heroe-x', 1).join('y', null, T1, 'Y', 'heroe-y', 1)
+    await persist(repo, full)
+
+    expect(full.status).toBe('PREPARING')
+    expect(await new ListMyActiveBattleRooms(repo).execute('creadora')).toEqual([])
   })
 
   it('devuelve VARIAS salas, de la mas reciente a la mas antigua', async () => {

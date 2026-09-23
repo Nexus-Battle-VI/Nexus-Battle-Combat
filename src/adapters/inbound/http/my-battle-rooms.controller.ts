@@ -29,7 +29,7 @@ export class MyBattleRoomsController {
   @Get('rooms')
   @ApiOperation({
     summary:
-      'Salas del jugador autenticado en WAITING_FOR_PLAYERS, PREPARING o IN_BATTLE, de la mas reciente a la mas antigua',
+      'Salas del jugador autenticado en WAITING_FOR_PLAYERS, PREPARING o IN_BATTLE (y las que creo y siguen esperando jugadores), de la mas reciente a la mas antigua',
   })
   @ApiResponse({ status: 200, type: BattleRoomResponse, isArray: true })
   @ApiResponse({ status: 401, description: 'Falta el testimonio o no es valido' })

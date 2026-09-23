@@ -63,12 +63,17 @@ export class MongoBattleRoomRepository implements BattleRoomRepositoryPort {
   }
 
   async findActiveByParticipant(playerId: string): Promise<readonly BattleRoom[]> {
-    // Respaldada por el indice (`teams.participants.playerId`, `status`) de la
-    // migracion 012.
+    // Cada rama del `$or` tiene su indice (migracion 012):
+    // (`teams.participants.playerId`, `status`) y (`createdBy`, `status`).
     const documents = await this.rooms
       .find({
-        'teams.participants.playerId': playerId,
-        status: { $in: [...ACTIVE_ROOM_STATUSES] },
+        $or: [
+          {
+            'teams.participants.playerId': playerId,
+            status: { $in: [...ACTIVE_ROOM_STATUSES] },
+          },
+          { createdBy: playerId, status: 'WAITING_FOR_PLAYERS' },
+        ],
       })
       .sort({ createdAt: -1 })
       .toArray()

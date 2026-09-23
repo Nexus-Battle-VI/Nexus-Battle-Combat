@@ -416,13 +416,15 @@ describe('MongoBattleRoomRepository', () => {
   describe('findActiveByParticipant (migracion 012, volver a mi sala)', () => {
     const PLAYER = 'jugador-mis-salas'
 
-    it('la migracion 012 crea el indice (teams.participants.playerId, status)', async () => {
+    it('la migracion 012 crea los indices de participante y de creador', async () => {
       const indexes = await rooms().indexes()
-      const index = indexes.find(
-        (candidate) => candidate.name === 'teams.participants.playerId_1_status_1',
-      )
+      const byName = (name: string) => indexes.find((candidate) => candidate.name === name)?.key
 
-      expect(index?.key).toEqual({ 'teams.participants.playerId': 1, status: 1 })
+      expect(byName('teams.participants.playerId_1_status_1')).toEqual({
+        'teams.participants.playerId': 1,
+        status: 1,
+      })
+      expect(byName('createdBy_1_status_1')).toEqual({ createdBy: 1, status: 1 })
     })
 
     it('la consulta usa ese indice (plan del motor)', async () => {
@@ -464,6 +466,12 @@ describe('MongoBattleRoomRepository', () => {
       const creators = await repository.findActiveByParticipant(CREATOR)
 
       expect(mine.map((room) => room.id)).toEqual([newer, older])
+
+      const createdOnly = nextId()
+      await repository.save(BattleRoom.create(createdOnly, 'creadora-sola', validInput(), AT), 0)
+      expect(
+        (await repository.findActiveByParticipant('creadora-sola')).map((room) => room.id),
+      ).toEqual([createdOnly])
       expect(creators.map((room) => room.id)).toContain(inBattle)
       expect(creators.map((room) => room.id)).not.toContain(finishedId)
       expect(await repository.findActiveByParticipant('nadie')).toEqual([])

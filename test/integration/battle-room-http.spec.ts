@@ -978,6 +978,18 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       expect(response.body).toEqual([])
     })
 
+    it('incluye la sala que el jugador CREO y sigue esperando jugadores (crear no une al creador)', async () => {
+      const created = await authed('token-rival')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+
+      const response = await myRooms('token-rival')
+
+      expect(response.body.map((room: { id: string }) => room.id)).toContain(
+        String(created.body.id),
+      )
+    })
+
     it('ignora cualquier playerId en la consulta: solo cuenta el sujeto del testimonio', async () => {
       const response = await authed('token-mirona')(
         request(app.getHttpServer()).get('/api/v1/combat/me/rooms?playerId=sujeto-mis-salas'),

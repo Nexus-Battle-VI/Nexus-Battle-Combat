@@ -70,10 +70,11 @@ export class InMemoryBattleRoomRepository implements BattleRoomRepositoryPort {
     const rooms = [...this.byId.values()]
       .filter(
         (snapshot) =>
-          active.includes(snapshot.status) &&
-          snapshot.teams.some((team) =>
-            team.participants.some((participant) => participant.playerId === playerId),
-          ),
+          (active.includes(snapshot.status) &&
+            snapshot.teams.some((team) =>
+              team.participants.some((participant) => participant.playerId === playerId),
+            )) ||
+          (snapshot.createdBy === playerId && snapshot.status === 'WAITING_FOR_PLAYERS'),
       )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((snapshot) => BattleRoom.restore(snapshot))

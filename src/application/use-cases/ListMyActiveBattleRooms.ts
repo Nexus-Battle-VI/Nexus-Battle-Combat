@@ -2,8 +2,9 @@ import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 
 /**
- * Salas no terminales en las que participa quien pregunta: "volver a mi
- * sala" / "continuar batalla" en Jugar Online.
+ * Salas no terminales en las que participa quien pregunta (y las que creo y
+ * siguen esperando jugadores): "volver a mi sala" / "continuar batalla" en
+ * Jugar Online.
  *
  * El listado publico (`ListAvailableBattleRooms`) solo devuelve salas
  * `WAITING_FOR_PLAYERS` con cupo, asi que una sala propia llena, en
