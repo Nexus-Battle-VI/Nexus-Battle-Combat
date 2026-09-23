@@ -231,12 +231,12 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
       expect(read.body.lastSeq).toBe(0)
     })
 
-    it('sala preparada: inicia la batalla con UNA cola de dos participantes y responde la sala en curso', async () => {
+    it('sala preparada: el propietario inicia la batalla con UNA cola de dos participantes y responde la sala en curso', async () => {
       const roomId = await preparingRoom()
 
       const started = await http()
         .post(`/api/v1/combat/rooms/${roomId}/start`)
-        .set('Authorization', auth('token-b'))
+        .set('Authorization', auth('token-a'))
 
       expect(started.status).toBe(200)
       expect(started.body.status).toBe('IN_BATTLE')
@@ -296,12 +296,12 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
       expect(second.body.lastSeq).toBe(1)
     })
 
-    it('dos inicios SIMULTANEOS producen una sola cola y un solo battleStarted', async () => {
+    it('dos inicios SIMULTANEOS del propietario producen una sola cola y un solo battleStarted', async () => {
       const roomId = await preparingRoom()
 
       const [a, b] = await Promise.all([
         http().post(`/api/v1/combat/rooms/${roomId}/start`).set('Authorization', auth('token-a')),
-        http().post(`/api/v1/combat/rooms/${roomId}/start`).set('Authorization', auth('token-b')),
+        http().post(`/api/v1/combat/rooms/${roomId}/start`).set('Authorization', auth('token-a')),
       ])
 
       expect([a.status, b.status]).toEqual([200, 200])
@@ -320,7 +320,7 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
 
       const again = await http()
         .post(`/api/v1/combat/rooms/${roomId}/start`)
-        .set('Authorization', auth('token-b'))
+        .set('Authorization', auth('token-a'))
 
       expect(again.status).toBe(409)
 
@@ -382,6 +382,23 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
         .set('Authorization', auth('token-a'))
 
       expect(read.body.status).toBe('PREPARING')
+    })
+
+    it('un participante que NO es el propietario NO puede iniciar (403) y no se crea nada', async () => {
+      const roomId = await preparingRoom()
+
+      const forbidden = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-b'))
+
+      expect(forbidden.status).toBe(403)
+
+      const read = await http()
+        .get(`/api/v1/combat/rooms/${roomId}`)
+        .set('Authorization', auth('token-a'))
+
+      expect(read.body.status).toBe('PREPARING')
+      expect(read.body.battle).toBeNull()
     })
 
     it('una sala que todavia espera jugadores no inicia: 409', async () => {

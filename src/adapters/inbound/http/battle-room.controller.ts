@@ -314,16 +314,21 @@ export class BattleRoomController {
   @ApiOperation({
     summary: 'Inicia la batalla de una sala PREPARING (HU-17, RF-17)',
     description:
-      'Sin cuerpo: ningun cliente elige quien inicia ni quien participa. Cualquier participante ' +
-      'HUMAN puede invocarlo. Revalida la elegibilidad precombate (HU-16) de cada participante, ' +
-      'genera la cola de turnos con el motor centralizado (HU-24), la persiste y solo entonces ' +
-      'difunde battleStarted por WebSocket. IDEMPOTENTE: si la sala ya esta IN_BATTLE devuelve el ' +
+      'Sin cuerpo: ningun cliente elige quien inicia ni quien participa. Solo el propietario de ' +
+      'la sala (requester === createdBy) puede invocarlo; el resto de participantes recibe 403. ' +
+      'Revalida la elegibilidad precombate (HU-16) de cada participante, genera la cola de turnos ' +
+      'con el motor centralizado (HU-24), la persiste y solo entonces difunde battleStarted por ' +
+      'WebSocket. IDEMPOTENTE para CUALQUIER participante: si la sala ya esta IN_BATTLE devuelve el ' +
       'estado vigente sin generar otra cola ni otro evento.',
   })
   @ApiResponse({ status: 200, type: BattleRoomResponse })
   @ApiResponse({ status: 400, description: 'roomId no es un UUID v4 valido' })
   @ApiResponse({ status: 401, description: 'Falta el testimonio o no es valido' })
-  @ApiResponse({ status: 403, description: 'Quien pide no es participante de la sala' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'Quien pide no es participante de la sala, o es participante pero no su propietario',
+  })
   @ApiResponse({ status: 404, description: 'La sala no existe' })
   @ApiResponse({
     status: 409,
