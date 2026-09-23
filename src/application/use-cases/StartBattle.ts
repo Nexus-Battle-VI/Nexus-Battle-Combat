@@ -45,25 +45,32 @@ export const HERO_LOADOUT_CHANGED = 'HERO_LOADOUT_CHANGED'
  *
  * Orden (ADR-020: persistir antes de difundir):
  *
- *  1. Cargar la sala; solo un participante HUMAN puede iniciarla (403). La
- *     identidad es SIEMPRE `identity.subject`; el comando no tiene cuerpo, asi
- *     que ningun cliente elige quien inicia ni quien participa.
- *  2. IDEMPOTENTE: si la sala ya esta `IN_BATTLE` devuelve el estado vigente,
- *     sin generar otra cola ni otro `battleStarted`.
- *  3. Solo desde `PREPARING` (409 en otro caso) y con equipos del MISMO tamano
+ *  1. Cargar la sala; solo un participante puede consultarla (403 si no lo
+ *     es). La identidad es SIEMPRE `identity.subject`; el comando no tiene
+ *     cuerpo, asi que ningun cliente elige quien inicia ni quien participa.
+ *  2. IDEMPOTENTE: si la sala ya esta `IN_BATTLE` devuelve el estado vigente
+ *     a CUALQUIER participante, sin generar otra cola ni otro `battleStarted`
+ *     — necesario porque tras el evento realtime todos los clientes pueden
+ *     seguir consultando el estado.
+ *  3. Solo `requesterId === room.createdBy` puede iniciar (403
+ *     `RoomAccessForbiddenError` en otro caso, mismo patron que `cancel()` en
+ *     `BattleRoom.ts`). Antes del 2026-09-22 cualquier participante HUMAN
+ *     podia iniciarla; el lobby de Web ahora solo expone el boton al
+ *     propietario, pero el backend es quien lo hace cumplir.
+ *  5. Solo desde `PREPARING` (409 en otro caso) y con equipos del MISMO tamano
  *     (422 `UNSUPPORTED_TEAM_COMPOSITION`: RF-17 no define el orden cuando un
  *     equipo se agota antes y no se inventa esa regla).
- *  4. REVALIDACION PRECOMBATE (HU-16) de cada participante HUMAN con los mismos
+ *  6. REVALIDACION PRECOMBATE (HU-16) de cada participante HUMAN con los mismos
  *     puertos y la misma politica que `JoinBattleRoom`: el heroe equipado debe
  *     existir, ser el mismo que se aprobo, seguir siendo elegible y conservar
  *     la version de equipamiento capturada al unirse. Si CUALQUIERA falla, no
  *     hay cola, no hay `battleStarted` y la sala sigue `PREPARING`. Los `AI` no
  *     tienen heroe equipado que validar. NO se reimplementa equipamiento.
- *  5. Generar la cola con la fuente centralizada de HU-24 (`BoundedRandom`).
+ *  7. Generar la cola con la fuente centralizada de HU-24 (`BoundedRandom`).
  *     Las estadisticas no entran en el orden; solo se copia el subtipo del
  *     heroe para PRESENTACION.
- *  6. `BattleRoom.startBattle()` + `save` con bloqueo optimista.
- *  7. SOLO despues de persistir, publicar `battleStarted`.
+ *  8. `BattleRoom.startBattle()` + `save` con bloqueo optimista.
+ *  9. SOLO despues de persistir, publicar `battleStarted`.
  *
  * Una carrera entre dos participantes que inician a la vez resuelve por el
  * bloqueo optimista: el perdedor relee la sala y, si ya esta `IN_BATTLE`,
@@ -99,6 +106,10 @@ export class StartBattle {
 
     if (room.status === BattleRoomStatus.InBattle) {
       return toBattleRoomDto(room, requesterId)
+    }
+
+    if (requesterId !== room.createdBy) {
+      throw new RoomAccessForbiddenError(roomId)
     }
 
     if (room.status !== BattleRoomStatus.Preparing) {
