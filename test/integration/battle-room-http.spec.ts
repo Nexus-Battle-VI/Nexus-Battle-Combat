@@ -56,6 +56,9 @@ const IDENTITIES: Readonly<Record<string, VerifiedIdentity>> = {
   'token-sin-heroe': { subject: 'sujeto-sin-heroe', email: null, roles: new Set([Role.Player]) },
   'token-no-listo': { subject: 'sujeto-no-listo', email: null, roles: new Set([Role.Player]) },
   'token-chaman': { subject: 'sujeto-chaman', email: null, roles: new Set([Role.Player]) },
+  'token-mis-salas': { subject: 'sujeto-mis-salas', email: null, roles: new Set([Role.Player]) },
+  'token-rival': { subject: 'sujeto-rival', email: null, roles: new Set([Role.Player]) },
+  'token-mirona': { subject: 'sujeto-mirona', email: null, roles: new Set([Role.Player]) },
 }
 
 const stubVerifier: TokenVerifierPort = {
@@ -921,6 +924,85 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       expect(response.status).toBe(200)
       expect(response.body.status).toBe('FINISHED')
       expect(response.body.result).toMatchObject({ reason: 'TIME_LIMIT', outcome: 'NO_WINNER' })
+    })
+  })
+  describe('GET /api/v1/combat/me/rooms (volver a mi sala)', () => {
+    const myRooms = (token: string) =>
+      authed(token)(request(app.getHttpServer()).get('/api/v1/combat/me/rooms'))
+
+    it('responde 401 sin testimonio', async () => {
+      const response = await request(app.getHttpServer()).get('/api/v1/combat/me/rooms')
+
+      expect(response.status).toBe(401)
+    })
+
+    it('responde 200 [] cuando el jugador no participa en ninguna sala', async () => {
+      const response = await myRooms('token-mirona')
+
+      expect(response.status).toBe(200)
+      expect(response.body).toEqual([])
+    })
+
+    it('devuelve la sala propia en espera y, llena, en PREPARING (ya fuera del listado publico)', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(validRoom()),
+      )
+      const roomId = String(created.body.id)
+
+      await authed('token-mis-salas')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/join`),
+      )
+
+      const waiting = await myRooms('token-mis-salas')
+
+      expect(waiting.status).toBe(200)
+      expect(waiting.body.map((room: { id: string }) => room.id)).toContain(roomId)
+
+      await authed('token-rival')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/join`),
+      )
+
+      const publicList = await authed('token-mirona')(
+        request(app.getHttpServer()).get('/api/v1/combat/rooms'),
+      )
+      const mine = await myRooms('token-mis-salas')
+      const found = mine.body.find((room: { id: string }) => room.id === roomId)
+
+      expect(publicList.body.map((room: { id: string }) => room.id)).not.toContain(roomId)
+      expect(found).toMatchObject({ id: roomId, status: 'PREPARING' })
+    })
+
+    it('no filtra salas ajenas: quien no participa sigue viendo []', async () => {
+      const response = await myRooms('token-mirona')
+
+      expect(response.body).toEqual([])
+    })
+
+    it('ignora cualquier playerId en la consulta: solo cuenta el sujeto del testimonio', async () => {
+      const response = await authed('token-mirona')(
+        request(app.getHttpServer()).get('/api/v1/combat/me/rooms?playerId=sujeto-mis-salas'),
+      )
+
+      expect(response.status).toBe(200)
+      expect(response.body).toEqual([])
+    })
+
+    it('deja de listar la sala cuando el jugador la abandona', async () => {
+      const created = await authed('token-creador')(
+        request(app.getHttpServer()).post('/api/v1/combat/rooms').send(roomWithSpareCapacity()),
+      )
+      const roomId = String(created.body.id)
+
+      await authed('token-mirona')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/join`),
+      )
+      expect((await myRooms('token-mirona')).body).toHaveLength(1)
+
+      await authed('token-mirona')(
+        request(app.getHttpServer()).post(`/api/v1/combat/rooms/${roomId}/leave`),
+      )
+
+      expect((await myRooms('token-mirona')).body).toEqual([])
     })
   })
 })

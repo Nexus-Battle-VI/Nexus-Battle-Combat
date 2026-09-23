@@ -245,6 +245,7 @@ export const loggingRepository = (
   findInBattle: () => inner.findInBattle(),
   findFinishedSince: (since) => inner.findFinishedSince(since),
   findCancelledSince: (since) => inner.findCancelledSince(since),
+  findActiveByParticipant: (playerId) => inner.findActiveByParticipant(playerId),
   save: async (room, expectedVersion) => {
     const saved = await inner.save(room, expectedVersion)
 

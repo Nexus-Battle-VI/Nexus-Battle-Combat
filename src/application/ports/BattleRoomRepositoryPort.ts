@@ -52,6 +52,19 @@ export interface BattleRoomRepositoryPort {
    * `ReconcileStakes` para liberar lo que quedo pendiente tras una caida.
    */
   findCancelledSince(since: Date): Promise<readonly BattleRoom[]>
+
+  /**
+   * Salas NO terminales (`WAITING_FOR_PLAYERS`, `PREPARING`, `IN_BATTLE`) en
+   * las que `playerId` es participante, de la mas reciente a la mas antigua.
+   * Respalda "volver a mi sala" en Jugar Online: sin ella, una sala que ya no
+   * esta en el listado publico (llena, preparandose o en batalla) solo se
+   * recupera conociendo su id. Un jugador puede estar en varias salas a la
+   * vez; no se impone ninguna restriccion aqui.
+   */
+  findActiveByParticipant(playerId: string): Promise<readonly BattleRoom[]>
 }
+
+/** Estados en los que una sala sigue viva para quien participa en ella. */
+export const ACTIVE_ROOM_STATUSES = ['WAITING_FOR_PLAYERS', 'PREPARING', 'IN_BATTLE'] as const
 
 export const BATTLE_ROOM_REPOSITORY = Symbol('BattleRoomRepositoryPort')

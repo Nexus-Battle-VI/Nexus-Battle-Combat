@@ -2,7 +2,10 @@ import { Int32, MongoServerError, type Collection, type Db } from 'mongodb'
 
 import { BattleRoom } from '../../../domain/entities/BattleRoom'
 import { RoomConflictError } from '../../../application/errors/ApplicationError'
-import type { BattleRoomRepositoryPort } from '../../../application/ports/BattleRoomRepositoryPort'
+import {
+  ACTIVE_ROOM_STATUSES,
+  type BattleRoomRepositoryPort,
+} from '../../../application/ports/BattleRoomRepositoryPort'
 import { toDocument, toSnapshot, type BattleRoomDocument } from './battle-room-mapping'
 
 /**
@@ -54,6 +57,20 @@ export class MongoBattleRoomRepository implements BattleRoomRepositoryPort {
   async findCancelledSince(since: Date): Promise<readonly BattleRoom[]> {
     const documents = await this.rooms
       .find({ status: 'CANCELLED', createdAt: { $gte: since } })
+      .toArray()
+
+    return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
+  }
+
+  async findActiveByParticipant(playerId: string): Promise<readonly BattleRoom[]> {
+    // Respaldada por el indice (`teams.participants.playerId`, `status`) de la
+    // migracion 012.
+    const documents = await this.rooms
+      .find({
+        'teams.participants.playerId': playerId,
+        status: { $in: [...ACTIVE_ROOM_STATUSES] },
+      })
+      .sort({ createdAt: -1 })
       .toArray()
 
     return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
