@@ -427,6 +427,42 @@ describe('chat de Jugar Online sobre WebSocket real (HU-13)', () => {
     })
   })
 
+  describe('moderacion: censura server-side del lenguaje ofensivo', () => {
+    it('un mensaje ofensivo enviado DIRECTO por el socket llega censurado a todos', async () => {
+      const ana = await enter('ana', { channel: 'lobby' })
+      const beto = await enter('beto', { channel: 'lobby' })
+
+      ana.send({
+        type: 'chat.send',
+        channel: 'lobby',
+        commandId: commandId(),
+        text: 'eres un MALPARIDO p.u.t.a',
+      })
+
+      await Promise.all([ana, beto].map((c) => c.waitForType('chat.message')))
+
+      for (const client of [ana, beto]) {
+        const received = client.of('chat.message') as { text: string }[]
+
+        expect(received.at(-1)?.text).toBe('eres un ######### #######')
+        expect(JSON.stringify(received)).not.toMatch(/malparido|p\.u\.t\.a/i)
+      }
+    })
+
+    it('el historial que recibe quien entra despues tambien esta censurado', async () => {
+      const ana = await enter('ana', { channel: 'lobby' })
+      const before = ana.of('chat.message').length
+
+      ana.send({ type: 'chat.send', channel: 'lobby', commandId: commandId(), text: 'gonorrea' })
+      await ana.waitForType('chat.message', before + 1)
+
+      const late = await enter('beto', { channel: 'lobby' })
+      const subscribed = late.of('chat.subscribed')[0] as { messages: { text: string }[] }
+
+      expect(subscribed.messages.at(-1)?.text).toBe('########')
+    })
+  })
+
   describe('CA-01: sala', () => {
     it('un mensaje de sala llega a los participantes de esa sala y a nadie mas', async () => {
       const roomA = await createRoomOverHttp()
