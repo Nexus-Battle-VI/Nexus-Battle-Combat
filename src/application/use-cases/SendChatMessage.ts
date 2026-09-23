@@ -9,6 +9,7 @@ import type { IdGeneratorPort } from '../ports/IdGeneratorPort'
 import type { AuthorizeChatChannel } from './AuthorizeChatChannel'
 import type { ChatMessage } from '../../domain/entities/ChatMessage'
 import { ChatRateLimitedError, InvalidChatCommandError } from '../../domain/errors/ChatErrors'
+import { censorChatText } from '../../domain/policies/ChatProfanityPolicy'
 import type { ChatRateLimiter } from '../../domain/policies/ChatRateLimiter'
 import { chatChannelKey, type ChatChannel } from '../../domain/value-objects/ChatChannel'
 import { createChatText } from '../../domain/value-objects/ChatText'
@@ -72,6 +73,8 @@ const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  *   modo que ni un reintento ni un fallo de Account consumen cupo.
  * - El nombre visible sale de la sala (snapshot) o de Account; NUNCA del
  *   cliente: quien envia no puede elegir con que nombre aparece.
+ * - Lenguaje ofensivo: se CENSURA con `#` (`ChatProfanityPolicy`), no se
+ *   rechaza. Se persiste y difunde solo la version censurada.
  */
 export class SendChatMessage {
   constructor(
@@ -87,7 +90,10 @@ export class SendChatMessage {
   async prepare(input: SendChatMessageInput): Promise<PreparedChatMessage> {
     const commandId = normalizeCommandId(input.commandId)
     const access = await this.authorize.execute(input.subject, input.channel)
-    const text = createChatText(input.text, this.settings.maxMessageLength)
+    // La censura va ANTES de deduplicar, persistir y difundir: lo unico que
+    // existe del mensaje es su version censurada (historial incluido), y un
+    // cliente que escriba directo en el WebSocket tampoco la evita.
+    const text = censorChatText(createChatText(input.text, this.settings.maxMessageLength))
     const key = chatChannelKey(input.channel)
 
     const existing = await this.messages.findByCommand(input.subject, commandId)

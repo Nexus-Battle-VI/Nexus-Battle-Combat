@@ -238,6 +238,49 @@ describe('SendChatMessage', () => {
     })
   })
 
+  describe('moderacion: censura del lenguaje ofensivo', () => {
+    it('persiste y devuelve la version censurada, no la original', async () => {
+      const harness = buildChatHarness()
+
+      const { message } = await send(harness, { text: 'eres un malparido' })
+
+      expect(message.text).toBe('eres un #########')
+
+      const page = await harness.readHistory.execute(LOBBY_CHANNEL, null)
+
+      expect(page.messages.map((m) => m.text)).toEqual(['eres un #########'])
+    })
+
+    it('un mensaje limpio no cambia', async () => {
+      const harness = buildChatHarness()
+
+      const { message } = await send(harness, { text: 'buena partida' })
+
+      expect(message.text).toBe('buena partida')
+    })
+
+    it('reintentar el mismo commandId devuelve el mismo mensaje censurado', async () => {
+      const harness = buildChatHarness()
+      const commandId = nextCommandId()
+
+      const first = await send(harness, { commandId, text: 'gonorrea' })
+      const retry = await harness.sender.prepare(input({ commandId, text: 'gonorrea' }))
+
+      expect(first.message.text).toBe('########')
+      expect(retry.kind === 'duplicate' && retry.message).toEqual(first.message)
+    })
+
+    it('un mensaje ofensivo no se rechaza: sigue contando para la frecuencia como uno normal', async () => {
+      const harness = buildChatHarness({ rateLimitMessages: 1 })
+
+      await send(harness, { text: 'puta' })
+
+      await expect(harness.sender.prepare(input({ text: 'hola' }))).rejects.toBeInstanceOf(
+        ChatRateLimitedError,
+      )
+    })
+  })
+
   describe('procesado una sola vez (RF-13, ADR-020: commandId)', () => {
     it('repetir el mismo commandId devuelve el mensaje YA aceptado, sin crear otro', async () => {
       const harness = buildChatHarness()
