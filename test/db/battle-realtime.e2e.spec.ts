@@ -619,7 +619,7 @@ describe('HU-17 de extremo a extremo (protocolo): dos clientes WebSocket reales 
   })
 
   describe('concurrencia y persistencia reales', () => {
-    it('dos inicios simultaneos contra MongoDB producen UNA cola y UN battleStarted', async () => {
+    it('dos inicios simultaneos del propietario contra MongoDB producen UNA cola y UN battleStarted', async () => {
       const roomId = await preparingRoom()
       const a = await connect('token-a')
       const b = await connect('token-b')
@@ -631,7 +631,7 @@ describe('HU-17 de extremo a extremo (protocolo): dos clientes WebSocket reales 
 
       const [first, second] = await Promise.all([
         call('POST', `/rooms/${roomId}/start`, 'token-a'),
-        call('POST', `/rooms/${roomId}/start`, 'token-b'),
+        call('POST', `/rooms/${roomId}/start`, 'token-a'),
       ])
 
       await a.waitFor('battleStarted')

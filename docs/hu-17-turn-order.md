@@ -21,7 +21,7 @@
 
 ```text
 sala PREPARING (cupo completo)
-  ↓ POST /api/v1/combat/rooms/:roomId/start   (cualquier participante HUMAN; sin cuerpo)
+  ↓ POST /api/v1/combat/rooms/:roomId/start   (solo el propietario de la sala; sin cuerpo)
   ↓ revalida a cada HUMAN con Player-Inventory (HU-16): heroe equipado, elegibilidad y version de loadout
   ↓ genera la cola con HU-24 (BoundedRandom: muestreo por rechazo)
   ↓ BattleRoom.startBattle()  →  IN_BATTLE + battleStarted (seq 1)
@@ -35,9 +35,17 @@ participantes, sortea, persiste y publica. El cliente no elige quién inicia, ni
 petición no tiene cuerpo). Se adopta un `POST …/start` explícito e idempotente en lugar de iniciar dentro de `join`,
 que obligaría a repetir la revalidación de cada participante (llamadas a Player-Inventory) dentro de una unión.
 
-`start` es **idempotente**: iniciar otra vez (o desde el otro participante) devuelve el estado vigente sin otra
-cola, sin nuevo sorteo y sin otro `battleStarted`. Dos inicios simultáneos se resuelven con el bloqueo
-optimista: el perdedor relee la sala y devuelve la batalla ya iniciada.
+**Quién puede pedirlo (2026-09-22, ampliación).** Solo `requesterId === room.createdBy` puede iniciar la sala; un
+participante que no sea el propietario recibe `403` (mismo `RoomAccessForbiddenError` que ya usaba el chequeo de
+`isParticipant`, y mismo patrón que `cancel()`: ownership antes que estado). Antes de esta ampliación cualquier
+participante HUMAN podía iniciar; Web ahora solo expone el botón "Iniciar partida" al propietario en el lobby, pero
+es Combat quien lo hace cumplir server-side — nunca solo el frontend.
+
+`start` sigue siendo **idempotente para cualquier participante** (no solo el propietario): iniciar otra vez sobre
+una sala ya `IN_BATTLE` devuelve el estado vigente sin otra cola, sin nuevo sorteo y sin otro `battleStarted`,
+sin importar quién pregunte — necesario porque, tras `battleStarted`, cualquier cliente puede seguir consultando el
+estado. Dos peticiones simultáneas del propietario se resuelven con el bloqueo optimista: la que pierde la carrera
+relee la sala y devuelve la batalla ya iniciada por la otra.
 
 ## Dominio
 

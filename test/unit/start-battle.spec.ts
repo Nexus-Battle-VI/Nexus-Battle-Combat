@@ -27,6 +27,7 @@ import {
   NOW,
   ROOM_ID,
   clock,
+  finishedRoom,
   heroesPort,
   loggingRepository,
   preparingRoom,
@@ -111,7 +112,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
     // 2648 -> v = 2647 -> v mod 2 = 1 -> inicia el equipo B.
     const dto = await build(repo, { random: createBoundedRandom(sequence) }).useCase.execute(
       ROOM_ID,
-      'b1',
+      'a1',
     )
 
     expect(sequence.consumed()).toBe(1)
@@ -124,7 +125,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
     await seed(repo, { teamSizes: [3, 3] })
     const { useCase } = build(repo, { random: scriptedRandom([1, 2, 1, 2, 1]) })
 
-    const dto = await useCase.execute(ROOM_ID, 'a2')
+    const dto = await useCase.execute(ROOM_ID, 'a1')
 
     expect(dto.battle?.turnOrder.map((entry) => entry.teamLabel)).toEqual([
       'B',
@@ -300,7 +301,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
         a1: equippedHeroFixture({ playerId: 'a1', heroId: 'hero-a1', loadoutVersion: 4 }),
       })
       const error: unknown = await build(repo, { heroes, publisher })
-        .useCase.execute(ROOM_ID, 'b1')
+        .useCase.execute(ROOM_ID, 'a1')
         .catch((caught: unknown) => caught)
 
       expect((error as PrecombatEligibilityBlockedError).blockers.map((b) => b.code)).toContain(
@@ -388,6 +389,38 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
         RoomNotStartableError,
       )
     })
+
+    it('un participante que NO es el creador no puede iniciar: 403, sin revalidar, sin cola ni evento', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+      const publisher = recordingPublisher()
+      const { useCase, heroes } = build(repo, { publisher })
+
+      await seed(repo)
+
+      await expect(useCase.execute(ROOM_ID, 'b1')).rejects.toBeInstanceOf(RoomAccessForbiddenError)
+      expect(heroes.calls).toEqual([])
+      expect(publisher.published).toEqual([])
+    })
+
+    it('una sala CANCELLED no inicia (ni para el creador)', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+
+      await repo.save(preparingRoom().leave('b1').cancel('a1'), 0)
+
+      await expect(build(repo).useCase.execute(ROOM_ID, 'a1')).rejects.toBeInstanceOf(
+        RoomNotStartableError,
+      )
+    })
+
+    it('una sala FINISHED no inicia (ni para el creador)', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+
+      await repo.save(finishedRoom(), 0)
+
+      await expect(build(repo).useCase.execute(ROOM_ID, 'a1')).rejects.toBeInstanceOf(
+        RoomNotStartableError,
+      )
+    })
   })
 
   describe('idempotencia y concurrencia: nunca dos colas ni dos battleStarted', () => {
@@ -408,12 +441,12 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       expect(publisher.published).toHaveLength(1)
     })
 
-    it('una carrera perdida por el bloqueo optimista devuelve el estado ya iniciado por el ganador (sin segundo evento)', async () => {
+    it('dos peticiones concurrentes del propietario: el bloqueo optimista devuelve el estado ya iniciado por la primera (sin segundo evento)', async () => {
       const inner = new InMemoryBattleRoomRepository()
       const publisher = recordingPublisher()
 
       await seed(inner)
-      // El rival gana la carrera justo antes de nuestro `save`.
+      // La primera peticion del propietario gana la carrera justo antes de nuestro `save`.
       const winner = build(inner, { random: scriptedRandom([0]) }).useCase
       let intercepted = false
       const racing: BattleRoomRepositoryPort = {
@@ -425,7 +458,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
         save: async (room, expectedVersion) => {
           if (!intercepted) {
             intercepted = true
-            await winner.execute(ROOM_ID, 'b1')
+            await winner.execute(ROOM_ID, 'a1')
           }
 
           return inner.save(room, expectedVersion)
