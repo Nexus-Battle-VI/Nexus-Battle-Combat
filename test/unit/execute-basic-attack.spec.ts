@@ -619,6 +619,7 @@ describe('ExecuteBasicAttack — conflicto de version: NUNCA se vuelve a sortear
       findInBattle: () => inner.findInBattle(),
       findFinishedSince: (since) => inner.findFinishedSince(since),
       findCancelledSince: (since) => inner.findCancelledSince(since),
+      findActiveByParticipant: (playerId) => inner.findActiveByParticipant(playerId),
       save: async (room, expectedVersion) => {
         if (!thrown) {
           thrown = true

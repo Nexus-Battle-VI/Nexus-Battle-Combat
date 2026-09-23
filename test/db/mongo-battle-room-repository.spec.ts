@@ -413,6 +413,71 @@ describe('MongoBattleRoomRepository', () => {
     expect(found.every((room) => room.status === 'IN_BATTLE')).toBe(true)
   })
 
+  describe('findActiveByParticipant (migracion 012, volver a mi sala)', () => {
+    const PLAYER = 'jugador-mis-salas'
+
+    it('la migracion 012 crea los indices de participante y de creador', async () => {
+      const indexes = await rooms().indexes()
+      const byName = (name: string) => indexes.find((candidate) => candidate.name === name)?.key
+
+      expect(byName('teams.participants.playerId_1_status_1')).toEqual({
+        'teams.participants.playerId': 1,
+        status: 1,
+      })
+      expect(byName('createdBy_1_status_1')).toEqual({ createdBy: 1, status: 1 })
+    })
+
+    it('la consulta usa ese indice (plan del motor)', async () => {
+      const plan = (await rooms()
+        .find({
+          'teams.participants.playerId': PLAYER,
+          status: { $in: ['WAITING_FOR_PLAYERS', 'PREPARING', 'IN_BATTLE'] },
+        })
+        .explain()) as { queryPlanner: { winningPlan: unknown } }
+
+      expect(JSON.stringify(plan.queryPlanner.winningPlan)).toContain(
+        'teams.participants.playerId_1_status_1',
+      )
+    })
+
+    it('devuelve solo las salas NO terminales del jugador, de la mas reciente a la mas antigua', async () => {
+      const older = nextId()
+      const newer = nextId()
+      const foreign = nextId()
+      const inBattle = nextId()
+      const finishedId = nextId()
+
+      const waiting = (id: string, at: Date, player: string) =>
+        BattleRoom.create(
+          id,
+          CREATOR,
+          validInput({ teamConfigs: [{ capacity: 2 }, { capacity: 2 }] }),
+          at,
+        ).join(player, 'A', at, `Nombre ${player}`, `hero-${player}`, 0)
+
+      await repository.save(waiting(older, new Date('2026-09-17T08:00:00.000Z'), PLAYER), 0)
+      await repository.save(waiting(newer, new Date('2026-09-17T09:00:00.000Z'), PLAYER), 0)
+      await repository.save(waiting(foreign, AT, 'otro-jugador'), 0)
+      await repository.save(startedRoom(inBattle), 0)
+      const finished = await repository.save(startedRoom(finishedId), 0)
+      await repository.save(finished.finish({ reason: 'TIME_LIMIT' }, AT), finished.version)
+
+      const mine = await repository.findActiveByParticipant(PLAYER)
+      const creators = await repository.findActiveByParticipant(CREATOR)
+
+      expect(mine.map((room) => room.id)).toEqual([newer, older])
+
+      const createdOnly = nextId()
+      await repository.save(BattleRoom.create(createdOnly, 'creadora-sola', validInput(), AT), 0)
+      expect(
+        (await repository.findActiveByParticipant('creadora-sola')).map((room) => room.id),
+      ).toEqual([createdOnly])
+      expect(creators.map((room) => room.id)).toContain(inBattle)
+      expect(creators.map((room) => room.id)).not.toContain(finishedId)
+      expect(await repository.findActiveByParticipant('nadie')).toEqual([])
+    })
+  })
+
   it('una sala FINISHED viaja con su resultado y su turno, y no se reescribe', async () => {
     const id = nextId()
     const saved = await repository.save(startedRoom(id), 0)

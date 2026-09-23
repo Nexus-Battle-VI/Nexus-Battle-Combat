@@ -4,6 +4,7 @@ import type { Db } from 'mongodb'
 
 import { BattleRoomController } from '../../adapters/inbound/http/battle-room.controller'
 import { RealtimeTicketController } from '../../adapters/inbound/http/realtime-ticket.controller'
+import { MyBattleRoomsController } from '../../adapters/inbound/http/my-battle-rooms.controller'
 import { RewardStatusController } from '../../adapters/inbound/http/reward-status.controller'
 import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
@@ -26,6 +27,7 @@ import {
   JOIN_BATTLE_ROOM,
   LEAVE_BATTLE_ROOM,
   LIST_AVAILABLE_BATTLE_ROOMS,
+  LIST_MY_ACTIVE_BATTLE_ROOMS,
   PROCESS_BATTLE_DEADLINES,
   PROCESS_REWARD_WORKFLOW,
   RECONCILE_REWARD_WORKFLOWS,
@@ -180,6 +182,7 @@ import { CreateBattleRoom } from '../../application/use-cases/CreateBattleRoom'
 import { JoinBattleRoom } from '../../application/use-cases/JoinBattleRoom'
 import { LeaveBattleRoom } from '../../application/use-cases/LeaveBattleRoom'
 import { ListAvailableBattleRooms } from '../../application/use-cases/ListAvailableBattleRooms'
+import { ListMyActiveBattleRooms } from '../../application/use-cases/ListMyActiveBattleRooms'
 import { ReadChatHistory } from '../../application/use-cases/ReadChatHistory'
 import { SendChatMessage } from '../../application/use-cases/SendChatMessage'
 import { ChatRateLimiter } from '../../domain/policies/ChatRateLimiter'
@@ -228,6 +231,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     BattleRoomController,
     RealtimeTicketController,
     RewardStatusController,
+    MyBattleRoomsController,
   ],
   providers: [
     {
@@ -450,6 +454,12 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       provide: LIST_AVAILABLE_BATTLE_ROOMS,
       useFactory: (rooms: BattleRoomRepositoryPort): ListAvailableBattleRooms =>
         new ListAvailableBattleRooms(rooms),
+      inject: [BATTLE_ROOM_REPOSITORY],
+    },
+    {
+      provide: LIST_MY_ACTIVE_BATTLE_ROOMS,
+      useFactory: (rooms: BattleRoomRepositoryPort): ListMyActiveBattleRooms =>
+        new ListMyActiveBattleRooms(rooms),
       inject: [BATTLE_ROOM_REPOSITORY],
     },
     {

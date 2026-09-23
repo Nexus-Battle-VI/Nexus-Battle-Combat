@@ -1,6 +1,9 @@
 import { BattleRoom, type BattleRoomSnapshot } from '../../../domain/entities/BattleRoom'
 import { RoomConflictError } from '../../../application/errors/ApplicationError'
-import type { BattleRoomRepositoryPort } from '../../../application/ports/BattleRoomRepositoryPort'
+import {
+  ACTIVE_ROOM_STATUSES,
+  type BattleRoomRepositoryPort,
+} from '../../../application/ports/BattleRoomRepositoryPort'
 
 /**
  * Repositorio en memoria de salas de batalla (HU-14).
@@ -57,6 +60,23 @@ export class InMemoryBattleRoomRepository implements BattleRoomRepositoryPort {
         (snapshot) =>
           snapshot.status === 'CANCELLED' && snapshot.createdAt.getTime() >= since.getTime(),
       )
+      .map((snapshot) => BattleRoom.restore(snapshot))
+
+    return Promise.resolve(rooms)
+  }
+
+  findActiveByParticipant(playerId: string): Promise<readonly BattleRoom[]> {
+    const active: readonly string[] = ACTIVE_ROOM_STATUSES
+    const rooms = [...this.byId.values()]
+      .filter(
+        (snapshot) =>
+          (active.includes(snapshot.status) &&
+            snapshot.teams.some((team) =>
+              team.participants.some((participant) => participant.playerId === playerId),
+            )) ||
+          (snapshot.createdBy === playerId && snapshot.status === 'WAITING_FOR_PLAYERS'),
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .map((snapshot) => BattleRoom.restore(snapshot))
 
     return Promise.resolve(rooms)
