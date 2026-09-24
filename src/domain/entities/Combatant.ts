@@ -1,4 +1,5 @@
 import { DomainError } from '../errors/DomainError'
+import { applyHeal } from '../policies/HealApplicationPolicy'
 import { regenPower } from '../policies/HeroPowerPolicy'
 import { evaluateSkill } from '../policies/SkillEffectPolicy'
 import {
@@ -14,6 +15,41 @@ export interface CombatantKey {
   readonly seat: number
 }
 
+/**
+ * Efecto temporal ACTIVO y ya resuelto (HU-19 v2, contrato §2), persistido dentro del
+ * combatiente al que afecta. Distinto de `TemporalEffectTemplate` (`SkillEffectPolicy`): aqui la
+ * magnitud ya es un entero (el dado, si lo hubo, se tiro UNA vez al aplicar la habilidad que lo
+ * origino) y `remainingOwnTurns` es el contador real que decrementa `closeOwnTurn()`, la MISMA
+ * convencion que ya usa la recarga (v1 §5.3): turnos propios del combatiente OBJETIVO (este),
+ * no del que lo lanzo.
+ */
+export type ActiveSkillEffect =
+  | {
+      readonly sourceAbilityId: string
+      readonly sourceCombatant: CombatantKey
+      readonly statistic: 'ATTACK' | 'DAMAGE' | 'DEFENSE' | 'HEALING'
+      readonly operation: 'INCREASE' | 'DECREASE'
+      readonly amount: number
+      readonly remainingOwnTurns: number
+    }
+  | {
+      readonly sourceAbilityId: string
+      readonly sourceCombatant: CombatantKey
+      readonly immunityCode: string
+      readonly remainingOwnTurns: number
+    }
+
+/**
+ * Memoria de 1 turno propio del dano recibido (HU-19 v2, contrato §6): sostiene la condicion
+ * generica de `REFLECT_DAMAGE` ("recibio dano en su turno propio anterior"). Se REFRESCA (no se
+ * acumula) cada vez que el combatiente recibe dano, y decrementa igual que cualquier efecto
+ * temporal al cerrar su turno propio.
+ */
+export interface DamageMemory {
+  readonly amount: number
+  readonly remainingOwnTurns: number
+}
+
 export interface CombatantSnapshot extends CombatantKey {
   /** `null` cuando el participante no tiene perfil de combate (`AI`). */
   readonly currentHealth: number | null
@@ -25,6 +61,10 @@ export interface CombatantSnapshot extends CombatantKey {
   readonly currentPower?: number | null
   /** HU-19: turnos propios que le faltan a cada habilidad en recarga. Solo los > 0. */
   readonly cooldowns?: Readonly<Record<string, number>>
+  /** HU-19 v2: efectos temporales activos sobre este combatiente (contrato §2). */
+  readonly activeSkillEffects?: readonly ActiveSkillEffect[]
+  /** HU-19 v2: memoria de dano recibido para `REFLECT_DAMAGE` (contrato §6). */
+  readonly damageMemory?: DamageMemory | null
 }
 
 /** Vida de un participante tal como la ve un cliente. */
@@ -78,9 +118,15 @@ export interface CombatantView extends CombatantKey {
 }
 
 const NO_COOLDOWNS: Readonly<Record<string, number>> = Object.freeze({})
+const NO_ACTIVE_EFFECTS: readonly ActiveSkillEffect[] = Object.freeze([])
 
 const hasEntries = (record: Readonly<Record<string, number>> | undefined): boolean =>
   record !== undefined && Object.keys(record).length > 0
+
+/** `true` si el efecto es un modificador de estadistica (frente al de inmunidad). */
+const isStatEffect = (
+  effect: ActiveSkillEffect,
+): effect is Extract<ActiveSkillEffect, { statistic: string }> => 'statistic' in effect
 
 /**
  * Estado runtime de UN participante durante la batalla (HU-18, HU-19): su perfil
@@ -108,6 +154,10 @@ export class Combatant {
   /** `null` sin perfil o sin estado de habilidades (batalla anterior a HU-19). */
   readonly currentPower: number | null
   readonly cooldowns: Readonly<Record<string, number>>
+  /** HU-19 v2: `[]` sin estado de habilidades. */
+  readonly activeSkillEffects: readonly ActiveSkillEffect[]
+  /** HU-19 v2: `null` sin memoria vigente o sin estado de habilidades. */
+  readonly damageMemory: DamageMemory | null
 
   private constructor(
     key: CombatantKey,
@@ -115,6 +165,8 @@ export class Combatant {
     currentHealth: number | null,
     currentPower: number | null,
     cooldowns: Readonly<Record<string, number>>,
+    activeSkillEffects: readonly ActiveSkillEffect[],
+    damageMemory: DamageMemory | null,
   ) {
     this.teamLabel = key.teamLabel
     this.seat = key.seat
@@ -122,6 +174,8 @@ export class Combatant {
     this.currentHealth = currentHealth
     this.currentPower = currentPower
     this.cooldowns = cooldowns
+    this.activeSkillEffects = activeSkillEffects
+    this.damageMemory = damageMemory
   }
 
   /** Inicia con la Vida y el Poder completos (`actual = maximo`, HU-11) y sin recargas. */
@@ -149,11 +203,18 @@ export class Combatant {
         throw new DomainError('Un combatiente sin perfil de combate no tiene Vida.')
       }
 
-      if ((snapshot.currentPower ?? null) !== null || hasEntries(snapshot.cooldowns)) {
-        throw new DomainError('Un combatiente sin perfil de combate no tiene Poder ni recargas.')
+      if (
+        (snapshot.currentPower ?? null) !== null ||
+        hasEntries(snapshot.cooldowns) ||
+        (snapshot.activeSkillEffects?.length ?? 0) > 0 ||
+        (snapshot.damageMemory ?? null) !== null
+      ) {
+        throw new DomainError(
+          'Un combatiente sin perfil de combate no tiene Poder, recargas ni efectos temporales.',
+        )
       }
 
-      return new Combatant(snapshot, null, null, null, NO_COOLDOWNS)
+      return new Combatant(snapshot, null, null, null, NO_COOLDOWNS, NO_ACTIVE_EFFECTS, null)
     }
 
     const profile = createCombatProfile(snapshot.profile)
@@ -171,6 +232,8 @@ export class Combatant {
       health,
       Combatant.restorePower(profile, snapshot.currentPower ?? null),
       Combatant.restoreCooldowns(profile, snapshot.cooldowns),
+      Combatant.restoreActiveSkillEffects(profile, snapshot.activeSkillEffects),
+      Combatant.restoreDamageMemory(profile, snapshot.damageMemory ?? null),
     )
   }
 
@@ -227,6 +290,64 @@ export class Combatant {
     return Object.freeze(restored)
   }
 
+  /**
+   * Reconstruye los efectos temporales activos (HU-19 v2, contrato §2), comprobando los mismos
+   * invariantes de forma que la recarga: solo con estado de habilidades, `remainingOwnTurns`
+   * entero >= 1, y una magnitud (`amount`) entera para los efectos de estadistica.
+   */
+  private static restoreActiveSkillEffects(
+    profile: CombatProfile,
+    effects: readonly ActiveSkillEffect[] | undefined,
+  ): readonly ActiveSkillEffect[] {
+    if (effects === undefined || effects.length === 0) {
+      return NO_ACTIVE_EFFECTS
+    }
+
+    if (profile.maxPower === undefined) {
+      throw new DomainError('Un combatiente anterior a HU-19 no tiene efectos temporales.')
+    }
+
+    for (const effect of effects) {
+      if (!Number.isInteger(effect.remainingOwnTurns) || effect.remainingOwnTurns < 1) {
+        throw new DomainError('Un efecto temporal debe tener remainingOwnTurns entero >= 1.')
+      }
+
+      if (isStatEffect(effect) && !Number.isInteger(effect.amount)) {
+        throw new DomainError('La magnitud de un efecto temporal debe ser un entero.')
+      }
+
+      if (!isStatEffect(effect) && effect.immunityCode.trim().length === 0) {
+        throw new DomainError('Un efecto de inmunidad debe traer su codigo.')
+      }
+    }
+
+    return Object.freeze(effects.map((effect) => Object.freeze({ ...effect })))
+  }
+
+  /** Misma comprobacion de forma que un efecto temporal, para la memoria de dano de `REFLECT_DAMAGE`. */
+  private static restoreDamageMemory(
+    profile: CombatProfile,
+    memory: DamageMemory | null,
+  ): DamageMemory | null {
+    if (memory === null) {
+      return null
+    }
+
+    if (profile.maxPower === undefined) {
+      throw new DomainError('Un combatiente anterior a HU-19 no tiene memoria de dano.')
+    }
+
+    if (!Number.isInteger(memory.amount) || memory.amount < 0) {
+      throw new DomainError('La memoria de dano debe ser un entero no negativo.')
+    }
+
+    if (!Number.isInteger(memory.remainingOwnTurns) || memory.remainingOwnTurns < 1) {
+      throw new DomainError('La memoria de dano debe tener remainingOwnTurns entero >= 1.')
+    }
+
+    return { ...memory }
+  }
+
   get alive(): boolean {
     return this.currentHealth !== null && this.currentHealth > 0
   }
@@ -243,6 +364,56 @@ export class Combatant {
   /** Turnos propios que le faltan a la habilidad; `0` si esta disponible. */
   cooldownOf(abilityId: string): number {
     return this.cooldowns[abilityId] ?? 0
+  }
+
+  /**
+   * HU-19 v2 (contrato §2): el ajuste NETO (suma de incrementos menos decrementos) que los
+   * efectos temporales ACTIVOS de este combatiente aportan a `statistic`, para que cada
+   * resolucion futura que la consulte (Ataque/Defensa/Dano, basica o de habilidad) la lea sin
+   * reescribir el valor base -- mismo criterio que ya aplican los modificadores de equipo.
+   */
+  statBonus(statistic: 'ATTACK' | 'DAMAGE' | 'DEFENSE'): number {
+    let total = 0
+
+    for (const effect of this.activeSkillEffects) {
+      if (isStatEffect(effect) && effect.statistic === statistic) {
+        total += effect.operation === 'INCREASE' ? effect.amount : -effect.amount
+      }
+    }
+
+    return total
+  }
+
+  /** Otro combatiente con estos efectos temporales AGREGADOS a los ya activos. */
+  withAddedActiveSkillEffects(effects: readonly ActiveSkillEffect[]): Combatant {
+    if (effects.length === 0) {
+      return this
+    }
+
+    if (this.currentPower === null) {
+      throw new DomainError('Un combatiente sin estado de habilidades no tiene efectos temporales.')
+    }
+
+    return Combatant.restore({
+      ...this.toSnapshot(),
+      activeSkillEffects: [...this.activeSkillEffects, ...effects],
+    })
+  }
+
+  /**
+   * Refresca la memoria de dano recibido (HU-19 v2, contrato §6): NO se acumula, se
+   * SOBRESCRIBE con el ultimo golpe y su ventana de 1 turno propio. Sin estado de habilidades
+   * (batalla anterior a HU-19) o sin dano real (`amount <= 0`) no hay nada que recordar.
+   */
+  withDamageTaken(amount: number): Combatant {
+    if (amount <= 0 || this.currentPower === null) {
+      return this
+    }
+
+    return Combatant.restore({
+      ...this.toSnapshot(),
+      damageMemory: { amount, remainingOwnTurns: 1 },
+    })
   }
 
   /** Devuelve otro combatiente con la Vida ya reducida. `appliedDamage` no puede pasar de la Vida actual. */
@@ -298,11 +469,23 @@ export class Combatant {
   }
 
   /**
-   * Cierra el turno propio (`hu-19-skills-v1` §5.3): a cada habilidad en recarga le falta
-   * un turno propio menos. La que llega a 0 vuelve a estar disponible y deja de guardarse.
+   * Cierra el turno propio (`hu-19-skills-v1` §5.3, ampliado por `hu-19-skills-v2` §2): a cada
+   * habilidad en recarga le falta un turno propio menos, y a cada efecto temporal ACTIVO de
+   * este combatiente (y a su memoria de dano de `REFLECT_DAMAGE`) tambien -- MISMA convencion,
+   * un solo decremento por cierre. El que llega a 0 vuelve a estar disponible/expira y deja de
+   * guardarse; no se reaplica al expirar (contrato §2), simplemente deja de sumar.
+   *
+   * Un efecto temporal `HEALING` ademas APLICA su tick de sanacion (acotado al maximo de Vida,
+   * `HealApplicationPolicy`) mientras siga activo -- es la UNICA forma en que cerrar el turno
+   * propio cambia la Vida; sin efectos de sanacion activos no toca ni el Poder ni la Vida
+   * (comportamiento previo, sin cambios).
    */
   closeOwnTurn(): Combatant {
-    if (!hasEntries(this.cooldowns)) {
+    const hasCooldowns = hasEntries(this.cooldowns)
+    const hasActiveEffects = this.activeSkillEffects.length > 0
+    const hasDamageMemory = this.damageMemory !== null
+
+    if (!hasCooldowns && !hasActiveEffects && !hasDamageMemory) {
       return this
     }
 
@@ -314,7 +497,41 @@ export class Combatant {
       }
     }
 
-    return Combatant.restore({ ...this.toSnapshot(), cooldowns: ticked })
+    let health = this.currentHealth
+    const survivingEffects: ActiveSkillEffect[] = []
+
+    for (const effect of this.activeSkillEffects) {
+      if (
+        isStatEffect(effect) &&
+        effect.statistic === 'HEALING' &&
+        effect.operation === 'INCREASE' &&
+        health !== null &&
+        this.profile !== null
+      ) {
+        health = applyHeal(health, this.profile.maxHealth, effect.amount).healthAfter
+      }
+
+      const remainingOwnTurns = effect.remainingOwnTurns - 1
+
+      if (remainingOwnTurns > 0) {
+        survivingEffects.push({ ...effect, remainingOwnTurns })
+      }
+    }
+
+    const nextDamageMemory =
+      this.damageMemory === null
+        ? null
+        : this.damageMemory.remainingOwnTurns - 1 > 0
+          ? { ...this.damageMemory, remainingOwnTurns: this.damageMemory.remainingOwnTurns - 1 }
+          : null
+
+    return Combatant.restore({
+      ...this.toSnapshot(),
+      currentHealth: health,
+      cooldowns: ticked,
+      activeSkillEffects: survivingEffects,
+      damageMemory: nextDamageMemory,
+    })
   }
 
   toSnapshot(): CombatantSnapshot {
@@ -326,7 +543,12 @@ export class Combatant {
       // Solo se escribe cuando existe: un combatiente anterior a HU-19 no se rellena.
       ...(this.currentPower === null
         ? {}
-        : { currentPower: this.currentPower, cooldowns: { ...this.cooldowns } }),
+        : {
+            currentPower: this.currentPower,
+            cooldowns: { ...this.cooldowns },
+            activeSkillEffects: this.activeSkillEffects.map((effect) => ({ ...effect })),
+            damageMemory: this.damageMemory === null ? null : { ...this.damageMemory },
+          }),
     }
   }
 
