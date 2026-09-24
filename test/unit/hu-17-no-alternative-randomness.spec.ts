@@ -93,7 +93,11 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
       .sort()
 
     // Ademas de la firma HMAC (contrato interno) y el UUID de las salas (existentes antes de HU-17).
+    // `inventory-grant-operation-id.ts` (HU-22): SHA-1 DETERMINISTA de un id logico para
+    // derivar un UUID v5 (idempotencia hacia Player-Inventory). Es un hash, no una fuente
+    // de azar: no sortea ni decide nada del juego.
     expect(users).toEqual([
+      'adapters/outbound/http/inventory-grant-operation-id.ts',
       'adapters/outbound/identity/internal-signature.ts',
       'adapters/outbound/system/CryptoRealtimeTicketCodec.ts',
       'adapters/outbound/system/UuidGenerator.ts',

@@ -14,6 +14,7 @@ import type {
   RewardGrantPort,
   RewardGrantResult,
 } from '../../src/application/ports/RewardGrantPort'
+import type { ClockPort } from '../../src/application/ports/ClockPort'
 import type { RandomSequencePort } from '../../src/application/ports/RandomSequencePort'
 import {
   ProcessRewardWorkflow,
@@ -24,6 +25,11 @@ import { RandomIndex } from '../../src/domain/value-objects/RandomIndex'
 import { RewardWorkflowState } from '../../src/domain/value-objects/RewardWorkflowState'
 
 const silentLogger: ProcessRewardWorkflowLogger = { info: () => undefined, error: () => undefined }
+
+const systemClock: ClockPort = { now: () => new Date() }
+
+/** Reloj adelantado: la espera entre reintentos (`RewardRetryPolicy`) ya vencio. */
+const oneHourLater: ClockPort = { now: () => new Date(Date.now() + 60 * 60_000) }
 
 const rewardEntry: RewardEntry = {
   productId: 'product-1',
@@ -116,6 +122,7 @@ describe('ProcessRewardWorkflow', () => {
       new FixedSequence([]),
       table,
       silentLogger,
+      systemClock,
     )
 
     await useCase.execute(workflow.id)
@@ -148,6 +155,7 @@ describe('ProcessRewardWorkflow', () => {
       new FixedSequence([4000]),
       table,
       silentLogger,
+      systemClock,
     )
 
     await useCase.execute(workflow.id)
@@ -184,6 +192,7 @@ describe('ProcessRewardWorkflow', () => {
       new FixedSequence([]),
       table,
       silentLogger,
+      systemClock,
     )
 
     await useCase.execute(workflow.id)
@@ -204,6 +213,7 @@ describe('ProcessRewardWorkflow', () => {
       new FixedSequence([]),
       table,
       silentLogger,
+      systemClock,
     )
 
     await useCase.execute(workflow.id)
@@ -224,6 +234,7 @@ describe('ProcessRewardWorkflow', () => {
       new FixedSequence([]),
       table,
       silentLogger,
+      systemClock,
     )
 
     await useCase.execute(workflow.id)
@@ -254,6 +265,7 @@ describe('ProcessRewardWorkflow', () => {
       new FixedSequence([100]),
       table,
       silentLogger,
+      systemClock,
     )
 
     await useCase.execute(workflow.id)
@@ -288,6 +300,7 @@ describe('ProcessRewardWorkflow', () => {
       sequence,
       table,
       silentLogger,
+      systemClock,
     )
     await firstAttempt.execute(workflow.id)
 
@@ -304,6 +317,7 @@ describe('ProcessRewardWorkflow', () => {
       new FixedSequence([]),
       table,
       silentLogger,
+      oneHourLater,
     )
     await retry.execute(workflow.id)
 
@@ -327,6 +341,7 @@ describe('ProcessRewardWorkflow', () => {
       new FixedSequence([]),
       table,
       silentLogger,
+      systemClock,
     )
 
     await expect(useCase.execute('no-existe')).resolves.toBeUndefined()
@@ -351,6 +366,7 @@ describe('ProcessRewardWorkflow', () => {
       new FixedSequence([]),
       table,
       silentLogger,
+      systemClock,
     )
     await useCase.execute(workflow.id)
     expect(credit.calls).toHaveLength(1)

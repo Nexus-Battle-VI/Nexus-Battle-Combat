@@ -859,8 +859,17 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         sequence: RandomSequencePort,
         table: RewardTable,
         logger: Logger,
+        clock: ClockPort,
       ): ProcessRewardWorkflow =>
-        new ProcessRewardWorkflow(repository, creditPort, grantPort, sequence, table, logger),
+        new ProcessRewardWorkflow(
+          repository,
+          creditPort,
+          grantPort,
+          sequence,
+          table,
+          logger,
+          clock,
+        ),
       // BATTLE_RANDOM_SEQUENCE: la MISMA secuencia de proceso que ya consumen
       // la cola de turnos y los golpes (HU-17/18/19/24) -- no una nueva.
       inject: [
@@ -870,6 +879,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_RANDOM_SEQUENCE,
         REWARD_TABLE,
         LOGGER,
+        CLOCK,
       ],
     },
     {
