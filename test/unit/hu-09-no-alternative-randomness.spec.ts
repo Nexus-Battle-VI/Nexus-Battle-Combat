@@ -113,3 +113,40 @@ describe('HU-09 no usa ni conoce otra fuente de aleatoriedad', () => {
     }
   })
 })
+
+/**
+ * Control negativo de la guarda (Task HU-09.6).
+ *
+ * La Task de verificacion exige que las guardas de no-duplicacion esten en verde Y
+ * sean CAPACES DE FALLAR. Una guarda que solo afirma "ninguno coincide" pasa por
+ * vacia si su patron esta mal escrito, y ese es el unico modo de que una segunda
+ * fuente de aleatoriedad entre sin que nadie se entere: aqui cada familia de
+ * patrones tiene que reconocer su forma prohibida en un fragmento sintetico, y el
+ * uso legitimo del dado inyectado no puede marcarse.
+ */
+describe('HU-09 la guarda del azar no es un colador (control negativo)', () => {
+  const familyOf = (label: string): RegExp | undefined =>
+    FORBIDDEN.find(([name]) => name.includes(label))?.[1]
+
+  it.each([
+    ['Math.random', 'const roll = Math.random()'],
+    ['node:crypto', "import { randomInt } from 'node:crypto'"],
+    ['MT19937', 'const sequence = new Mt19937(semilla)'],
+    ['Box-Muller', 'const normal = new BoxMuller(random)'],
+    ['la variable normal cruda', 'const secuencia: NormalSequencePort = puerto'],
+    ['la semilla', 'const semilla = new RandomSeed(1)'],
+    ['la fabrica de secuencias', 'const fabrica: RandomSequenceFactory = factoria'],
+    ['ninguna peticion de rango', 'const cara = random.nextInt(6)'],
+  ])('la familia %s reconoce su forma prohibida', (label, sample) => {
+    const pattern = familyOf(label)
+
+    expect(pattern).toBeDefined()
+    expect({ label, matched: pattern?.test(sample) ?? false }).toEqual({ label, matched: true })
+  })
+
+  it('el dado legitimo no se marca: la politica consume la instancia inyectada', () => {
+    const legitimate = 'const roll = random.nextInt(EXPERIENCE_ROLL_FACES) + 1'
+
+    expect(FORBIDDEN.filter(([, pattern]) => pattern.test(legitimate))).toEqual([])
+  })
+})
