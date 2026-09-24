@@ -4,7 +4,7 @@ import type {
   BasicAttackOutcome,
   BasicAttackReadyPlan,
 } from '../../domain/entities/BattleRoom'
-import type { CombatantKey } from '../../domain/entities/Combatant'
+import type { Combatant, CombatantKey } from '../../domain/entities/Combatant'
 import { UnsupportedCombatProfileError } from '../../domain/errors/BattleErrors'
 import { DomainError } from '../../domain/errors/DomainError'
 import { dieFaceFromIndex } from '../../domain/policies/AttackProfile'
@@ -194,8 +194,8 @@ export class ExecuteBasicAttack {
   private prepare(plan: BasicAttackReadyPlan): ReturnType<typeof prepareAttack> {
     try {
       return prepareAttack(
-        toAttackParticipant(plan.attackerProfile),
-        toAttackParticipant(plan.targetProfile),
+        toAttackParticipant(plan.attackerProfile, plan.attacker),
+        toAttackParticipant(plan.targetProfile, plan.target),
       )
     } catch (error: unknown) {
       if (error instanceof DomainError) {
@@ -244,10 +244,16 @@ export class ExecuteBasicAttack {
    * Dano base del atacante: `FIXED` se usa tal cual (sin sorteo); `DICE` se tira con la
    * secuencia HU-24 solo si el porcentaje es > 0 (con 0 % el resultado es 0 sea cual
    * sea el dado). La cara de un dado es `dieFaceFromIndex`, la misma del dado de Ataque.
+   * HU-19 v2 (contrato §2): se le suma el ajuste neto de los efectos temporales ACTIVOS del
+   * propio atacante sobre su Dano (p.ej. Bola de hielo lo debilito en un turno anterior);
+   * acotado en 0, igual que un Ataque.
    */
   private materializeDamage(plan: BasicAttackReadyPlan, percent: number): number | null {
+    const netDamageBonus = plan.attacker.statBonus('DAMAGE')
+    const withBonus = (value: number): number => (value + netDamageBonus > 0 ? value + netDamageBonus : 0)
+
     if (plan.damage.mode === 'FIXED') {
-      return plan.damage.amount
+      return withBonus(plan.damage.amount)
     }
 
     if (percent === 0) {
@@ -260,7 +266,7 @@ export class ExecuteBasicAttack {
       total += dieFaceFromIndex(this.sequence.nextIndex(), plan.damage.sides)
     }
 
-    return total
+    return withBonus(total)
   }
 
   /**
@@ -291,12 +297,29 @@ export class ExecuteBasicAttack {
   }
 }
 
-/** Adapta el perfil congelado a lo que HU-20 lee (`prepareAttack`), sin copiar mas de lo necesario. */
+/**
+ * Adapta el combatiente congelado a lo que HU-20 lee (`prepareAttack`), sin copiar mas de lo
+ * necesario. HU-19 v2 (contrato §2): el Ataque y la Defensa YA incluyen el ajuste neto de los
+ * efectos temporales ACTIVOS de este combatiente, acotado en 0 -- mismo criterio que
+ * `UseSkill.toAttackParticipant`; ver ahi el razonamiento completo.
+ */
 const toAttackParticipant = (
   profile: BasicAttackReadyPlan['attackerProfile'],
-): AttackParticipant => ({
-  heroId: profile.heroId,
-  subtype: profile.subtype,
-  activeEffects: profile.activeEffects,
-  effectiveStats: { attack: profile.attack, defense: profile.defense },
-})
+  combatant: Combatant,
+): AttackParticipant => {
+  const withStatBonus = (base: number, statistic: 'ATTACK' | 'DEFENSE'): number => {
+    const adjusted = base + combatant.statBonus(statistic)
+
+    return adjusted > 0 ? adjusted : 0
+  }
+
+  return {
+    heroId: profile.heroId,
+    subtype: profile.subtype,
+    activeEffects: profile.activeEffects,
+    effectiveStats: {
+      attack: profile.attack === null ? null : withStatBonus(profile.attack, 'ATTACK'),
+      defense: withStatBonus(profile.defense, 'DEFENSE'),
+    },
+  }
+}
