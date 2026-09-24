@@ -44,3 +44,9 @@ export const STAKE_RELEASER = Symbol('StakeReleaser')
 export const STAKE_SETTLER = Symbol('StakeSettler')
 export const RECONCILE_STAKES = Symbol('ReconcileStakes')
 export const STAKE_SCHEDULER_OPTIONS = Symbol('StakeSchedulerOptions')
+/**
+ * HU-09 (Task HU-09.2): tirada `1d8` por cada NPC derrotado, en la ruta interna
+ * que consume Missions. El repositorio del lote usa `EXPERIENCE_ROLL_REPOSITORY`,
+ * declarado en su puerto como el resto de repositorios del servicio.
+ */
+export const RESOLVE_EXPERIENCE_ROLLS = Symbol('ResolveExperienceRolls')
