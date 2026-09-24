@@ -264,7 +264,7 @@ describe('BattleRoom — eliminacion dentro de la accion (contrato §4.1 y §6.2
     const plan = room.planSkill('a1', 'cmd-2', SHIELD_STRIKE_ID, KEY_B) as SkillReadyPlan
     const next = room.applySkill(
       plan,
-      { ...LETHAL, attackBonus: 2, damageBonus: null },
+      { ...LETHAL, attackBonus: 2, damageBonus: null, resolvedTemporalEffects: [] },
       'cmd-2',
       AT,
     )
