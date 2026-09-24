@@ -6,6 +6,7 @@ import { BattleRoomController } from '../../adapters/inbound/http/battle-room.co
 import { RealtimeTicketController } from '../../adapters/inbound/http/realtime-ticket.controller'
 import { MyBattleRoomsController } from '../../adapters/inbound/http/my-battle-rooms.controller'
 import { RewardStatusController } from '../../adapters/inbound/http/reward-status.controller'
+import { ExperienceRollsController } from '../../adapters/inbound/http/experience-rolls.controller'
 import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
 import {
@@ -39,6 +40,7 @@ import {
   REWARD_WORKFLOW_REPOSITORY,
   REWARD_WORKFLOW_SCHEDULER_OPTIONS,
   RESUME_BATTLE,
+  RESOLVE_EXPERIENCE_ROLLS,
   ROOM_COMMAND_LOCK,
   STAKE_RELEASER,
   STAKE_RESERVER,
@@ -64,9 +66,11 @@ import { WalletStakeHttpClient } from '../../adapters/outbound/http/WalletStakeH
 import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryChatMessageRepository } from '../../adapters/outbound/persistence/InMemoryChatMessageRepository'
 import { InMemoryRewardWorkflowRepository } from '../../adapters/outbound/persistence/InMemoryRewardWorkflowRepository'
+import { InMemoryExperienceRollRepository } from '../../adapters/outbound/persistence/InMemoryExperienceRollRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
 import { MongoChatMessageRepository } from '../../adapters/outbound/persistence/MongoChatMessageRepository'
 import { MongoRewardWorkflowRepository } from '../../adapters/outbound/persistence/MongoRewardWorkflowRepository'
+import { MongoExperienceRollRepository } from '../../adapters/outbound/persistence/MongoExperienceRollRepository'
 import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
@@ -129,6 +133,10 @@ import {
 import type { RewardCreditPort } from '../../application/ports/RewardCreditPort'
 import type { RewardGrantPort } from '../../application/ports/RewardGrantPort'
 import type { RewardWorkflowRepositoryPort } from '../../application/ports/RewardWorkflowRepositoryPort'
+import {
+  EXPERIENCE_ROLL_REPOSITORY,
+  type ExperienceRollRepositoryPort,
+} from '../../application/ports/ExperienceRollRepositoryPort'
 import { WALLET_STAKE_PORT, type WalletStakePort } from '../../application/ports/WalletStakePort'
 import {
   RANDOM_SEQUENCE_FACTORY,
@@ -164,6 +172,7 @@ import { ReconcileRewardWorkflows } from '../../application/use-cases/ReconcileR
 import { ReconcileStakes } from '../../application/use-cases/ReconcileStakes'
 import { ExecuteBasicAttack } from '../../application/use-cases/ExecuteBasicAttack'
 import { GetRewardStatus } from '../../application/use-cases/GetRewardStatus'
+import { ResolveExperienceRolls } from '../../application/use-cases/ResolveExperienceRolls'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
 import { RecoverBattleDeadlines } from '../../application/use-cases/RecoverBattleDeadlines'
@@ -232,6 +241,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     RealtimeTicketController,
     RewardStatusController,
     MyBattleRoomsController,
+    ExperienceRollsController,
   ],
   providers: [
     {
@@ -867,6 +877,27 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       useFactory: (repository: RewardWorkflowRepositoryPort): GetRewardStatus =>
         new GetRewardStatus(repository),
       inject: [REWARD_WORKFLOW_REPOSITORY],
+    },
+    // HU-09 (`hu-09-experience-reward-v1` §5, Task HU-09.2): tiradas de
+    // experiencia por NPC derrotado. El caso de uso recibe la MISMA instancia de
+    // azar que turnos, ataques y cofre (`BATTLE_RANDOM`, ADR-021): no construye
+    // ninguna secuencia propia. `PERSISTENCE_DRIVER=memory` respalda pruebas,
+    // igual que el resto de repositorios.
+    {
+      provide: EXPERIENCE_ROLL_REPOSITORY,
+      useFactory: (db: Db | null): ExperienceRollRepositoryPort =>
+        db === null
+          ? new InMemoryExperienceRollRepository()
+          : new MongoExperienceRollRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: RESOLVE_EXPERIENCE_ROLLS,
+      useFactory: (
+        repository: ExperienceRollRepositoryPort,
+        random: BoundedRandom,
+      ): ResolveExperienceRolls => new ResolveExperienceRolls(repository, random),
+      inject: [EXPERIENCE_ROLL_REPOSITORY, BATTLE_RANDOM],
     },
     {
       // HU-22: cierra el hueco entre "sala FINISHED persistida" y
