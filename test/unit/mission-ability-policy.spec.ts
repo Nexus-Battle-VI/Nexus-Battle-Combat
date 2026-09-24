@@ -123,10 +123,21 @@ describe('evaluateMissionAbility (P-J4)', () => {
     expect(unsupported.map((entry) => entry.name)).toEqual(['Pare de fuego'])
   })
 
-  it('las que PvP ya ejecutaba conservan las mismas bonificaciones, sin efectos extra', () => {
+  it('las que PvP ejecuta como bonificacion inmediata conservan las mismas bonificaciones, sin efectos extra', () => {
+    // Desde HU-19 v2, PvP tambien ejecuta efectos en el tiempo y reflejos; esos
+    // tienen su propia semantica de mision. Aqui solo cuenta la bonificacion
+    // inmediata, la que PvP ya ejecutaba antes.
+    let compared = 0
     for (const entry of PRODUCTION) {
       const pvp = evaluateSkill(entry)
-      if (!pvp.supported || pvp.kind !== 'DAMAGE') continue
+      if (
+        !pvp.supported ||
+        pvp.kind !== 'DAMAGE' ||
+        pvp.temporalEffects.length > 0 ||
+        pvp.reflect !== null
+      ) {
+        continue
+      }
       const mission = evaluateMissionAbility(entry)
 
       expect(mission).toEqual({
@@ -136,7 +147,10 @@ describe('evaluateMissionAbility (P-J4)', () => {
         damageBonus: pvp.damageBonus,
         effects: [],
       })
+      compared += 1
     }
+
+    expect(compared).toBeGreaterThan(0)
   })
 
   it('el dano al oponente es dano directo, sin tirada de ataque', () => {
