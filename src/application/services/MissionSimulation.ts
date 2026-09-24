@@ -101,6 +101,37 @@ export interface MissionSimulationResult {
   readonly combatLog: readonly Readonly<Record<string, unknown>>[]
 }
 
+type RotationPriority = 'HIGH' | 'MEDIUM' | 'LOW'
+
+/**
+ * Por qué una rotación no fue viable en un turno (HU-71, P-R7). La recarga y el
+ * Poder vienen del diseño; `UNKNOWN_ABILITY` y `UNSUPPORTED_EFFECT` son de Combat:
+ * la habilidad no está en el perfil del héroe o su efecto no tiene semántica
+ * definida (`evaluateSkill`). La condición de salud todavía no tiene regla del PO
+ * (decisión 5 del diseño), así que aún no descarta ninguna rotación.
+ */
+type SkipReason = 'UNKNOWN_ABILITY' | 'UNSUPPORTED_EFFECT' | 'ON_COOLDOWN' | 'NOT_ENOUGH_POWER'
+
+/** Qué rotación y qué paso usó el héroe, y por qué se saltaron las anteriores. */
+interface StrategyTrace {
+  readonly rotation: RotationPriority | null
+  readonly step: number | null
+  readonly fallback: boolean
+  readonly skipped: readonly {
+    readonly rotation: RotationPriority
+    readonly step: number
+    readonly reason: SkipReason
+  }[]
+}
+
+interface ChosenAction {
+  readonly kind: 'BASIC_ATTACK' | 'ABILITY'
+  readonly ability?: CombatAbility
+  readonly strategy: StrategyTrace
+}
+
+const PRIORITY_ORDER: Readonly<Record<RotationPriority, number>> = { HIGH: 0, MEDIUM: 1, LOW: 2 }
+
 const DEFAULT_RULES = {
   turnDurationSeconds: 60,
   maxTurnsPerEncounter: 30,
@@ -174,38 +205,59 @@ export const simulateMission = (
       for (let n = 0; n < die.count; n += 1) rolled += roll(die.sides)
       return sum + rolled
     }, 0)
-  const chooseAction = (): {
-    readonly kind: 'BASIC_ATTACK' | 'ABILITY'
-    readonly ability?: CombatAbility
-  } => {
-    const priority = { HIGH: 0, MEDIUM: 1, LOW: 2 }
-    const rotations = [...request.strategy.rotations].sort(
-      (a, b) => priority[a.priority] - priority[b.priority],
-    )
+  const rotations = [...request.strategy.rotations].sort(
+    (a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority],
+  )
+  /** La primera causa por la que la habilidad no puede ejecutarse este turno, o `null`. */
+  const skipReasonOf = (ability: CombatAbility | undefined): SkipReason | null => {
+    if (ability === undefined) return 'UNKNOWN_ABILITY'
+    const support = evaluateSkill(ability)
+    if (!support.supported || support.kind !== 'DAMAGE') return 'UNSUPPORTED_EFFECT'
+    if ((cooldowns.get(ability.abilityId) ?? 0) > 0) return 'ON_COOLDOWN'
+    const affordable =
+      ability.powerCost.mode === 'ALL_AVAILABLE' ? power > 0 : ability.powerCost.amount <= power
+    return affordable ? null : 'NOT_ENOUGH_POWER'
+  }
+  /**
+   * Decisión por turno de HU-71 (diseño `hu-71-rotaciones-habilidades`, P-R5 a P-R7 y
+   * tabla D-1 a D-6). Cada rotación mira SOLO la acción de su cursor: si no es viable,
+   * la rotación entera no lo es este turno, se anota por qué y se prueba la siguiente,
+   * sin avanzar su cursor. `BASIC_ATTACK` siempre es viable. Si ninguna rotación es
+   * viable, ataque básico de respaldo sin consumir Poder (CA-03).
+   */
+  const chooseAction = (): ChosenAction => {
+    const skipped: StrategyTrace['skipped'][number][] = []
     for (const [index, rotation] of rotations.entries()) {
-      for (let offset = 0; offset < rotation.steps.length; offset += 1) {
-        const cursor = (cursors.get(index) ?? 0) + offset
-        const step = rotation.steps[cursor % rotation.steps.length]
-        if (step?.kind === 'BASIC_ATTACK') {
-          cursors.set(index, cursor + 1)
-          return { kind: 'BASIC_ATTACK' }
-        }
-        const ability = step?.abilityId === undefined ? undefined : abilities.get(step.abilityId)
-        if (ability === undefined || (cooldowns.get(ability.abilityId) ?? 0) > 0) continue
-        const support = evaluateSkill(ability)
-        const cost = ability.powerCost.mode === 'ALL_AVAILABLE' ? power : ability.powerCost.amount
-        if (!support.supported || support.kind !== 'DAMAGE' || cost > power || cost <= 0) continue
+      if (rotation.steps.length === 0) continue
+      const cursor = (cursors.get(index) ?? 0) % rotation.steps.length
+      const step = rotation.steps[cursor]
+      if (step === undefined) continue
+      const position = { rotation: rotation.priority, step: cursor + 1 }
+      if (step.kind === 'BASIC_ATTACK') {
         cursors.set(index, cursor + 1)
-        return { kind: 'ABILITY', ability }
+        return { kind: 'BASIC_ATTACK', strategy: { ...position, fallback: false, skipped } }
       }
+      const ability = step.abilityId === undefined ? undefined : abilities.get(step.abilityId)
+      const reason = skipReasonOf(ability)
+      if (reason !== null || ability === undefined) {
+        skipped.push({ ...position, reason: reason ?? 'UNKNOWN_ABILITY' })
+        continue
+      }
+      cursors.set(index, cursor + 1)
+      return { kind: 'ABILITY', ability, strategy: { ...position, fallback: false, skipped } }
     }
-    return { kind: 'BASIC_ATTACK' }
+    return {
+      kind: 'BASIC_ATTACK',
+      strategy: { rotation: null, step: null, fallback: true, skipped },
+    }
   }
   const fight = (
     enemyRef: string,
     base: MissionFighter,
     multiplier: number,
     maxTurns: number,
+    encounter: number,
+    instance: number,
   ): { readonly status: 'DEFEATED' | 'HERO_DEFEATED' | 'ESCAPED'; readonly turns: number } => {
     const enemy = {
       maxHealth: Math.max(1, Math.ceil(base.maxHealth * multiplier)),
@@ -275,6 +327,7 @@ export const simulateMission = (
         enemyRef,
         action: action.kind,
         abilityId: action.ability?.abilityId ?? null,
+        strategy: action.strategy,
         hit,
         damage: dealt,
         critical,
@@ -298,20 +351,32 @@ export const simulateMission = (
     }
     if (health === 0) return { status: 'HERO_DEFEATED', turns }
     defeated.set(enemyRef, (defeated.get(enemyRef) ?? 0) + 1)
-    event('enemyDefeated', { enemyRef, turns })
+    // Forma de los contratos de HU-72 y HU-09: la INSTANCIA derrotada con su encuentro.
+    // Missions crea con ella una recompensa de experiencia por cada baja.
+    event('combatantDefeated', {
+      encounter,
+      turn: totalTurns,
+      combatant: `${enemyRef}#${String(instance)}`,
+    })
     return { status: 'DEFEATED', turns }
   }
 
+  const masterInstances = new Map<string, number>()
   for (const encounter of request.encounters) {
     event('encounterStarted', { encounter: encounter.index, kind: encounter.kind })
     let encounterTurns = 0
+    const instances = new Map<string, number>()
     for (const enemy of encounter.enemies) {
       for (let n = 0; n < enemy.count; n += 1) {
+        const instance = (instances.get(enemy.enemyRef) ?? 0) + 1
+        instances.set(enemy.enemyRef, instance)
         const result = fight(
           enemy.enemyRef,
           enemy.profile,
           request.enemyStatMultiplier * (1 + (encounter.powerStep ?? 0)),
           rules.maxTurnsPerEncounter - encounterTurns,
+          encounter.index,
+          instance,
         )
         encounterTurns += result.turns
         if (result.status !== 'DEFEATED') {
@@ -337,11 +402,15 @@ export const simulateMission = (
             appeared,
           })
           if (!appeared) continue
+          const instance = (masterInstances.get(candidate.masterRef) ?? 0) + 1
+          masterInstances.set(candidate.masterRef, instance)
           const result = fight(
             candidate.masterRef,
             candidate.profile,
             1,
             rules.maxTurnsPerEncounter,
+            point.afterEncounter,
+            instance,
           )
           masterFights.push({
             afterEncounter: point.afterEncounter,
