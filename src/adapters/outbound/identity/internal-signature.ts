@@ -44,6 +44,10 @@ export const canonicalBody = (value: unknown): string => {
   return `{${entries.join(',')}}`
 }
 
+/** The same canonical digest used by HMAC and operation idempotency. */
+export const canonicalBodyHash = (body: unknown): string =>
+  createHash('sha256').update(canonicalBody(body), 'utf8').digest('hex')
+
 /**
  * Cadena canonica que se firma: servicio, metodo, ruta, sello y resumen del
  * cuerpo, uno por linea.
@@ -58,7 +62,7 @@ export const canonicalString = (request: CanonicalRequest): string =>
     request.method.toUpperCase(),
     request.path,
     request.timestamp,
-    createHash('sha256').update(canonicalBody(request.body), 'utf8').digest('hex'),
+    canonicalBodyHash(request.body),
   ].join('\n')
 
 export const signInternalRequest = (secret: string, request: CanonicalRequest): string =>

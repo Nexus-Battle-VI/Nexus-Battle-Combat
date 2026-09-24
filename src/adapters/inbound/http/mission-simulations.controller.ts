@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-
 import {
   BadRequestException,
   Body,
@@ -17,7 +15,7 @@ import {
   MissionSimulationOperationReusedError,
 } from '../../../application/errors/MissionSimulationIntakeErrors'
 import { AcceptMissionSimulationRequest } from '../../../application/use-cases/AcceptMissionSimulationRequest'
-import { canonicalBody } from '../../outbound/identity/internal-signature'
+import { canonicalBodyHash } from '../../outbound/identity/internal-signature'
 import { InternalOnly } from './auth/decorators'
 import { missionSimulationOperationIdOf } from './mission-simulation-request'
 import { ACCEPT_MISSION_SIMULATION_REQUEST } from './tokens'
@@ -49,7 +47,7 @@ export class MissionSimulationsController {
   async simulate(@Body() body: unknown): Promise<never> {
     try {
       const operationId = missionSimulationOperationIdOf(body)
-      const requestHash = createHash('sha256').update(canonicalBody(body), 'utf8').digest('hex')
+      const requestHash = canonicalBodyHash(body)
       await this.accept.execute(operationId, requestHash)
     } catch (error: unknown) {
       if (error instanceof InvalidMissionSimulationRequestError) {
