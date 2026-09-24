@@ -7,6 +7,7 @@ import { RealtimeTicketController } from '../../adapters/inbound/http/realtime-t
 import { MyBattleRoomsController } from '../../adapters/inbound/http/my-battle-rooms.controller'
 import { RewardStatusController } from '../../adapters/inbound/http/reward-status.controller'
 import { ExperienceRollsController } from '../../adapters/inbound/http/experience-rolls.controller'
+import { MissionSimulationsController } from '../../adapters/inbound/http/mission-simulations.controller'
 import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
 import {
@@ -41,6 +42,9 @@ import {
   REWARD_WORKFLOW_SCHEDULER_OPTIONS,
   RESUME_BATTLE,
   RESOLVE_EXPERIENCE_ROLLS,
+  ACCEPT_MISSION_SIMULATION_REQUEST,
+  ESTIMATE_MISSION_OUTCOME,
+  RUN_MISSION_SIMULATION,
   ROOM_COMMAND_LOCK,
   STAKE_RELEASER,
   STAKE_RESERVER,
@@ -67,10 +71,12 @@ import { InMemoryBattleRoomRepository } from '../../adapters/outbound/persistenc
 import { InMemoryChatMessageRepository } from '../../adapters/outbound/persistence/InMemoryChatMessageRepository'
 import { InMemoryRewardWorkflowRepository } from '../../adapters/outbound/persistence/InMemoryRewardWorkflowRepository'
 import { InMemoryExperienceRollRepository } from '../../adapters/outbound/persistence/InMemoryExperienceRollRepository'
+import { InMemoryMissionSimulationIntakeRepository } from '../../adapters/outbound/persistence/InMemoryMissionSimulationIntakeRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
 import { MongoChatMessageRepository } from '../../adapters/outbound/persistence/MongoChatMessageRepository'
 import { MongoRewardWorkflowRepository } from '../../adapters/outbound/persistence/MongoRewardWorkflowRepository'
 import { MongoExperienceRollRepository } from '../../adapters/outbound/persistence/MongoExperienceRollRepository'
+import { MongoMissionSimulationIntakeRepository } from '../../adapters/outbound/persistence/MongoMissionSimulationIntakeRepository'
 import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
@@ -137,6 +143,10 @@ import {
   EXPERIENCE_ROLL_REPOSITORY,
   type ExperienceRollRepositoryPort,
 } from '../../application/ports/ExperienceRollRepositoryPort'
+import {
+  MISSION_SIMULATION_INTAKE_REPOSITORY,
+  type MissionSimulationIntakeRepositoryPort,
+} from '../../application/ports/MissionSimulationIntakeRepositoryPort'
 import { WALLET_STAKE_PORT, type WalletStakePort } from '../../application/ports/WalletStakePort'
 import {
   RANDOM_SEQUENCE_FACTORY,
@@ -173,6 +183,10 @@ import { ReconcileStakes } from '../../application/use-cases/ReconcileStakes'
 import { ExecuteBasicAttack } from '../../application/use-cases/ExecuteBasicAttack'
 import { GetRewardStatus } from '../../application/use-cases/GetRewardStatus'
 import { ResolveExperienceRolls } from '../../application/use-cases/ResolveExperienceRolls'
+import { AcceptMissionSimulationRequest } from '../../application/use-cases/AcceptMissionSimulationRequest'
+import { RunMissionSimulation } from '../../application/use-cases/RunMissionSimulation'
+import { EstimateMissionOutcome } from '../../application/use-cases/EstimateMissionOutcome'
+import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
 import { RecoverBattleDeadlines } from '../../application/use-cases/RecoverBattleDeadlines'
@@ -242,6 +256,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     RewardStatusController,
     MyBattleRoomsController,
     ExperienceRollsController,
+    MissionSimulationsController,
   ],
   providers: [
     {
@@ -908,6 +923,49 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         random: BoundedRandom,
       ): ResolveExperienceRolls => new ResolveExperienceRolls(repository, random),
       inject: [EXPERIENCE_ROLL_REPOSITORY, BATTLE_RANDOM],
+    },
+    {
+      provide: MISSION_SIMULATION_INTAKE_REPOSITORY,
+      useFactory: (db: Db | null): MissionSimulationIntakeRepositoryPort =>
+        db === null
+          ? new InMemoryMissionSimulationIntakeRepository()
+          : new MongoMissionSimulationIntakeRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: ACCEPT_MISSION_SIMULATION_REQUEST,
+      useFactory: (
+        repository: MissionSimulationIntakeRepositoryPort,
+      ): AcceptMissionSimulationRequest => new AcceptMissionSimulationRequest(repository),
+      inject: [MISSION_SIMULATION_INTAKE_REPOSITORY],
+    },
+    {
+      provide: RUN_MISSION_SIMULATION,
+      useFactory: (
+        repository: MissionSimulationIntakeRepositoryPort,
+        sequences: RandomSequenceFactoryPort,
+        config: AppConfig,
+      ): RunMissionSimulation =>
+        new RunMissionSimulation(
+          repository,
+          sequences,
+          new HmacMissionSeedFactory(config.internalServiceAuthSecret),
+        ),
+      inject: [MISSION_SIMULATION_INTAKE_REPOSITORY, RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
+    },
+    {
+      // Diseno «misiones jugables», P-J7: la misma simulacion con semillas
+      // derivadas de la operacion, sin repositorio: la estimacion no se guarda.
+      provide: ESTIMATE_MISSION_OUTCOME,
+      useFactory: (
+        sequences: RandomSequenceFactoryPort,
+        config: AppConfig,
+      ): EstimateMissionOutcome =>
+        new EstimateMissionOutcome(
+          sequences,
+          new HmacMissionSeedFactory(config.internalServiceAuthSecret),
+        ),
+      inject: [RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
     },
     {
       // HU-22: cierra el hueco entre "sala FINISHED persistida" y

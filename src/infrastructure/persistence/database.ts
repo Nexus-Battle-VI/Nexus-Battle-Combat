@@ -13,6 +13,9 @@ import * as rewardWorkflowsMigration from '../../adapters/outbound/persistence/m
 import * as battleRoomsStakeMigration from '../../adapters/outbound/persistence/migrations/011-battle-rooms-stake'
 import * as battleRoomsParticipantIndexMigration from '../../adapters/outbound/persistence/migrations/012-battle-rooms-participant-index'
 import * as experienceRollsMigration from '../../adapters/outbound/persistence/migrations/013-experience-rolls'
+import * as missionSimulationIntakeMigration from '../../adapters/outbound/persistence/migrations/014-mission-simulation-intake'
+import * as missionSimulationResultsMigration from '../../adapters/outbound/persistence/migrations/015-mission-simulation-results'
+import * as battleRoomsSkillEffectsMigration from '../../adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -77,6 +80,9 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '011-battle-rooms-stake', up: battleRoomsStakeMigration.up },
   { name: '012-battle-rooms-participant-index', up: battleRoomsParticipantIndexMigration.up },
   { name: '013-experience-rolls', up: experienceRollsMigration.up },
+  { name: '014-mission-simulation-intake', up: missionSimulationIntakeMigration.up },
+  { name: '015-mission-simulation-results', up: missionSimulationResultsMigration.up },
+  { name: '016-battle-rooms-skill-effects', up: battleRoomsSkillEffectsMigration.up },
 ]
 
 const REGISTRY = '_migrations'

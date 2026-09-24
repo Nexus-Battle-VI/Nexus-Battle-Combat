@@ -59,6 +59,12 @@ export interface CombatAbilityEffect {
   readonly magnitude?: CombatMagnitude
   readonly durationTurns?: number
   readonly hasActivationCondition: boolean
+  /**
+   * HU-19 v2 (contrato §5): codigo de la inmunidad para `kind: 'IMMUNITY'`. Estructural,
+   * sin `magnitude` (no se amplia ese esquema): el campo ya existe en
+   * `catalog-product-v1.openapi.yaml`. Ausente en cualquier otro `kind`.
+   */
+  readonly immunityCode?: string
 }
 
 /**
@@ -137,6 +143,7 @@ const validateAbilityEffect = (effect: CombatAbilityEffect, field: string): Comb
   requireNonEmptyText(effect.target, `${field}.target`)
   requireOptionalText(effect.statistic, `${field}.statistic`)
   requireOptionalText(effect.operation, `${field}.operation`)
+  requireOptionalText(effect.immunityCode, `${field}.immunityCode`)
 
   if (typeof effect.hasActivationCondition !== 'boolean') {
     throw new InvalidCombatProfileError(`"${field}.hasActivationCondition" debe ser booleano.`)
@@ -163,6 +170,7 @@ const validateAbilityEffect = (effect: CombatAbilityEffect, field: string): Comb
       ? {}
       : { magnitude: Object.freeze({ ...effect.magnitude }) }),
     ...(effect.durationTurns === undefined ? {} : { durationTurns: effect.durationTurns }),
+    ...(effect.immunityCode === undefined ? {} : { immunityCode: effect.immunityCode }),
     hasActivationCondition: effect.hasActivationCondition,
   })
 }

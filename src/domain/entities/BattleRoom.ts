@@ -25,7 +25,12 @@ import {
 } from '../policies/BasicAttackDamagePolicy'
 import { applyHeal, calculateHeal } from '../policies/HealApplicationPolicy'
 import { spendPower } from '../policies/HeroPowerPolicy'
-import { evaluateSkill, type SkillBonus } from '../policies/SkillEffectPolicy'
+import {
+  evaluateSkill,
+  type SkillBonus,
+  type TemporalEffectAudience,
+  type TemporalEffectTemplate,
+} from '../policies/SkillEffectPolicy'
 import {
   DuplicateDisplayNameError,
   InvalidModeCompositionError,
@@ -85,7 +90,7 @@ import {
   type HandledCommand,
 } from './BattleEvent'
 import { BattleState, type BattleStateSnapshot, type BattleView } from './BattleState'
-import type { Combatant, CombatantKey } from './Combatant'
+import type { ActiveSkillEffect, Combatant, CombatantKey } from './Combatant'
 import type { CombatAbility, CombatMagnitude, CombatProfile } from './CombatProfile'
 import { memberKey, type TeamRoster, type TurnOrderEntry } from './TurnOrder'
 
@@ -127,6 +132,28 @@ export interface BasicAttackOutcome {
   readonly baseDamage: number | null
 }
 
+/**
+ * HU-19 v2 (contrato §2): plantilla de un efecto temporal YA resuelta a un combatiente concreto
+ * (audiencia -> `CombatantKey`), lista para que el caso de uso tire sus dados (si los hay,
+ * `RandomSequencePort`) y `applySkill`/`applyHealingSkill` la adjunte DESPUES de `completeTurn`
+ * (nunca antes: el cierre de turno propio de ESTA transaccion no debe alcanzar un efecto que
+ * todavia no existia). `initialRemainingOwnTurns` es literalmente `durationTurns` (o `1` si la
+ * habilidad no lo declaro): ver `resolveTemporalEffectTemplates`.
+ */
+export interface ResolvableTemporalEffect {
+  readonly template: TemporalEffectTemplate
+  readonly targetKey: CombatantKey
+  readonly sourceAbilityId: string
+  readonly sourceCombatant: CombatantKey
+  readonly initialRemainingOwnTurns: number
+}
+
+/** Un efecto temporal ya resuelto (dados tirados) y el combatiente al que se adjunta. */
+export interface ResolvedTemporalEffect {
+  readonly targetKey: CombatantKey
+  readonly effect: ActiveSkillEffect
+}
+
 /** Una habilidad ya VALIDADA (HU-19), lista para resolverse: 0 sorteos hasta aqui. */
 export interface SkillReadyPlan {
   readonly kind: 'skill'
@@ -139,10 +166,59 @@ export interface SkillReadyPlan {
   readonly targetHealth: number
   readonly damage: SupportedDamage
   readonly ability: CombatAbility
-  /** Bonos de la habilidad al Ataque y al Dano, ya agregados por `evaluateSkill`. */
+  /**
+   * Bonos de la habilidad al Ataque y al Dano, ya agregados por `evaluateSkill`. `damageBonus`
+   * YA incluye el reflejo de dano (HU-19 v2, contrato §6) cuando la habilidad lo declara: se
+   * calcula en `planSkill` (puro, sin sorteo) a partir de la memoria de dano del actor, y se
+   * suma como un bono mas -- `UseSkill` no necesita saber que existe.
+   */
   readonly attackBonus: SkillBonus
   readonly damageBonus: SkillBonus
   /** Poder del actor antes de pagar y el que le queda despues (`spendPower`). */
+  readonly powerBefore: number
+  readonly powerAfter: number
+  /** HU-19 v2: efectos temporales que esta habilidad crea (Mano de piedra, Cono de hielo...). */
+  readonly temporalEffects: readonly ResolvableTemporalEffect[]
+}
+
+/**
+ * HU-19 v2 (contrato §3): un dano directo ya VALIDADO (`kind: DAMAGE`, Agonia), sin resolucion
+ * de Ataque/Defensa -- listo para tirar su magnitud (si trae dados) y aplicarse.
+ */
+export interface SkillDirectDamageReadyPlan {
+  readonly kind: 'directDamageSkill'
+  readonly attackerEntry: TurnOrderEntry
+  readonly targetEntry: TurnOrderEntry
+  readonly attacker: Combatant
+  readonly target: Combatant
+  readonly targetHealth: number
+  readonly ability: CombatAbility
+  readonly damageBonus: SkillBonus
+  readonly powerBefore: number
+  readonly powerAfter: number
+}
+
+/** Un miembro elegible de un efecto de sanacion (HU-19 v2, contrato §1/§4): vivo, con perfil. */
+export interface HealingRecipient {
+  readonly entry: TurnOrderEntry
+  readonly combatant: Combatant
+}
+
+/**
+ * HU-19 v2 (contrato §1, familia `HEALING`): una sanacion ya VALIDADA, sobre un unico aliado
+ * (`ALLY`) o sobre el grupo aliado del actor resuelto SERVER-SIDE (`ALLIED_GROUP`, contrato §4).
+ * DETERMINISTA salvo la magnitud propia (si trae dados, se tira UNA vez y se aplica igual a
+ * cada afectado -- mismo criterio que un reflejo o un bono: una sola tirada por accion).
+ */
+export interface SkillHealingReadyPlan {
+  readonly kind: 'healingSkill'
+  readonly attackerEntry: TurnOrderEntry
+  readonly attacker: Combatant
+  readonly attackerProfile: CombatProfile
+  readonly recipients: readonly HealingRecipient[]
+  readonly ability: CombatAbility
+  readonly healBonus: SkillBonus
+  readonly temporalEffects: readonly ResolvableTemporalEffect[]
   readonly powerBefore: number
   readonly powerAfter: number
 }
@@ -174,7 +250,13 @@ export interface SkillDegradedPlan {
   readonly abilityId: string
 }
 
-export type SkillPlan = SkillReadyPlan | SkillHealReadyPlan | SkillDegradedPlan | BasicAttackReplay
+export type SkillPlan =
+  | SkillReadyPlan
+  | SkillHealReadyPlan
+  | SkillDirectDamageReadyPlan
+  | SkillHealingReadyPlan
+  | SkillDegradedPlan
+  | BasicAttackReplay
 
 /** Lo que HU-20, HU-25 y el sorteo de dano produjeron para una habilidad. */
 export interface SkillOutcome extends BasicAttackOutcome {
@@ -182,6 +264,19 @@ export interface SkillOutcome extends BasicAttackOutcome {
   readonly attackBonus: number
   /** Bono de Dano (fijo + dados), ya incluido en `baseDamage`; `null` si no se tiro. */
   readonly damageBonus: number | null
+  /** HU-19 v2: efectos temporales de esta habilidad, con sus dados ya resueltos. */
+  readonly resolvedTemporalEffects: readonly ResolvedTemporalEffect[]
+}
+
+/** HU-19 v2 (contrato §3): resultado de un dano directo, sin resolucion de Ataque/Defensa. */
+export interface DirectDamageOutcome {
+  readonly calculatedDamage: number
+}
+
+/** HU-19 v2 (contrato §1, familia `HEALING`): resultado de una sanacion, igual para cada afectado. */
+export interface HealingOutcome {
+  readonly healAmount: number
+  readonly resolvedTemporalEffects: readonly ResolvedTemporalEffect[]
 }
 
 export interface TeamConfigInput {
@@ -257,6 +352,30 @@ export type FinishCause =
 
 /** Longitud maxima de un `commandId` (ADR-020). */
 const MAX_COMMAND_ID_LENGTH = 100
+
+/**
+ * HU-19 v2 (contrato §6): el bono de dano que aporta `REFLECT_DAMAGE` -- `floor(dano recibido x
+ * basisPoints / 10000)` si la memoria de 1 turno propio sigue vigente; `0` si la habilidad no
+ * declara el patron o si el actor no recibio dano en su turno propio anterior (no es un
+ * rechazo: HU-19 v1 §4.2 ya establece que un efecto sin aporte no consume ni cambia nada).
+ */
+const reflectBonusFor = (
+  reflect: { readonly basisPoints: number } | null,
+  memory: { readonly amount: number; readonly remainingOwnTurns: number } | null,
+): number => {
+  if (reflect === null || memory === null || memory.remainingOwnTurns <= 0) {
+    return 0
+  }
+
+  return Math.floor((memory.amount * reflect.basisPoints) / 10_000)
+}
+
+/** Los efectos temporales resueltos que le corresponden a `key` (HU-19 v2, contrato §2). */
+const effectsFor = (
+  resolved: readonly ResolvedTemporalEffect[],
+  key: CombatantKey,
+): readonly ActiveSkillEffect[] =>
+  resolved.filter((item) => memberKey(item.targetKey) === memberKey(key)).map((item) => item.effect)
 
 /**
  * Sala de batalla (HU-14, RF-14). Aggregate root: cupo, equipos, modalidad,
@@ -1234,8 +1353,12 @@ export class BattleRoom {
         : 0
     const applied = applyDamage(plan.targetHealth, calculatedDamage)
     const completedPosition = this.battle.currentPosition
+    // HU-19 v2 (contrato §6): un ataque basico tambien alimenta la memoria de dano de
+    // `REFLECT_DAMAGE` -- es generica, de cualquier fuente de dano, no solo de habilidades.
     const battle = this.battle
-      .withCombatant(plan.target.withHealth(applied.healthAfter))
+      .withCombatant(
+        plan.target.withHealth(applied.healthAfter).withDamageTaken(applied.appliedDamage),
+      )
       .completeTurn(at)
     const seq = this.lastSeq + 1
     const event: BattleEvent = {
@@ -1331,6 +1454,7 @@ export class BattleRoom {
       throw new SkillsNotAvailableError()
     }
 
+    const currentPower = attacker.currentPower
     const ability = attacker.abilities.find((candidate) => candidate.abilityId === abilityId)
 
     if (ability === undefined) {
@@ -1347,26 +1471,19 @@ export class BattleRoom {
       throw new SkillOnCooldownError()
     }
 
-    const targetContext = this.requireTargetCombatant(
-      attackerEntry,
-      target,
-      support.kind === 'HEAL' ? 'ALLY' : 'OPPONENT',
-    )
+    // HU-19 v2: `HEAL` (Reanimacion, v1 sin cambios) y `HEALING` (contrato §1) son sanadores --
+    // no tienen Ataque numerico y NO degradan con Poder insuficiente (excepcion de HU-12).
+    if (support.kind === 'HEAL') {
+      const targetContext = this.requireTargetCombatant(attackerEntry, target, 'ALLY')
+      const payment = spendPower(
+        { heroId: memberKey(attackerEntry), current: currentPower, max: maxPower },
+        ability.powerCost,
+      )
 
-    const payment = spendPower(
-      { heroId: memberKey(attackerEntry), current: attacker.currentPower, max: maxPower },
-      ability.powerCost,
-    )
-
-    if (!payment.ok) {
-      if (support.kind === 'HEAL') {
+      if (!payment.ok) {
         throw new InsufficientPowerForHealError()
       }
 
-      return { kind: 'degraded', abilityId }
-    }
-
-    if (support.kind === 'HEAL') {
       return {
         kind: 'healSkill',
         attackerEntry,
@@ -1375,13 +1492,92 @@ export class BattleRoom {
         ...targetContext,
         ability,
         healMagnitude: support.healMagnitude,
-        powerBefore: attacker.currentPower,
+        powerBefore: currentPower,
         powerAfter: payment.state.current,
       }
     }
 
+    if (support.kind === 'HEALING') {
+      const recipients = this.resolveHealingRecipients(attackerEntry, target, support.audience)
+      const payment = spendPower(
+        { heroId: memberKey(attackerEntry), current: currentPower, max: maxPower },
+        ability.powerCost,
+      )
+
+      if (!payment.ok) {
+        throw new InsufficientPowerForHealError()
+      }
+
+      // Un efecto temporal de sanacion (Vinculo Natural, Canto del Bosque) se adjunta a CADA
+      // afectado individualmente -- no solo al primero: cada uno lleva su PROPIA cuenta de
+      // "turnos propios" (contrato §2, la convencion es del combatiente objetivo).
+      const temporalEffects = recipients.flatMap((recipient) =>
+        BattleRoom.resolveTemporalEffectTemplates(
+          support.temporalEffects,
+          () => recipient.entry,
+          ability.abilityId,
+          attackerEntry,
+        ),
+      )
+
+      return {
+        kind: 'healingSkill',
+        attackerEntry,
+        attacker,
+        attackerProfile,
+        recipients,
+        ability,
+        healBonus: support.healBonus,
+        temporalEffects,
+        powerBefore: currentPower,
+        powerAfter: payment.state.current,
+      }
+    }
+
+    // A partir de aqui la habilidad es OFENSIVA (`DAMAGE` o `DIRECT_DAMAGE`): objetivo rival,
+    // y el Poder insuficiente DEGRADA a ataque basico (HU-11) en vez de rechazar.
     if (attackerProfile.attack === null) {
       throw new UnsupportedCombatProfileError('el heroe no tiene un valor de Ataque numerico.')
+    }
+
+    const targetContext = this.requireTargetCombatant(attackerEntry, target, 'OPPONENT')
+
+    const payment = spendPower(
+      { heroId: memberKey(attackerEntry), current: currentPower, max: maxPower },
+      ability.powerCost,
+    )
+
+    if (!payment.ok) {
+      return { kind: 'degraded', abilityId }
+    }
+
+    if (support.kind === 'DIRECT_DAMAGE') {
+      return {
+        kind: 'directDamageSkill',
+        attackerEntry,
+        attacker,
+        ...targetContext,
+        ability,
+        damageBonus: support.damageBonus,
+        powerBefore: currentPower,
+        powerAfter: payment.state.current,
+      }
+    }
+
+    // support.kind === 'DAMAGE': el patron "ataque mejorado" de v1, ampliado con el reflejo de
+    // dano (contrato §6, puro: se calcula aqui de la memoria YA persistida, sin sorteo) y los
+    // efectos temporales que esta habilidad crea (contrato §2).
+    const reflectBonus = reflectBonusFor(support.reflect, attacker.damageMemory)
+    const audienceKey = (audience: TemporalEffectAudience): CombatantKey => {
+      if (audience === 'SELF') {
+        return attackerEntry
+      }
+
+      if (audience === 'OPPONENT') {
+        return targetContext.targetEntry
+      }
+
+      throw new DomainError(`Un efecto ofensivo no puede tener audiencia ${audience}.`)
     }
 
     return {
@@ -1393,10 +1589,132 @@ export class BattleRoom {
       damage: assertSupportedDamage(attackerProfile.damage),
       ability,
       attackBonus: support.attackBonus,
-      damageBonus: support.damageBonus,
-      powerBefore: attacker.currentPower,
+      damageBonus: {
+        fixed: support.damageBonus.fixed + reflectBonus,
+        dice: support.damageBonus.dice,
+      },
+      powerBefore: currentPower,
       powerAfter: payment.state.current,
+      temporalEffects: BattleRoom.resolveTemporalEffectTemplates(
+        support.temporalEffects,
+        audienceKey,
+        ability.abilityId,
+        attackerEntry,
+      ),
     }
+  }
+
+  /**
+   * HU-19 v2 (contrato §4): resuelve a QUIEN afecta una sanacion. `ALLY` reutiliza
+   * `requireTargetCombatant` (sin reescribirla): un unico companero distinto del actor. Para
+   * `ALLIED_GROUP` (Canto del Bosque) el `target` del comando NO es la fuente del alcance --
+   * Combat solo comprueba que exista en la batalla (forma del mensaje) y calcula el grupo
+   * SERVER-SIDE, del equipo del actor, vivos y con perfil de combate (el actor incluido si
+   * cumple ambos).
+   */
+  private resolveHealingRecipients(
+    attackerEntry: TurnOrderEntry,
+    target: CombatantKey,
+    audience: 'ALLY' | 'ALLIED_GROUP',
+  ): readonly HealingRecipient[] {
+    if (audience === 'ALLY') {
+      const targetContext = this.requireTargetCombatant(attackerEntry, target, 'ALLY')
+
+      return [{ entry: targetContext.targetEntry, combatant: targetContext.target }]
+    }
+
+    if (this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const battle = this.battle
+    const targetExists = battle.turnOrder.some(
+      (entry) => entry.teamLabel === target.teamLabel && entry.seat === target.seat,
+    )
+
+    if (!targetExists) {
+      throw new InvalidTargetError(this.id)
+    }
+
+    const recipients = battle.turnOrder
+      .filter((entry) => entry.teamLabel === attackerEntry.teamLabel)
+      .flatMap((entry): readonly HealingRecipient[] => {
+        const combatant = battle.combatantFor(entry)
+        const eligible =
+          combatant?.profile !== null && combatant?.profile !== undefined && combatant.alive
+
+        return eligible ? [{ entry, combatant }] : []
+      })
+
+    // Inalcanzable en la practica: el propio actor esta vivo y con perfil (ya comprobado por
+    // `requireAttackerTurn`), asi que siempre aparece en su propio equipo.
+    if (recipients.length === 0) {
+      throw new DomainError(
+        'Ningun miembro elegible del equipo del actor para la sanacion de grupo.',
+      )
+    }
+
+    return recipients
+  }
+
+  /**
+   * HU-19 v2 (contrato §2): resuelve cada plantilla de efecto temporal a un combatiente
+   * concreto (`audienceKey`). `initialRemainingOwnTurns` es literalmente `durationTurns` (o `1`
+   * si no se declaro): el efecto se ADJUNTA DESPUES de `completeTurn` (ver `applySkill` /
+   * `applyHealingSkill`), nunca antes -- as; el cierre del turno propio de ESTA MISMA
+   * transaccion no lo alcanza (ni lo decrementa ni, si es de Sanacion, lo tira UNA vez de mas):
+   * "no se aplica a esta resolucion", el mismo principio que ya vale para el bono instantaneo de
+   * Ataque/Dano (v1 §4), ahora aplicado tambien al primer tick/decremento de un efecto nuevo.
+   */
+  private static resolveTemporalEffectTemplates(
+    templates: readonly TemporalEffectTemplate[],
+    audienceKey: (audience: TemporalEffectAudience) => CombatantKey,
+    sourceAbilityId: string,
+    sourceCombatant: CombatantKey,
+  ): readonly ResolvableTemporalEffect[] {
+    return templates.map((template) => ({
+      template,
+      targetKey: audienceKey(template.family === 'IMMUNITY' ? 'SELF' : template.audience),
+      sourceAbilityId,
+      sourceCombatant,
+      initialRemainingOwnTurns: template.durationTurns ?? 1,
+    }))
+  }
+
+  /**
+   * Adjunta los efectos temporales YA resueltos a cada combatiente de `keys` que tenga alguno
+   * (contrato §2), SOBRE el `battle` que el llamador ya avanzo con `completeTurn` -- nunca
+   * antes: ver `resolveTemporalEffectTemplates`. Sin efectos para ninguna `key`, devuelve el
+   * mismo `battle` (no crea version nueva si no hace falta).
+   */
+  private static withActiveEffectsAttached(
+    battle: BattleState,
+    resolved: readonly ResolvedTemporalEffect[],
+    keys: readonly CombatantKey[],
+  ): BattleState {
+    if (resolved.length === 0) {
+      return battle
+    }
+
+    let next = battle
+
+    for (const key of keys) {
+      const effects = effectsFor(resolved, key)
+
+      if (effects.length === 0) {
+        continue
+      }
+
+      const combatant = next.combatantFor(key)
+
+      if (combatant === undefined) {
+        throw new DomainError('Un efecto temporal se adjunta a un combatiente que no participa.')
+      }
+
+      next = next.withCombatant(combatant.withAddedActiveSkillEffects(effects))
+    }
+
+    return next
   }
 
   /**
@@ -1437,10 +1755,24 @@ export class BattleRoom {
     const actor = plan.attacker
       .withPower(plan.powerAfter)
       .withCooldown(plan.ability.abilityId, plan.ability.chargeTurns + 1)
-    const battle = this.battle
+    // HU-19 v2 (contrato §6): el objetivo recuerda el dano recibido (memoria de 1 turno propio
+    // para `REFLECT_DAMAGE`), igual que ya hace un ataque basico.
+    const targetCombatant = plan.target
+      .withHealth(applied.healthAfter)
+      .withDamageTaken(applied.appliedDamage)
+    const turnClosed = this.battle
       .withCombatant(actor)
-      .withCombatant(plan.target.withHealth(applied.healthAfter))
+      .withCombatant(targetCombatant)
       .completeTurn(at)
+    // Los efectos temporales NUEVOS de esta habilidad se adjuntan DESPUES de `completeTurn`
+    // (contrato §2): asi el cierre del turno propio de ESTA MISMA transaccion no los alcanza --
+    // ni los decrementa ni, si son de Sanacion, los tira una vez de mas antes de haber existido
+    // un solo turno completo. Solo entonces empiezan a valer para resoluciones FUTURAS.
+    const battle = BattleRoom.withActiveEffectsAttached(
+      turnClosed,
+      outcome.resolvedTemporalEffects,
+      [plan.attackerEntry, plan.targetEntry],
+    )
     const seq = this.lastSeq + 1
     const event: BattleEvent = {
       seq,
@@ -1576,6 +1908,203 @@ export class BattleRoom {
     // Curar nunca reduce la Vida de nadie: no puede eliminar a un equipo. Se
     // conserva la llamada por simetria estructural con `applySkill`/
     // `applyBasicAttack` (defensa en profundidad, no alcanzable hoy).
+    return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
+  }
+
+  /**
+   * Aplica un dano directo ya resuelto (HU-19 v2, contrato §3: `kind: DAMAGE`, Agonia) como UNA
+   * sola transicion del agregado, mismo criterio que `applySkill`: Vida del objetivo + Poder del
+   * actor + recarga + memoria de dano (§6) + evento + `commandId` procesado + turno avanzado.
+   * SIN resolucion de Ataque/Defensa: el dano se materializa tal cual, sin `calculateDamage`
+   * (no hay porcentaje que aplicarle).
+   */
+  applyDirectDamageSkill(
+    plan: SkillDirectDamageReadyPlan,
+    outcome: DirectDamageOutcome,
+    commandId: string,
+    at: Date,
+  ): BattleRoom {
+    BattleRoom.assertValidCommandId(commandId)
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const applied = applyDamage(plan.targetHealth, outcome.calculatedDamage)
+    const completedPosition = this.battle.currentPosition
+    const actor = plan.attacker
+      .withPower(plan.powerAfter)
+      .withCooldown(plan.ability.abilityId, plan.ability.chargeTurns + 1)
+    const targetCombatant = plan.target
+      .withHealth(applied.healthAfter)
+      .withDamageTaken(applied.appliedDamage)
+    const battle = this.battle.withCombatant(actor).withCombatant(targetCombatant).completeTurn(at)
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.DirectDamageSkillUsed,
+      occurredAt: at,
+      payload: {
+        commandId,
+        completedPosition,
+        actor: { teamLabel: plan.attackerEntry.teamLabel, seat: plan.attackerEntry.seat },
+        target: { teamLabel: plan.targetEntry.teamLabel, seat: plan.targetEntry.seat },
+        skill: {
+          abilityId: plan.ability.abilityId,
+          name: plan.ability.name,
+          powerCost: plan.ability.powerCost,
+          chargeTurns: plan.ability.chargeTurns,
+        },
+        power: { before: plan.powerBefore, after: plan.powerAfter },
+        cooldown: {
+          remainingTurns:
+            battle.combatantFor(plan.attackerEntry)?.cooldownOf(plan.ability.abilityId) ?? 0,
+        },
+        damage: {
+          calculatedDamage: applied.calculatedDamage,
+          appliedDamage: applied.appliedDamage,
+        },
+        targetHealth: { before: applied.healthBefore, after: applied.healthAfter },
+        battle: battle.toView(this.id),
+      },
+    }
+
+    const next = new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        handledCommands: [...this.handledCommands, { commandId, seq }],
+      },
+    )
+
+    return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
+  }
+
+  /**
+   * Aplica una sanacion de la familia `HEALING` (HU-19 v2, contrato §1: Toque de la Vida,
+   * Vinculo Natural, Canto del Bosque, Curacion Directa, Neutralizacion de Efectos) como UNA
+   * sola transicion del agregado: Vida de CADA afectado + Poder del actor + recarga + efectos
+   * temporales (§2) + evento (con `affected` cuando es de grupo, §4) + `commandId` procesado +
+   * turno avanzado. El mismo `healAmount` (ya resuelto, con su dado si lo hubo) se aplica a
+   * cada afectado, acotado a SU propio maximo (sin overheal) -- ninguno de los dos comparte
+   * Vida con otro.
+   */
+  applyHealingSkill(
+    plan: SkillHealingReadyPlan,
+    outcome: HealingOutcome,
+    commandId: string,
+    at: Date,
+  ): BattleRoom {
+    BattleRoom.assertValidCommandId(commandId)
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const completedPosition = this.battle.currentPosition
+    const actor = plan.attacker
+      .withPower(plan.powerAfter)
+      .withCooldown(plan.ability.abilityId, plan.ability.chargeTurns + 1)
+
+    let battle = this.battle.withCombatant(actor)
+    const healed: {
+      readonly key: CombatantKey
+      readonly before: number
+      readonly after: number
+    }[] = []
+
+    for (const recipient of plan.recipients) {
+      const maxHealth = recipient.combatant.profile?.maxHealth ?? 0
+      const currentHealth = recipient.combatant.currentHealth ?? 0
+      const applied = applyHeal(currentHealth, maxHealth, outcome.healAmount)
+
+      battle = battle.withCombatant(recipient.combatant.withHealth(applied.healthAfter))
+      healed.push({
+        key: recipient.entry,
+        before: applied.healthBefore,
+        after: applied.healthAfter,
+      })
+    }
+
+    battle = battle.completeTurn(at)
+    // Los efectos temporales NUEVOS (Vinculo Natural, Canto del Bosque) se adjuntan DESPUES de
+    // `completeTurn` (contrato §2, mismo criterio que `applySkill`): ninguno tira su PRIMER tick
+    // de sanacion en esta misma transaccion, ni siquiera para el propio actor cuando se incluye
+    // en su propio grupo aliado.
+    battle = BattleRoom.withActiveEffectsAttached(
+      battle,
+      outcome.resolvedTemporalEffects,
+      plan.recipients.map((recipient) => recipient.entry),
+    )
+
+    // Siempre hay al menos un afectado (`resolveHealingRecipients` nunca devuelve `[]`).
+    const primary = healed[0] as {
+      readonly key: CombatantKey
+      readonly before: number
+      readonly after: number
+    }
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.HealSkillUsed,
+      occurredAt: at,
+      payload: {
+        commandId,
+        completedPosition,
+        actor: { teamLabel: plan.attackerEntry.teamLabel, seat: plan.attackerEntry.seat },
+        target: { teamLabel: primary.key.teamLabel, seat: primary.key.seat },
+        skill: {
+          abilityId: plan.ability.abilityId,
+          name: plan.ability.name,
+          powerCost: plan.ability.powerCost,
+          chargeTurns: plan.ability.chargeTurns,
+        },
+        power: { before: plan.powerBefore, after: plan.powerAfter },
+        cooldown: {
+          remainingTurns:
+            battle.combatantFor(plan.attackerEntry)?.cooldownOf(plan.ability.abilityId) ?? 0,
+        },
+        heal: { amount: outcome.healAmount },
+        targetHealth: { before: primary.before, after: primary.after },
+        // HU-19 v2 (contrato §4): solo presente cuando afecto a mas de un combatiente.
+        ...(healed.length > 1
+          ? {
+              affected: healed.map((entry) => ({
+                teamLabel: entry.key.teamLabel,
+                seat: entry.key.seat,
+              })),
+            }
+          : {}),
+        battle: battle.toView(this.id),
+      },
+    }
+
+    const next = new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        handledCommands: [...this.handledCommands, { commandId, seq }],
+      },
+    )
+
+    // Curar nunca reduce la Vida de nadie: no puede eliminar a un equipo (mismo criterio que
+    // `applyHealSkill`).
     return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
   }
 

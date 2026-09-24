@@ -98,6 +98,103 @@ export const STONE_HAND = abilityOf(STONE_HAND_ID, 'Mano de piedra', 4, [
 ])
 
 /**
+ * HU-19 v2 (contrato §1). `+N`/`-N` (o dados) a una estadistica de OTRO combatiente, o a la
+ * propia con duracion: crea un efecto temporal de batalla (contrato §2).
+ */
+export const statEffect = (
+  statistic: string,
+  magnitude: CombatMagnitude,
+  extra: Partial<CombatAbilityEffect> = {},
+  target = 'SELF',
+): CombatAbilityEffect => ({
+  kind: 'STAT_MODIFIER',
+  target,
+  statistic,
+  operation: 'INCREASE',
+  magnitude,
+  hasActivationCondition: false,
+  ...extra,
+})
+
+/** `+N` (o `+NdM`) de Sanacion sobre un aliado o el grupo aliado (HU-19 v2, contrato §1). */
+export const healBonus = (
+  magnitude: CombatMagnitude,
+  extra: Partial<CombatAbilityEffect> = {},
+  target = 'ALLY',
+): CombatAbilityEffect => statEffect('HEALING', magnitude, extra, target)
+
+export const STONE_FIST_ID = 'a5d8a5f0-30f9-4a2e-9b3e-1f6b5b6c9a11'
+export const ICE_CONE_ID = 'b6e9b6f1-41fa-4b3f-ac4f-2a7c6c7dab22'
+export const AGONY_ID = 'c7fac7a2-52ab-4c40-bd5a-3b8d7d8ebc33'
+export const FIRE_WARD_ID = 'd80adb03-63bc-4d51-ce6b-4c9e8e9fcd44'
+export const LIFE_TOUCH_ID = 'e91bec14-74cd-4e62-df7c-5daf9fa0de55'
+export const FOREST_SONG_ID = 'fa2cfd25-85de-4f73-e08d-6ebfab1baf66'
+
+/** Mano de piedra (v2, Catalog real): +12 a la Defensa propia, sin duracion ni condicion. SOPORTADA. */
+export const STONE_FIST = abilityOf(STONE_FIST_ID, 'Mano de piedra', 3, [
+  statEffect('DEFENSE', fixed(12)),
+])
+
+/**
+ * Cono de hielo (v2, Catalog real): +2 al Dano propio (esta resolucion) y -(1d3) al Ataque del
+ * rival durante 2 de sus turnos propios (efecto temporal, contrato §2). SOPORTADA.
+ */
+export const ICE_CONE = abilityOf(ICE_CONE_ID, 'Cono de hielo', 5, [
+  statEffect('DAMAGE', fixed(2)),
+  statEffect('ATTACK', dice(1, 3), { operation: 'DECREASE', durationTurns: 2 }, 'OPPONENT'),
+])
+
+/** Agonia (v2, Catalog real): dano directo (2d9) sobre el rival, sin resolucion de Ataque/Defensa. SOPORTADA. */
+export const AGONY = abilityOf(AGONY_ID, 'Agonia', 3, [
+  { kind: 'DAMAGE', target: 'OPPONENT', magnitude: dice(2, 9), hasActivationCondition: false },
+])
+
+/**
+ * Pare de fuego (v2, Catalog real): +1 al Ataque propio y refleja el 100% del dano recibido en
+ * el turno propio anterior (contrato §6). `SUPPORTED_UNCONFIRMED_MAGNITUDE`.
+ */
+export const FIRE_WARD = abilityOf(FIRE_WARD_ID, 'Pare de fuego', 4, [
+  statEffect('ATTACK', fixed(1)),
+  {
+    kind: 'REFLECT_DAMAGE',
+    target: 'OPPONENT',
+    magnitude: { mode: 'PERCENTAGE', basisPoints: 10_000 },
+    hasActivationCondition: true,
+  },
+])
+
+/** Toque de la Vida (v2, Catalog real): sana +2 de Vida a un aliado, instantaneo. SOPORTADA. */
+export const LIFE_TOUCH = abilityOf(LIFE_TOUCH_ID, 'Toque de la Vida', 3, [healBonus(fixed(2))])
+
+/**
+ * Canto del Bosque (v2, Catalog real): sana (2d6) al grupo aliado completo durante 2 de los
+ * turnos propios de CADA afectado (efecto temporal de grupo, contrato §2 y §4). SOPORTADA.
+ */
+export const FOREST_SONG = abilityOf(FOREST_SONG_ID, 'Canto del Bosque', 6, [
+  healBonus(dice(2, 6), { durationTurns: 2 }, 'ALLIED_GROUP'),
+])
+
+// Variantes de magnitud FIJA de las mismas habilidades, SOLO para pruebas que ejercitan el
+// mecanismo generico (persistencia, decremento, idempotencia, ALLIED_GROUP) sin necesitar
+// calcular indices de dados: la magnitud no es lo que se prueba ahi.
+export const ICE_CONE_FIXED_ID = '011bfe36-96ef-5f84-f19e-7fc0ac2bg077'
+export const FOREST_SONG_FIXED_ID = '122c0f47-a7f0-6095-025f-8dd1bd3ch188'
+export const AGONY_FIXED_ID = '233d1058-b801-7106-136a-9ee2ce4di299'
+
+export const AGONY_FIXED = abilityOf(AGONY_FIXED_ID, 'Agonia', 3, [
+  { kind: 'DAMAGE', target: 'OPPONENT', magnitude: fixed(7), hasActivationCondition: false },
+])
+
+export const ICE_CONE_FIXED = abilityOf(ICE_CONE_FIXED_ID, 'Cono de hielo', 5, [
+  statEffect('DAMAGE', fixed(2)),
+  statEffect('ATTACK', fixed(3), { operation: 'DECREASE', durationTurns: 2 }, 'OPPONENT'),
+])
+
+export const FOREST_SONG_FIXED = abilityOf(FOREST_SONG_FIXED_ID, 'Canto del Bosque', 6, [
+  healBonus(fixed(4), { durationTurns: 2 }, 'ALLIED_GROUP'),
+])
+
+/**
  * Reanimacion (Medico): reanima a un aliado; el documento dice «todos los puntos
  * de poder». SOPORTADA (excepcion de curacion de HU-12, sin Task de Management).
  */

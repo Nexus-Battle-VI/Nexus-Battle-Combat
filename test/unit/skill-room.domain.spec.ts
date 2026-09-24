@@ -66,6 +66,7 @@ const outcome = (overrides: Partial<SkillOutcome> = {}): SkillOutcome => ({
   baseDamage: 5,
   attackBonus: 2,
   damageBonus: 0,
+  resolvedTemporalEffects: [],
   ...overrides,
 })
 
@@ -78,6 +79,7 @@ const MISS: SkillOutcome = {
   baseDamage: null,
   attackBonus: 2,
   damageBonus: null,
+  resolvedTemporalEffects: [],
 }
 
 const useSkill = (
@@ -272,8 +274,10 @@ describe('BattleRoom.planSkill — validacion previa (0 sorteos)', () => {
     } catch (error: unknown) {
       expect(error).toBeInstanceOf(UnsupportedSkillEffectError)
       expect((error as UnsupportedSkillEffectError).code).toBe('UNSUPPORTED_SKILL_EFFECT')
-      // El motivo es el PRIMER incumplimiento (la Defensa se evalua antes que la duracion).
-      expect((error as UnsupportedSkillEffectError).reason).toMatch(/estadistica DEFENSE/)
+      // HU-19 v2: DEFENSE ya es una estadistica soportada (Mano de piedra); STONE_HAND sigue
+      // sin soportarse por su condicion de activacion (nunca definida formalmente), el PRIMER
+      // incumplimiento que evalua `classifyStatModifier` para un efecto de estadistica.
+      expect((error as UnsupportedSkillEffectError).reason).toMatch(/condicionado/)
     }
   })
 
