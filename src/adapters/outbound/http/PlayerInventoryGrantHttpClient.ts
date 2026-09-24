@@ -1,4 +1,5 @@
 import {
+  RewardInvalidRequestError,
   RewardOperationConflictError,
   RewardRejectedError,
 } from '../../../application/errors/RewardIntegrationErrors'
@@ -9,6 +10,7 @@ import type {
   RewardGrantResult,
 } from '../../../application/ports/RewardGrantPort'
 import { postInternalJson, type InternalHttpClientOptions } from './InternalHttpClient'
+import { toInventoryGrantOperationId } from './inventory-grant-operation-id'
 
 const SERVICE = 'player-inventory'
 const PATH = '/api/internal/v1/inventory/grants'
@@ -22,6 +24,13 @@ const PATH = '/api/internal/v1/inventory/grants'
  * `combat` ya esta en el `INTERNAL_CALLERS` de Player-Inventory desde HU-15
  * (auditado, `Nexus-Battle-Player-Inventory` PR#40): no hace falta ningun
  * cambio de contrato para que esta llamada se autorice.
+ *
+ * EL `operationId` QUE VIAJA ES UN UUID v5, no el id logico del workflow. El
+ * contrato de HU-59 exige UUID v1-5 (`@IsUUID()` en el DTO y `UUID_PATTERN` en
+ * el caso de uso), y el id logico `battle:{battleId}:player:{playerId}:chest:1:grant`
+ * no lo es: Player-Inventory lo rechazaba con `400` ANTES de llegar al
+ * controlador, y ninguna prueba lo detecto porque la de HU-22 (#40) uso un UUID
+ * de ejemplo. Ver `toInventoryGrantOperationId`.
  */
 export class PlayerInventoryGrantHttpClient implements RewardGrantPort {
   constructor(private readonly options: InternalHttpClientOptions) {}
@@ -31,7 +40,7 @@ export class PlayerInventoryGrantHttpClient implements RewardGrantPort {
       SERVICE,
       PATH,
       {
-        operationId: command.operationId,
+        operationId: toInventoryGrantOperationId(command.operationId),
         playerId: command.playerId,
         items: [{ productId: command.productId, quantity: command.quantity }],
       },
@@ -44,6 +53,10 @@ export class PlayerInventoryGrantHttpClient implements RewardGrantPort {
 
     if (result.outcome === 'rejected') {
       throw new RewardRejectedError(SERVICE, describeRejection(result.body), codeOf(result.body))
+    }
+
+    if (result.outcome === 'invalid') {
+      throw new RewardInvalidRequestError(SERVICE, result.status, result.detail)
     }
 
     return parseGrantResult(result.body)

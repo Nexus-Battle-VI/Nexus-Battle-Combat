@@ -217,6 +217,23 @@ describe('WalletStakeHttpClient (HU-23, hu-23-battle-stake-v1 §5)', () => {
     ).rejects.toBeInstanceOf(UpstreamServiceError)
   })
 
+  it('un 400 CONSERVA el tratamiento previo (UpstreamServiceError): HU-23 no cambia con el arreglo de HU-22', async () => {
+    // `postInternalJson` ahora distingue los 4xx permanentes, pero la apuesta
+    // (creditos retenidos) no adopta esa clasificacion sin decidir antes que
+    // hacen StakeSettler/StakeReleaser con un rechazo permanente.
+    const fetchImpl = (() =>
+      Promise.resolve(
+        jsonResponse(400, { message: ['amount must be an integer'] }),
+      )) as unknown as typeof fetch
+
+    const client = new WalletStakeHttpClient({ ...baseOptions, fetchImpl })
+
+    await expect(client.reserve(reserveCommand)).rejects.toMatchObject({
+      name: 'UpstreamServiceError',
+      reason: 'error_servidor',
+    })
+  })
+
   it('una respuesta con forma invalida lanza UpstreamServiceError, nunca completa campos', async () => {
     const fetchImpl = (() =>
       Promise.resolve(jsonResponse(200, { applied: true }))) as unknown as typeof fetch
