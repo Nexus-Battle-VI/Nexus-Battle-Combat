@@ -1,4 +1,5 @@
 import {
+  RewardInvalidRequestError,
   RewardOperationConflictError,
   RewardRejectedError,
 } from '../../../application/errors/RewardIntegrationErrors'
@@ -50,6 +51,10 @@ export class WalletHttpClient implements RewardCreditPort {
 
     if (result.outcome === 'rejected') {
       throw new RewardRejectedError(SERVICE, describeRejection(result.body), codeOf(result.body))
+    }
+
+    if (result.outcome === 'invalid') {
+      throw new RewardInvalidRequestError(SERVICE, result.status, result.detail)
     }
 
     return parseCreditResult(result.body)
