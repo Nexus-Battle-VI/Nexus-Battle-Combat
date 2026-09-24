@@ -15,6 +15,7 @@ import {
   type BoundedRandom,
 } from '../../domain/policies/TurnOrderPolicy'
 import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
+import { commitmentExpiresAt } from '../../domain/policies/BattleTimingPolicy'
 import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
 import {
   RoomAccessForbiddenError,
@@ -26,6 +27,7 @@ import { PlayerWithoutEquippedHeroError, UpstreamServiceError } from '../errors/
 import type { BattleEventPublisherPort } from '../ports/BattleEventPublisherPort'
 import type { BattleConnectionsPort } from '../ports/BattleConnectionsPort'
 import type { BattleDeadlineBookPort } from '../ports/BattleDeadlineBookPort'
+import type { BattleHeroCommitmentPort } from '../ports/BattleHeroCommitmentPort'
 import type { BattlePresencePort } from '../ports/BattlePresencePort'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../ports/ClockPort'
@@ -84,6 +86,12 @@ export class StartBattle {
     private readonly random: BoundedRandom,
     private readonly publisher: BattleEventPublisherPort,
     /**
+     * HU-29: compromete a cada heroe al iniciar la batalla. OBLIGATORIO, no
+     * opcional como la presencia o el libro de vencimientos: si se pudiera omitir,
+     * la batalla arrancaria sin bloquear el equipamiento y nadie lo notaria.
+     */
+    private readonly commitments: BattleHeroCommitmentPort,
+    /**
      * HU-21: presencia y libro de vencimientos. Opcionales para no romper las
      * construcciones que no necesitan sembrar la gracia; en produccion se
      * inyectan los tres juntos.
@@ -120,9 +128,16 @@ export class StartBattle {
     // una composicion que HU-17 no sabe ordenar no puede iniciar batalla.
     assertBalancedTeams(room.roster())
 
-    const { rosters, combatants } = await this.revalidate(room)
+    const { rosters, combatants, heroes } = await this.revalidate(room)
     const order = generateTurnOrder(rosters, this.random)
-    const started = room.startBattle(order, this.clock.now(), combatants)
+    const startedAt = this.clock.now()
+    const started = room.startBattle(order, startedAt, combatants)
+
+    // HU-29: se COMPROMETE ANTES de persistir la batalla. Al reves -- persistir y
+    // luego comprometer -- una caida entre las dos dejaria una batalla corriendo
+    // con el loadout modificable, que es justo lo que la HU prohibe. En este
+    // orden, el peor caso es un compromiso sin batalla, que caduca solo.
+    await this.commitBattleHeroes(room, heroes, startedAt)
 
     let saved
     try {
@@ -189,6 +204,8 @@ export class StartBattle {
   private async revalidate(room: BattleRoom): Promise<{
     readonly rosters: readonly [TeamRoster, TeamRoster]
     readonly combatants: readonly Combatant[]
+    /** HU-29: el heroe resuelto de cada humano, para poder comprometerlo. */
+    readonly heroes: ReadonlyMap<string, EquippedHero>
   }> {
     const individualFormat = isIndividualFormat(room.teams)
     const rosters = room.roster()
@@ -285,7 +302,48 @@ export class StartBattle {
           : (profiles.get(member.playerId) ?? Combatant.start(member, null)),
       )
 
-    return { rosters: finalRosters, combatants }
+    return {
+      rosters: finalRosters,
+      combatants,
+      // Solo los humanos con heroe resuelto: `revalidate` ya lanzo si a alguno le
+      // faltaba, asi que aqui no queda ninguno sin heroe.
+      heroes: new Map(
+        humans.flatMap(({ playerId }) => {
+          const hero = heroes.get(playerId)
+
+          return hero === undefined || hero === null ? [] : [[playerId, hero] as const]
+        }),
+      ),
+    }
+  }
+
+  /**
+   * HU-29: compromete a cada heroe que entra a la batalla.
+   *
+   * SECUENCIAL Y CON PARADA EN EL PRIMER FALLO, a proposito: si Player/Inventory no
+   * confirma, la batalla NO arranca. Arrancarla dejaria el equipamiento modificable
+   * en combate, que es exactamente lo que la HU prohibe. Los compromisos ya hechos
+   * caducan solos si nadie llega a liberarlos, porque el peor caso aceptable es un
+   * bloqueo temporal sin batalla, no una batalla sin bloqueo.
+   *
+   * El vencimiento es el MISMO plazo que el dominio ya le da a la batalla mas la
+   * gracia de reconexion: no se inventa una duracion nueva.
+   */
+  private async commitBattleHeroes(
+    room: BattleRoom,
+    heroes: ReadonlyMap<string, EquippedHero>,
+    startedAt: Date,
+  ): Promise<void> {
+    const expiresAt = commitmentExpiresAt(startedAt)
+
+    for (const [playerId, hero] of heroes) {
+      await this.commitments.commit({
+        roomId: room.id,
+        playerId,
+        heroId: hero.heroId,
+        expiresAt,
+      })
+    }
   }
 
   /** Congela el perfil de un HUMAN; un dato upstream mal formado es un fallo del servicio, no del jugador. */
