@@ -14,6 +14,7 @@ import {
   up as upSkillsMigration,
 } from '../../src/adapters/outbound/persistence/migrations/008-battle-rooms-skills'
 import { up as upFinishMigration } from '../../src/adapters/outbound/persistence/migrations/009-battle-rooms-finish'
+import { up as upSkillEffectsMigration } from '../../src/adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
 import {
   ACCOUNT_BATTLE_PROFILE,
   type AccountBattleProfilePort,
@@ -1031,11 +1032,12 @@ describe('HU-19 de extremo a extremo (protocolo): habilidades entre dos clientes
         occurredAt: new Date(),
         payload: {},
       }
-      // HU-21: el documento actual se escribe con `battle.turnStartedAt` (y con
-      // los campos de HU-19), que los validadores de 007/008 no conocen; el
-      // rechazo del motor sigue siendo la garantia de que ninguna escritura no
-      // autorizada prospera. Con 008 y luego 009 restablecidos, el evento vuelve
-      // a escribirse.
+      // HU-21/HU-19 v2: el documento actual se escribe con `battle.turnStartedAt`
+      // y con los campos de la cobertura v2 (`activeSkillEffects`/`damageMemory`,
+      // migracion 016), que los validadores de 007/008 no conocen; el rechazo del
+      // motor sigue siendo la garantia de que ninguna escritura no autorizada
+      // prospera. Con 008, 009 y 016 restablecidos (el mismo validador con el que
+      // arranco la app real), el evento vuelve a escribirse.
       await downSkillsMigration(db)
       try {
         await expect(
@@ -1052,6 +1054,7 @@ describe('HU-19 de extremo a extremo (protocolo): habilidades entre dos clientes
       } finally {
         await upSkillsMigration(db)
         await upFinishMigration(db)
+        await upSkillEffectsMigration(db)
       }
 
       await expect(
