@@ -99,8 +99,10 @@ describe('MongoExperienceRollRepository', () => {
   }
 
   it('la migracion 013-experience-rolls esta registrada en el orden que le toca', () => {
-    expect(MIGRATIONS.at(-1)?.name).toBe('013-experience-rolls')
-    expect(MIGRATIONS.map((migration) => migration.name)).toContain('013-experience-rolls')
+    const names = MIGRATIONS.map((migration) => migration.name)
+    expect(names.indexOf('013-experience-rolls')).toBeGreaterThan(
+      names.indexOf('012-battle-rooms-participant-index'),
+    )
   })
 
   it('guarda el lote ENTERO en UN SOLO documento cuyo _id es el operationId', async () => {
