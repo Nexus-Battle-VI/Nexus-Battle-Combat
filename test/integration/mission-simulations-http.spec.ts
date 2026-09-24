@@ -194,4 +194,104 @@ describe('POST /api/internal/v1/combat/simulations', () => {
       },
     })
   })
+
+  describe('POST /estimates (P-J7)', () => {
+    const ESTIMATES = `${PATH}/estimates`
+    const estimate = (body: unknown, service = 'missions') => {
+      const timestamp = String(Date.now())
+      return request(app.getHttpServer())
+        .post(ESTIMATES)
+        .set('x-internal-service', service)
+        .set('x-internal-timestamp', timestamp)
+        .set(
+          'x-internal-signature',
+          signInternalRequest(SECRET, {
+            service,
+            method: 'POST',
+            path: ESTIMATES,
+            timestamp,
+            body,
+          }),
+        )
+        .send(body as object)
+    }
+    const agonia = {
+      abilityId: 'agonia',
+      name: 'Agonía',
+      powerCost: { mode: 'FIXED', amount: 4 },
+      chargeTurns: 1,
+      effects: [
+        {
+          kind: 'DAMAGE',
+          target: 'OPPONENT',
+          magnitude: { mode: 'DICE', count: 2, sides: 9 },
+          hasActivationCondition: false,
+        },
+      ],
+    }
+    const pare = {
+      abilityId: 'pare-de-fuego',
+      name: 'Pare de fuego',
+      powerCost: { mode: 'FIXED', amount: 4 },
+      chargeTurns: 1,
+      effects: [
+        {
+          kind: 'REFLECT_DAMAGE',
+          target: 'OPPONENT',
+          magnitude: { mode: 'PERCENTAGE', basisPoints: 10000 },
+          hasActivationCondition: true,
+        },
+      ],
+    }
+    const withAbilities = {
+      ...BODY,
+      operationId: 'mission:estimate-1',
+      hero: { ...BODY.hero, profile: { ...BODY.hero.profile, abilities: [agonia, pare] } },
+    }
+
+    it('samples the same simulation without storing it and reports usable abilities', async () => {
+      const response = await estimate({ runs: 12, request: withAbilities })
+      expect(response.status).toBe(200)
+      expect(response.body).toMatchObject({
+        runs: 12,
+        victories: 12,
+        defeats: 0,
+        timeouts: 0,
+        winRate: 1,
+        abilities: [
+          { abilityId: 'agonia', name: 'Agonía', usable: true, reason: null },
+          { abilityId: 'pare-de-fuego', usable: false },
+        ],
+      })
+      expect(response.body.abilities[1].reason).toMatch(/condicion/u)
+
+      // Nada quedo reservado: la operacion sigue libre para una simulacion real.
+      const real = await signed(withAbilities)
+      expect(real.status).toBe(200)
+      expect((await estimate({ runs: 12, request: withAbilities })).body).toEqual(response.body)
+    })
+
+    it('defaults to 30 runs and rejects a bad run count or a missing request', async () => {
+      expect((await estimate({ request: BODY })).body.runs).toBe(30)
+      for (const body of [{ runs: 0, request: BODY }, { runs: 101, request: BODY }, { runs: 5 }]) {
+        const response = await estimate(body)
+        expect(response.status).toBe(400)
+        expect(response.body.code).toBe('SCHEMA_INVALID')
+      }
+      expect((await estimate([BODY])).status).toBe(400)
+    })
+
+    it('validates the embedded request like a real simulation', async () => {
+      const response = await estimate({ runs: 3, request: { ...BODY, timeBudget: '12h' } })
+      expect(response.status).toBe(400)
+      expect(response.body.code).toBe('SCHEMA_INVALID')
+    })
+
+    it('only answers signed calls from missions', async () => {
+      expect(
+        (await request(app.getHttpServer()).post(ESTIMATES).send({ request: BODY })).status,
+      ).toBe(401)
+      expect((await estimate({ request: BODY }, 'catalog')).status).toBe(401)
+    })
+  })
 })

@@ -43,6 +43,7 @@ import {
   RESUME_BATTLE,
   RESOLVE_EXPERIENCE_ROLLS,
   ACCEPT_MISSION_SIMULATION_REQUEST,
+  ESTIMATE_MISSION_OUTCOME,
   RUN_MISSION_SIMULATION,
   ROOM_COMMAND_LOCK,
   STAKE_RELEASER,
@@ -184,6 +185,7 @@ import { GetRewardStatus } from '../../application/use-cases/GetRewardStatus'
 import { ResolveExperienceRolls } from '../../application/use-cases/ResolveExperienceRolls'
 import { AcceptMissionSimulationRequest } from '../../application/use-cases/AcceptMissionSimulationRequest'
 import { RunMissionSimulation } from '../../application/use-cases/RunMissionSimulation'
+import { EstimateMissionOutcome } from '../../application/use-cases/EstimateMissionOutcome'
 import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
@@ -950,6 +952,20 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           new HmacMissionSeedFactory(config.internalServiceAuthSecret),
         ),
       inject: [MISSION_SIMULATION_INTAKE_REPOSITORY, RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
+    },
+    {
+      // Diseno «misiones jugables», P-J7: la misma simulacion con semillas
+      // derivadas de la operacion, sin repositorio: la estimacion no se guarda.
+      provide: ESTIMATE_MISSION_OUTCOME,
+      useFactory: (
+        sequences: RandomSequenceFactoryPort,
+        config: AppConfig,
+      ): EstimateMissionOutcome =>
+        new EstimateMissionOutcome(
+          sequences,
+          new HmacMissionSeedFactory(config.internalServiceAuthSecret),
+        ),
+      inject: [RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
     },
     {
       // HU-22: cierra el hueco entre "sala FINISHED persistida" y

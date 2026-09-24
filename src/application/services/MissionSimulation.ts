@@ -3,7 +3,12 @@ import type { MissionSeed } from '../ports/MissionSeedPort'
 import { createBoundedRandom } from './BoundedRandom'
 import { calculateDamage } from '../../domain/policies/BasicAttackDamagePolicy'
 import { dieFaceFromIndex } from '../../domain/policies/AttackProfile'
-import { evaluateSkill } from '../../domain/policies/SkillEffectPolicy'
+import {
+  evaluateMissionAbility,
+  type MissionEffect,
+  type MissionStatistic,
+} from '../../domain/policies/MissionAbilityPolicy'
+import type { SkillBonus } from '../../domain/policies/SkillEffectPolicy'
 import type { CombatAbility, CombatMagnitude } from '../../domain/entities/CombatProfile'
 import { RandomSeed } from '../../domain/value-objects/RandomSeed'
 
@@ -106,9 +111,9 @@ type RotationPriority = 'HIGH' | 'MEDIUM' | 'LOW'
 /**
  * Por qué una rotación no fue viable en un turno (HU-71, P-R7). La recarga y el
  * Poder vienen del diseño; `UNKNOWN_ABILITY` y `UNSUPPORTED_EFFECT` son de Combat:
- * la habilidad no está en el perfil del héroe o su efecto no tiene semántica
- * definida (`evaluateSkill`). La condición de salud todavía no tiene regla del PO
- * (decisión 5 del diseño), así que aún no descarta ninguna rotación.
+ * la habilidad no está en el perfil del héroe o su efecto no tiene semántica de
+ * misión (`evaluateMissionAbility`). La condición de salud todavía no tiene regla
+ * del PO (decisión 5 del diseño), así que aún no descarta ninguna rotación.
  */
 type SkipReason = 'UNKNOWN_ABILITY' | 'UNSUPPORTED_EFFECT' | 'ON_COOLDOWN' | 'NOT_ENOUGH_POWER'
 
@@ -128,6 +133,20 @@ interface ChosenAction {
   readonly kind: 'BASIC_ATTACK' | 'ABILITY'
   readonly ability?: CombatAbility
   readonly strategy: StrategyTrace
+}
+
+/** Un modificador de estadística con duración (mejora del héroe o penalización del enemigo). */
+interface TimedModifier {
+  readonly statistic: MissionStatistic
+  readonly amount: number
+  /** Rondas que le quedan, contando la actual. */
+  remaining: number
+}
+
+/** Quita las entradas que ya gastaron sus rondas, sin cambiar la referencia de la lista. */
+const dropSpent = (list: { remaining: number }[]): void => {
+  const alive = list.filter((entry) => entry.remaining > 0)
+  list.splice(0, list.length, ...alive)
 }
 
 const PRIORITY_ORDER: Readonly<Record<RotationPriority, number>> = { HIGH: 0, MEDIUM: 1, LOW: 2 }
@@ -181,6 +200,14 @@ export const simulateMission = (
   const abilities = new Map(
     request.hero.profile.abilities.map((ability) => [ability.abilityId, ability]),
   )
+  /** Mejoras propias con duración: siguen activas entre peleas hasta gastar sus rondas. */
+  const heroModifiers: TimedModifier[] = []
+  /** Curaciones de las rondas siguientes (curación en el tiempo). */
+  const pendingHeals: { readonly amount: SkillBonus; remaining: number }[] = []
+  let immunityRounds = 0
+  let reflect: { readonly basisPoints: number; remaining: number } | null = null
+  let healingDone = 0
+  let abilityDamage = 0
 
   const event = (type: string, data: Readonly<Record<string, unknown>>): void => {
     log.push({ seq: log.length + 1, type, ...data })
@@ -205,14 +232,22 @@ export const simulateMission = (
       for (let n = 0; n < die.count; n += 1) rolled += roll(die.sides)
       return sum + rolled
     }, 0)
+  const modifierOf = (list: readonly TimedModifier[], statistic: MissionStatistic): number =>
+    list.reduce((sum, entry) => (entry.statistic === statistic ? sum + entry.amount : sum), 0)
+  /** Cura sin pasar de la vida máxima y devuelve cuánto curó de verdad. */
+  const heal = (amount: number): number => {
+    const before = health
+    health = Math.min(maxHealth, health + amount)
+    healingDone += health - before
+    return health - before
+  }
   const rotations = [...request.strategy.rotations].sort(
     (a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority],
   )
   /** La primera causa por la que la habilidad no puede ejecutarse este turno, o `null`. */
   const skipReasonOf = (ability: CombatAbility | undefined): SkipReason | null => {
     if (ability === undefined) return 'UNKNOWN_ABILITY'
-    const support = evaluateSkill(ability)
-    if (!support.supported || support.kind !== 'DAMAGE') return 'UNSUPPORTED_EFFECT'
+    if (!evaluateMissionAbility(ability).supported) return 'UNSUPPORTED_EFFECT'
     if ((cooldowns.get(ability.abilityId) ?? 0) > 0) return 'ON_COOLDOWN'
     const affordable =
       ability.powerCost.mode === 'ALL_AVAILABLE' ? power > 0 : ability.powerCost.amount <= power
@@ -268,6 +303,58 @@ export const simulateMission = (
     let enemyHealth = enemy.maxHealth
     let guard = 0
     let turns = 0
+    /** Penalizaciones al enemigo de esta pelea; terminan con él. */
+    const enemyModifiers: TimedModifier[] = []
+    /** Fin de ronda: cada efecto con duración gasta una. */
+    const endRound = (): void => {
+      for (const entry of heroModifiers) entry.remaining -= 1
+      for (const entry of enemyModifiers) entry.remaining -= 1
+      dropSpent(heroModifiers)
+      dropSpent(enemyModifiers)
+      if (immunityRounds > 0) immunityRounds -= 1
+      if (reflect !== null)
+        reflect = reflect.remaining > 1 ? { ...reflect, remaining: reflect.remaining - 1 } : null
+    }
+    /** Aplica un efecto de habilidad (P-J4) y devuelve lo que queda en la bitácora. */
+    const applyEffect = (effect: MissionEffect): Readonly<Record<string, unknown>> => {
+      switch (effect.kind) {
+        case 'MODIFIER': {
+          const amount = bonus(effect.amount)
+          const list = effect.target === 'SELF' ? heroModifiers : enemyModifiers
+          list.push({ statistic: effect.statistic, amount, remaining: effect.turns })
+          return {
+            kind: effect.target === 'SELF' ? 'BUFF' : 'DEBUFF',
+            statistic: effect.statistic,
+            amount,
+            turns: effect.turns,
+          }
+        }
+        case 'DIRECT_DAMAGE': {
+          const amount = Math.min(enemyHealth, Math.max(1, bonus(effect.amount)))
+          enemyHealth -= amount
+          damageDealt += amount
+          abilityDamage += amount
+          return { kind: 'DIRECT_DAMAGE', amount }
+        }
+        case 'HEAL': {
+          const amount = heal(bonus(effect.amount))
+          if (effect.turns > 1) {
+            pendingHeals.push({ amount: effect.amount, remaining: effect.turns - 1 })
+          }
+          return { kind: 'HEAL', amount, turns: effect.turns, heroHealth: health }
+        }
+        case 'HEAL_PERCENT': {
+          const amount = heal(Math.floor((maxHealth * effect.basisPoints) / 10_000))
+          return { kind: 'HEAL', amount, turns: 1, heroHealth: health }
+        }
+        case 'IMMUNITY':
+          immunityRounds = Math.max(immunityRounds, effect.turns)
+          return { kind: 'IMMUNITY', turns: effect.turns }
+        case 'REFLECT':
+          reflect = { basisPoints: effect.basisPoints, remaining: effect.turns }
+          return { kind: 'REFLECT', basisPoints: effect.basisPoints, turns: effect.turns }
+      }
+    }
     event('enemyStarted', { enemyRef, maxHealth: enemy.maxHealth })
     while (enemyHealth > 0 && health > 0) {
       if (
@@ -282,47 +369,65 @@ export const simulateMission = (
       if (supportHero) health = Math.min(maxHealth, health + (rules.supportRegen ?? 1))
       for (const [id, remaining] of cooldowns) cooldowns.set(id, Math.max(0, remaining - 1))
       power = Math.min(heroStats.power, power + 2)
+      for (const pending of pendingHeals) {
+        const amount = heal(bonus(pending.amount))
+        pending.remaining -= 1
+        event('heroHealed', { amount, heroHealth: health })
+      }
+      dropSpent(pendingHeals)
       const action = chooseAction()
       let attackBonus = 0
       let damageBonus = 0
+      let attacks = true
+      let powerSpent = 0
+      const effects: Readonly<Record<string, unknown>>[] = []
       if (action.kind === 'ABILITY' && action.ability !== undefined) {
-        const support = evaluateSkill(action.ability)
-        if (support.supported && support.kind === 'DAMAGE') {
+        const support = evaluateMissionAbility(action.ability)
+        if (support.supported) {
+          // Mismo orden de dados que antes: primero las bonificaciones del turno.
           attackBonus = bonus(support.attackBonus)
           damageBonus = bonus(support.damageBonus)
-          const cost =
+          powerSpent =
             action.ability.powerCost.mode === 'ALL_AVAILABLE'
               ? power
               : action.ability.powerCost.amount
-          power -= cost
+          power -= powerSpent
           cooldowns.set(action.ability.abilityId, action.ability.chargeTurns + 1)
           skillsUsed.set(
             action.ability.abilityId,
             (skillsUsed.get(action.ability.abilityId) ?? 0) + 1,
           )
+          attacks = support.attacks
+          for (const effect of support.effects) effects.push(applyEffect(effect))
         }
       }
-      const hit = heroAttack + attackBonus + roll(20) >= enemy.defense + guard + 10
-      guard = 0
+      let hit = false
       let dealt = 0
       let critical = false
-      if (hit) {
-        critical = random.nextInt(8000) < Math.floor(rules.criticalChance * 8000)
-        const baseDamage = magnitude(heroDamage) + damageBonus
-        dealt = Math.min(
-          enemyHealth,
-          Math.max(
-            1,
-            calculateDamage(
-              baseDamage,
-              critical ? Math.round(rules.criticalMultiplier * 100) : 100,
+      if (attacks && enemyHealth > 0) {
+        hit =
+          heroAttack + attackBonus + modifierOf(heroModifiers, 'ATTACK') + roll(20) >=
+          enemy.defense + guard - modifierOf(enemyModifiers, 'DEFENSE') + 10
+        if (hit) {
+          critical = random.nextInt(8000) < Math.floor(rules.criticalChance * 8000)
+          const baseDamage =
+            magnitude(heroDamage) + damageBonus + modifierOf(heroModifiers, 'DAMAGE')
+          dealt = Math.min(
+            enemyHealth,
+            Math.max(
+              1,
+              calculateDamage(
+                baseDamage,
+                critical ? Math.round(rules.criticalMultiplier * 100) : 100,
+              ),
             ),
-          ),
-        )
-        enemyHealth -= dealt
-        damageDealt += dealt
-        if (critical) criticalEffects += 1
+          )
+          enemyHealth -= dealt
+          damageDealt += dealt
+          if (critical) criticalEffects += 1
+        }
       }
+      guard = 0
       event('heroAction', {
         enemyRef,
         action: action.kind,
@@ -332,22 +437,55 @@ export const simulateMission = (
         damage: dealt,
         critical,
         enemyHealth,
+        ...(action.kind === 'ABILITY' ? { powerSpent } : {}),
+        ...(attacks ? {} : { attacked: false }),
+        ...(effects.length === 0 ? {} : { effects }),
       })
-      if (enemyHealth === 0) break
+      if (enemyHealth === 0) {
+        endRound()
+        break
+      }
       if (base.ai === 'GUARDED' && turns % 3 === 0) {
         guard = 4
         event('enemyGuarded', { enemyRef, defenseBonus: guard })
+        endRound()
         continue
       }
       const enraged =
         base.ai === 'BOSS' && enemyHealth * 100 <= enemy.maxHealth * (base.enrageBelowPercent ?? 50)
-      const enemyAttack = enemy.attack + (enraged ? (base.enrageAttackBonus ?? 0) : 0)
-      const enemyHit = enemyAttack + roll(20) >= heroStats.defense + 10
-      const taken = enemyHit ? Math.min(health, Math.max(1, magnitude(enemy.damage))) : 0
+      const enemyAttack =
+        enemy.attack +
+        (enraged ? (base.enrageAttackBonus ?? 0) : 0) -
+        modifierOf(enemyModifiers, 'ATTACK')
+      const enemyHit =
+        enemyAttack + roll(20) >= heroStats.defense + modifierOf(heroModifiers, 'DEFENSE') + 10
+      const softened = modifierOf(enemyModifiers, 'DAMAGE')
+      let taken = 0
+      if (enemyHit) {
+        const raw = magnitude(enemy.damage)
+        taken = Math.min(health, softened > 0 ? Math.max(0, raw - softened) : Math.max(1, raw))
+      }
+      const prevented = immunityRounds > 0 ? taken : 0
+      taken -= prevented
+      const returned = reflect !== null ? Math.floor((taken * reflect.basisPoints) / 10_000) : 0
+      taken -= returned
+      const reflected = Math.min(enemyHealth, returned)
+      enemyHealth -= reflected
+      damageDealt += reflected
+      abilityDamage += reflected
       health -= taken
       damageTaken += taken
       minHealth = Math.min(minHealth, health)
-      event('enemyAction', { enemyRef, hit: enemyHit, damage: taken, heroHealth: health, enraged })
+      event('enemyAction', {
+        enemyRef,
+        hit: enemyHit,
+        damage: taken,
+        heroHealth: health,
+        enraged,
+        ...(prevented > 0 ? { prevented } : {}),
+        ...(reflected > 0 ? { reflected } : {}),
+      })
+      endRound()
     }
     if (health === 0) return { status: 'HERO_DEFEATED', turns }
     defeated.set(enemyRef, (defeated.get(enemyRef) ?? 0) + 1)
@@ -462,6 +600,8 @@ export const simulateMission = (
       damageDealt,
       damageTaken,
       criticalEffects,
+      healingDone,
+      abilityDamage,
       skillsUsed: [...skillsUsed].map(([abilityId, count]) => ({ abilityId, count })),
       enemiesDefeated: [...defeated].map(([enemyRef, count]) => ({ enemyRef, count })),
       loot,

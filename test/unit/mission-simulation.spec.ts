@@ -384,3 +384,270 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
     })
   })
 })
+
+/** Habilidad de un solo efecto, con recarga de 1 turno y costo 1. */
+const utility = (
+  abilityId: string,
+  effect: Omit<CombatAbility['effects'][number], 'hasActivationCondition'>,
+): CombatAbility => ({
+  abilityId,
+  name: abilityId,
+  powerCost: { mode: 'FIXED', amount: 1 },
+  chargeTurns: 1,
+  effects: [{ ...effect, hasActivationCondition: false }],
+})
+
+/**
+ * Duelo contra un enemigo que SIEMPRE acierta (ataque 30 contra defensa 8) y hace
+ * 5 de dano, sin poder caer: cada ronda muestra el efecto de la habilidad.
+ */
+const brawl = (
+  abilities: readonly CombatAbility[],
+  steps: readonly Step[],
+): MissionSimulationRequest => {
+  const base = duel(abilities, [{ priority: 'HIGH', steps }])
+  return {
+    ...base,
+    operationId: `mission:brawl:${steps.map((s) => (s.kind === 'ABILITY' ? s.abilityId : 'basic')).join('-')}`,
+    encounters: [
+      {
+        index: 1,
+        kind: 'REGULAR',
+        powerStep: 0,
+        enemies: [{ enemyRef: 'ogro', name: 'Ogro', count: 1, profile: fighter(100000, 30, 0, 5) }],
+      },
+    ],
+  }
+}
+
+const logOf = (request: MissionSimulationRequest) => {
+  const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
+  const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
+  return simulateMission(request, seed, factory)
+}
+
+describe('mission abilities beyond attack bonuses (P-J4)', () => {
+  it('direct damage hits without an attack roll and counts as ability damage', () => {
+    const result = logOf(
+      brawl(
+        [
+          utility('agonia', {
+            kind: 'DAMAGE',
+            target: 'OPPONENT',
+            magnitude: { mode: 'FIXED', amount: 7 },
+          }),
+        ],
+        [skill('agonia'), basic],
+      ),
+    )
+    const [first] = result.combatLog.filter((event) => event.type === 'heroAction')
+    expect(first).toMatchObject({
+      action: 'ABILITY',
+      abilityId: 'agonia',
+      attacked: false,
+      hit: false,
+      damage: 0,
+      powerSpent: 1,
+      effects: [{ kind: 'DIRECT_DAMAGE', amount: 7 }],
+    })
+    expect(result.summary).toMatchObject({ skillsUsed: [{ abilityId: 'agonia', count: 3 }] })
+    expect(result.summary.abilityDamage).toBe(21)
+  })
+
+  it('heals the hero now and, with duration, at the start of the next round', () => {
+    const result = logOf(
+      brawl(
+        [
+          utility('canto', {
+            kind: 'HEALING',
+            target: 'ALLIED_GROUP',
+            magnitude: { mode: 'FIXED', amount: 3 },
+            durationTurns: 2,
+          }),
+        ],
+        [basic, skill('canto'), basic],
+      ),
+    )
+    const heroActions = result.combatLog.filter((event) => event.type === 'heroAction')
+    expect(heroActions[1]).toMatchObject({
+      effects: [{ kind: 'HEAL', amount: 3, turns: 2, heroHealth: 998 }],
+    })
+    const secondRound = result.combatLog.findIndex((event) => event === heroActions[1])
+    const nextHeal = result.combatLog
+      .slice(secondRound)
+      .find((event) => event.type === 'heroHealed')
+    expect(nextHeal).toMatchObject({ amount: 3 })
+    expect(result.summary.healingDone).toBeGreaterThanOrEqual(6)
+  })
+
+  it('heals a percentage of the maximum health (PvP Reanimacion semantics)', () => {
+    const result = logOf(
+      brawl(
+        [
+          utility('reanimacion', {
+            kind: 'REVIVE',
+            target: 'ALLY',
+            magnitude: { mode: 'PERCENTAGE', basisPoints: 10_000 },
+          }),
+        ],
+        [basic, basic, skill('reanimacion')],
+      ),
+    )
+    const [, , third] = result.combatLog.filter((event) => event.type === 'heroAction')
+    expect(third).toMatchObject({ effects: [{ kind: 'HEAL', amount: 10, heroHealth: 1000 }] })
+  })
+
+  it('immunity prevents the damage of that round', () => {
+    const result = logOf(
+      brawl([utility('defensa', { kind: 'IMMUNITY', target: 'SELF' })], [skill('defensa'), basic]),
+    )
+    const enemyActions = result.combatLog.filter((event) => event.type === 'enemyAction')
+    expect(enemyActions[0]).toMatchObject({ hit: true, damage: 0, prevented: 5, heroHealth: 1000 })
+    expect(enemyActions[1]).toMatchObject({ hit: true, damage: 5 })
+  })
+
+  it('a defense buff makes the enemy miss, and ends when its rounds are spent', () => {
+    const result = logOf(
+      brawl(
+        [
+          utility('piedra', {
+            kind: 'STAT_MODIFIER',
+            target: 'SELF',
+            statistic: 'DEFENSE',
+            operation: 'INCREASE',
+            magnitude: { mode: 'FIXED', amount: 50 },
+            durationTurns: 2,
+          }),
+        ],
+        [skill('piedra'), basic, basic],
+      ),
+    )
+    const enemyActions = result.combatLog.filter((event) => event.type === 'enemyAction')
+    expect(enemyActions.slice(0, 3).map((event) => event.hit)).toEqual([false, false, true])
+  })
+
+  it('a debuff lowers the opponent attack while it lasts', () => {
+    const result = logOf(
+      brawl(
+        [
+          utility('cono', {
+            kind: 'STAT_MODIFIER',
+            target: 'OPPONENT',
+            statistic: 'ATTACK',
+            operation: 'DECREASE',
+            magnitude: { mode: 'FIXED', amount: 100 },
+            durationTurns: 2,
+          }),
+        ],
+        [skill('cono'), basic, basic],
+      ),
+    )
+    const heroActions = result.combatLog.filter((event) => event.type === 'heroAction')
+    expect(heroActions[0]).toMatchObject({
+      attacked: false,
+      effects: [{ kind: 'DEBUFF', statistic: 'ATTACK', amount: 100, turns: 2 }],
+    })
+    const enemyActions = result.combatLog.filter((event) => event.type === 'enemyAction')
+    expect(enemyActions.slice(0, 3).map((event) => event.hit)).toEqual([false, false, true])
+  })
+
+  it('a damage reduction can soften a hit down to zero', () => {
+    const result = logOf(
+      brawl(
+        [
+          utility('hielo', {
+            kind: 'STAT_MODIFIER',
+            target: 'OPPONENT',
+            statistic: 'DAMAGE',
+            operation: 'DECREASE',
+            magnitude: { mode: 'FIXED', amount: 10 },
+          }),
+        ],
+        [skill('hielo'), basic],
+      ),
+    )
+    const enemyActions = result.combatLog.filter((event) => event.type === 'enemyAction')
+    expect(enemyActions[0]).toMatchObject({ hit: true, damage: 0 })
+    expect(enemyActions[1]).toMatchObject({ hit: true, damage: 5 })
+  })
+
+  it('reflect returns part of the damage to the attacker', () => {
+    const result = logOf(
+      brawl(
+        [
+          utility('toma', {
+            kind: 'REFLECT_DAMAGE',
+            target: 'OPPONENT',
+            magnitude: { mode: 'PERCENTAGE', basisPoints: 6000 },
+          }),
+        ],
+        [skill('toma'), basic],
+      ),
+    )
+    const enemyActions = result.combatLog.filter((event) => event.type === 'enemyAction')
+    expect(enemyActions[0]).toMatchObject({ hit: true, damage: 2, reflected: 3 })
+    // Se usa en las rondas 1, 3 y 5 del duelo de 6: tres reflejos de 3.
+    const reflected = enemyActions.map((event) => Number(event.reflected ?? 0))
+    expect(reflected.filter((amount) => amount > 0)).toEqual([3, 3, 3])
+    expect(result.summary.abilityDamage).toBe(9)
+  })
+
+  it('a damage buff with duration also improves the following basic attacks', () => {
+    const result = logOf(
+      brawl(
+        [
+          utility('cortada', {
+            kind: 'STAT_MODIFIER',
+            target: 'SELF',
+            statistic: 'DAMAGE',
+            operation: 'INCREASE',
+            magnitude: { mode: 'FIXED', amount: 40 },
+            durationTurns: 2,
+          }),
+        ],
+        [skill('cortada'), basic, basic],
+      ),
+    )
+    const heroActions = result.combatLog.filter((event) => event.type === 'heroAction')
+    expect(heroActions[0]).toMatchObject({
+      action: 'ABILITY',
+      hit: true,
+      effects: [{ kind: 'BUFF', statistic: 'DAMAGE', amount: 40, turns: 2 }],
+    })
+    expect(heroActions[0]?.damage).toBeGreaterThanOrEqual(41)
+    expect(heroActions[1]?.damage).toBeGreaterThanOrEqual(41)
+    expect(heroActions[2]?.damage).toBeLessThan(41)
+  })
+
+  it('reflected damage can finish the enemy during its own attack', () => {
+    const request = brawl(
+      [
+        utility('espejo', {
+          kind: 'REFLECT_DAMAGE',
+          target: 'OPPONENT',
+          magnitude: { mode: 'PERCENTAGE', basisPoints: 10_000 },
+          durationTurns: 3,
+        }),
+      ],
+      [skill('espejo'), basic],
+    )
+    const result = logOf({
+      ...request,
+      encounters: [
+        {
+          index: 1,
+          kind: 'REGULAR',
+          powerStep: 0,
+          enemies: [{ enemyRef: 'ogro', name: 'Ogro', count: 1, profile: fighter(5, 30, 50, 5) }],
+        },
+      ],
+    })
+    expect(result.combatLog).toContainEqual(
+      expect.objectContaining({ type: 'enemyAction', damage: 0, reflected: 5 }),
+    )
+    expect(result.combatLog).toContainEqual(
+      expect.objectContaining({ type: 'combatantDefeated', combatant: 'ogro#1' }),
+    )
+    expect(result.combatOutcome).toBe('HERO_VICTORIOUS')
+  })
+})
