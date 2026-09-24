@@ -7,7 +7,11 @@ import {
   INTERNAL_TIMESTAMP_HEADER,
   signInternalRequest,
 } from '../../src/adapters/outbound/identity/internal-signature'
-import { RewardOperationConflictError } from '../../src/application/errors/RewardIntegrationErrors'
+import {
+  RewardInvalidRequestError,
+  RewardOperationConflictError,
+  RewardRejectedError,
+} from '../../src/application/errors/RewardIntegrationErrors'
 import { UpstreamServiceError } from '../../src/application/errors/UpstreamErrors'
 import type { ClockPort } from '../../src/application/ports/ClockPort'
 import type { Logger } from '../../src/infrastructure/observability/logger'
@@ -124,6 +128,23 @@ describe('WalletHttpClient (HU-22, hu-22-reward-contract-v1 S3)', () => {
     const client = new WalletHttpClient({ ...baseOptions, fetchImpl })
 
     await expect(client.creditBattleReward(command)).rejects.toThrow(UpstreamServiceError)
+  })
+
+  it('un 400 es PERMANENTE: RewardInvalidRequestError (terminal), no un fallo reintentable', async () => {
+    const fetchImpl = (() =>
+      Promise.resolve(
+        jsonResponse(400, { message: ['creditsAmount must be a number'], statusCode: 400 }),
+      )) as unknown as typeof fetch
+    const client = new WalletHttpClient({ ...baseOptions, fetchImpl })
+
+    const error: unknown = await client
+      .creditBattleReward(command)
+      .catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(RewardInvalidRequestError)
+    expect(error).toBeInstanceOf(RewardRejectedError)
+    expect(error).not.toBeInstanceOf(UpstreamServiceError)
+    expect((error as Error).message).toContain('creditsAmount must be a number')
   })
 
   it('una respuesta con forma invalida (falta un campo) responde respuesta_invalida, no inventa el valor', async () => {

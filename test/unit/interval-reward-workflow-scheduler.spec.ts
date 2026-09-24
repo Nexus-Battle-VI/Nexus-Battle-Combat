@@ -4,6 +4,7 @@ import { IntervalRewardWorkflowScheduler } from '../../src/adapters/outbound/sys
 import type { RandomSequencePort } from '../../src/application/ports/RandomSequencePort'
 import type { RewardWorkflowRepositoryPort } from '../../src/application/ports/RewardWorkflowRepositoryPort'
 import { CreateRewardWorkflows } from '../../src/application/use-cases/CreateRewardWorkflows'
+import { SystemClock } from '../../src/adapters/outbound/system/SystemClock'
 import { ProcessRewardWorkflow } from '../../src/application/use-cases/ProcessRewardWorkflow'
 import { ReconcileRewardWorkflows } from '../../src/application/use-cases/ReconcileRewardWorkflows'
 import type { RewardTable } from '../../src/domain/reward/RewardTable'
@@ -189,6 +190,7 @@ describe('IntervalRewardWorkflowScheduler — onApplicationBootstrap con Reconci
       {} as unknown as RandomSequencePort,
       {} as unknown as RewardTable,
       silentLogger,
+      new SystemClock(),
     )
 
     expect(await workflows.findByBattleAndPlayer(room.id, 'a1')).toBeNull()
