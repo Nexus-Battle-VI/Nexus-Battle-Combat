@@ -6,6 +6,7 @@ import {
   MongoMissionSimulationIntakeRepository,
 } from '../../src/adapters/outbound/persistence/MongoMissionSimulationIntakeRepository'
 import { AcceptMissionSimulationRequest } from '../../src/application/use-cases/AcceptMissionSimulationRequest'
+import type { MissionSimulationResult } from '../../src/application/services/MissionSimulation'
 import {
   createMongoClient,
   databaseOf,
@@ -80,5 +81,95 @@ describe('MongoMissionSimulationIntakeRepository', () => {
         .collection<{ _id: string }>(MISSION_SIMULATION_INTAKE_COLLECTION)
         .countDocuments({ _id: operationId }),
     ).toBe(1)
+  })
+
+  it('persists the first completed result and replays it after a repository restart', async () => {
+    const operationId = 'mission:enr-result:simulate'
+    const requestHash = 'c'.repeat(64)
+    const repository = new MongoMissionSimulationIntakeRepository(db)
+    const result: MissionSimulationResult = {
+      simulationId: 'sim-first',
+      operationId,
+      seedRef: 'seed-first',
+      combatOutcome: 'HERO_VICTORIOUS',
+      summary: { bossDefeated: true, loot: [{ label: 'Fragmento', quantity: 2 }] },
+      combatLog: [{ seq: 1, type: 'bossDefeated' }],
+    }
+    expect(await repository.resultOf(operationId)).toBeNull()
+    await repository.insertIfAbsent(operationId, requestHash)
+    expect(await repository.saveResultIfAbsent(operationId, requestHash, result)).toEqual(result)
+
+    const afterRestart = new MongoMissionSimulationIntakeRepository(db)
+    expect(await afterRestart.resultOf(operationId)).toEqual(result)
+    expect(
+      await afterRestart.saveResultIfAbsent(operationId, requestHash, {
+        ...result,
+        simulationId: 'sim-retry',
+      }),
+    ).toEqual(result)
+    expect(
+      await db
+        .collection<{ _id: string }>('mission-simulation-results')
+        .countDocuments({ _id: operationId }),
+    ).toBe(1)
+  })
+
+  it('refuses to save a result without the matching reserved request', async () => {
+    const operationId = 'mission:enr-result-hash:simulate'
+    const requestHash = 'd'.repeat(64)
+    const repository = new MongoMissionSimulationIntakeRepository(db)
+    const result: MissionSimulationResult = {
+      simulationId: 'sim-rejected',
+      operationId,
+      seedRef: 'seed-rejected',
+      combatOutcome: 'HERO_DEFEATED',
+      summary: {},
+      combatLog: [],
+    }
+    await expect(repository.saveResultIfAbsent(operationId, requestHash, result)).rejects.toThrow(
+      'La solicitud no coincide',
+    )
+    await repository.insertIfAbsent(operationId, requestHash)
+    await expect(
+      repository.saveResultIfAbsent(operationId, 'e'.repeat(64), result),
+    ).rejects.toThrow('La solicitud no coincide')
+    expect(await repository.resultOf(operationId)).toBeNull()
+  })
+
+  it('detects a result stored under the operation with another fingerprint', async () => {
+    const operationId = 'mission:enr-result-corrupt:simulate'
+    const requestHash = 'f'.repeat(64)
+    const repository = new MongoMissionSimulationIntakeRepository(db)
+    await repository.insertIfAbsent(operationId, requestHash)
+    await db
+      .collection<{
+        _id: string
+        requestHash: string
+        completedAt: Date
+        result: MissionSimulationResult
+      }>('mission-simulation-results')
+      .insertOne({
+        _id: operationId,
+        requestHash: 'a'.repeat(64),
+        completedAt: new Date(),
+        result: {
+          simulationId: 'sim-other',
+          operationId,
+          seedRef: 'seed-other',
+          combatOutcome: 'HERO_DEFEATED',
+          summary: {},
+          combatLog: [],
+        },
+      })
+    await expect(
+      repository.saveResultIfAbsent(operationId, requestHash, {
+        simulationId: 'sim-expected',
+        operationId,
+        seedRef: 'seed-expected',
+        combatOutcome: 'HERO_VICTORIOUS',
+        summary: {},
+        combatLog: [],
+      }),
+    ).rejects.toThrow('Resultado de simulacion inconsistente')
   })
 })
