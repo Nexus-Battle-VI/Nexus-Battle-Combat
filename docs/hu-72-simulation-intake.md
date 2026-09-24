@@ -9,9 +9,20 @@ incorrecta recibe `400 SCHEMA_INVALID`; perfiles o reglas incompletas reciben
 Combat valida el contenido, genera una secuencia privada y reproducible por
 `operationId`, resuelve los combates por turnos y persiste el resultado antes de
 responder `200`. Los ataques usan las estadísticas de cada combatiente, impacto
-1d20, daño fijo o dados y críticos. Las rotaciones ejecutan habilidades de daño
-soportadas cuando hay Poder y terminó la recarga; el respaldo es el ataque
-básico. La IA `GUARDED` se protege cada tercer turno y la IA `BOSS` gana ataque
+1d20, daño fijo o dados y críticos.
+
+Las rotaciones siguen la decisión por turno del diseño de HU-71 (P-R5 a P-R7):
+cada rotación mira solo la acción de su cursor. Si esa acción no es viable
+(habilidad desconocida, efecto no soportado, en recarga o sin Poder), la rotación
+no lo es ese turno y se prueba la siguiente, sin avanzar su cursor; si ninguna es
+viable, el héroe usa el ataque básico de respaldo sin consumir Poder (CA-03). La
+condición de salud del héroe todavía no descarta rotaciones: no tiene regla del
+PO. Cada `heroAction` de la bitácora lleva el bloque `strategy` (rotación y paso
+usados, si fue respaldo y por qué se saltaron las anteriores), y cada baja se
+registra como `combatantDefeated` con su `encounter` y la instancia numerada
+(`<enemyRef>#<n>`), que es lo que Missions usa para la experiencia de HU-09.
+
+La IA `GUARDED` se protege cada tercer turno y la IA `BOSS` gana ataque
 por debajo del umbral de vida editable. Hay recuperación entre encuentros,
 límite de turnos por encuentro y límite de duración simulada. Un sanador sin
 ataque usa las reglas editables `supportAttack`, `supportDamage` y `supportRegen`.
