@@ -147,7 +147,7 @@ export const getInternalJson = async (
  * resultados de transporte/protocolo que HU-22 documenta como negocio, no
  * como fallo:
  *
- *  - `ok`: `200`, cuerpo JSON crudo.
+ *  - `ok`: `200` o `201` con cuerpo JSON, o `204` SIN cuerpo (`body: null`).
  *  - `conflict`: `409` (mismo `operationId`, cuerpo distinto).
  *  - `rejected`: `422` (rechazo terminal de negocio; el cuerpo trae `code`/`message`).
  *  - `invalid`: `4xx` PERMANENTE (`400`, `413`, `415`...): el destino rechazo
@@ -278,7 +278,13 @@ export const postInternalJson = async (
     }
   }
 
-  if (response.status !== 200 && response.status !== 409 && response.status !== 422) {
+  if (
+    response.status !== 200 &&
+    response.status !== 201 &&
+    response.status !== 204 &&
+    response.status !== 409 &&
+    response.status !== 422
+  ) {
     options.logger.warn('internal_http_client_fallo', {
       service,
       path,
@@ -287,6 +293,13 @@ export const postInternalJson = async (
     })
 
     throw new UpstreamServiceError(service, 'error_servidor')
+  }
+
+  // `204 No Content` es un exito SIN cuerpo: intentar parsearlo como JSON daria
+  // «respuesta_invalida» sobre una operacion que si se aplico. Lo usa la
+  // liberacion del compromiso de batalla (HU-29), que responde 204 a proposito.
+  if (response.status === 204) {
+    return { outcome: 'ok' as const, body: null }
   }
 
   try {

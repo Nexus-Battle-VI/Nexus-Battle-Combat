@@ -64,6 +64,7 @@ import { ChatRealtimeHandler } from '../../adapters/inbound/ws/ChatRealtimeHandl
 import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTokenVerifier'
 import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClient'
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
+import { PlayerInventoryBattleCommitmentHttpClient } from '../../adapters/outbound/http/PlayerInventoryBattleCommitmentHttpClient'
 import { PlayerInventoryGrantHttpClient } from '../../adapters/outbound/http/PlayerInventoryGrantHttpClient'
 import { WalletHttpClient } from '../../adapters/outbound/http/WalletHttpClient'
 import { WalletStakeHttpClient } from '../../adapters/outbound/http/WalletStakeHttpClient'
@@ -132,6 +133,10 @@ import {
 } from '../../application/ports/ChatMessageRepositoryPort'
 import { CLOCK, type ClockPort } from '../../application/ports/ClockPort'
 import { ID_GENERATOR, type IdGeneratorPort } from '../../application/ports/IdGeneratorPort'
+import {
+  BATTLE_HERO_COMMITMENTS,
+  type BattleHeroCommitmentPort,
+} from '../../application/ports/BattleHeroCommitmentPort'
 import {
   PLAYER_INVENTORY_EQUIPPED_HERO,
   type PlayerInventoryEquippedHeroPort,
@@ -710,14 +715,17 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         notifier: RealtimeNotifierPort,
         release: BattleRoomReleasePort,
         results: BattleResultPublisherPort,
+        commitments: BattleHeroCommitmentPort,
         logger: Logger,
-      ): BattleFinalizer => new BattleFinalizer(book, presence, notifier, release, results, logger),
+      ): BattleFinalizer =>
+        new BattleFinalizer(book, presence, notifier, release, results, commitments, logger),
       inject: [
         BATTLE_DEADLINE_BOOK,
         BATTLE_PRESENCE,
         REALTIME_NOTIFIER,
         BATTLE_ROOM_RELEASE,
         BATTLE_RESULT_PUBLISHER,
+        BATTLE_HERO_COMMITMENTS,
         LOGGER,
       ],
     },
@@ -974,9 +982,11 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       useFactory: (
         rooms: BattleRoomRepositoryPort,
         createWorkflows: CreateRewardWorkflows,
+        commitments: BattleHeroCommitmentPort,
         logger: Logger,
-      ): ReconcileRewardWorkflows => new ReconcileRewardWorkflows(rooms, createWorkflows, logger),
-      inject: [BATTLE_ROOM_REPOSITORY, CREATE_REWARD_WORKFLOWS, LOGGER],
+      ): ReconcileRewardWorkflows =>
+        new ReconcileRewardWorkflows(rooms, createWorkflows, commitments, logger),
+      inject: [BATTLE_ROOM_REPOSITORY, CREATE_REWARD_WORKFLOWS, BATTLE_HERO_COMMITMENTS, LOGGER],
     },
     {
       provide: REWARD_WORKFLOW_SCHEDULER_OPTIONS,
@@ -1086,6 +1096,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         equippedHeroes: PlayerInventoryEquippedHeroPort,
         random: BoundedRandom,
         publisher: BattleEventPublisherPort,
+        commitments: BattleHeroCommitmentPort,
         presence: BattlePresencePort,
         book: BattleDeadlineBookPort,
         connections: BattleConnectionsPort,
@@ -1096,6 +1107,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           equippedHeroes,
           random,
           publisher,
+          commitments,
           presence,
           book,
           connections,
@@ -1106,10 +1118,49 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         PLAYER_INVENTORY_EQUIPPED_HERO,
         BATTLE_RANDOM,
         BATTLE_EVENT_PUBLISHER,
+        BATTLE_HERO_COMMITMENTS,
         BATTLE_PRESENCE,
         BATTLE_DEADLINE_BOOK,
         BATTLE_CONNECTIONS,
       ],
+    },
+    // HU-29 (Task HU-29.2): el compromiso de batalla que bloquea el equipamiento
+    // del heroe mientras la sala esta activa. Sin configuracion NO se inventa un
+    // comportamiento: comprometer falla, y entonces la batalla no arranca, que es
+    // la decision segura -- una batalla sin bloqueo si seria un defecto silencioso.
+    {
+      provide: BATTLE_HERO_COMMITMENTS,
+      useFactory: (
+        config: AppConfig,
+        clock: ClockPort,
+        logger: Logger,
+      ): BattleHeroCommitmentPort => {
+        if (
+          config.internalServiceAuthSecret === null ||
+          config.playerInventoryServiceBaseUrl === null
+        ) {
+          logger.warn('battle_commitment_client_sin_configurar', {
+            detail:
+              'PLAYER_INVENTORY_SERVICE_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET no configurados.',
+          })
+
+          return {
+            commit: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('player-inventory', 'no_configurado')),
+            release: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('player-inventory', 'no_configurado')),
+          }
+        }
+
+        return new PlayerInventoryBattleCommitmentHttpClient({
+          baseUrl: config.playerInventoryServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
     },
     // Sin ruta publica: lo invocaran las acciones validas de HU-18/HU-19 al
     // terminar un turno. Web nunca decide `turno + 1`.
