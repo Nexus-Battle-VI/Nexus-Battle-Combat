@@ -30,6 +30,11 @@ export const BattleEventType = {
   TurnTimedOut: 'turnTimedOut',
   /** HU-21: la batalla termino; lleva el resultado unico y la vista FINAL sin `deadlines`. */
   BattleFinished: 'battleFinished',
+  /**
+   * HU-19 v2 (contrato §3): dano directo (`kind: DAMAGE`) sin resolucion de Ataque/Defensa ni
+   * efecto de HU-25 -- Agonia. Distinto de `skillUsed` porque no hay `resolution` que reportar.
+   */
+  DirectDamageSkillUsed: 'directDamageSkillUsed',
 } as const
 
 export type BattleEventType = (typeof BattleEventType)[keyof typeof BattleEventType]
@@ -147,14 +152,16 @@ export interface SkillUsedPayload {
 }
 
 /**
- * Resultado de una habilidad de curacion (excepcion de HU-12, Tabla 7). Trae el
- * monto sanado y la vista POSTERIOR; a diferencia de `SkillUsedPayload`, no
- * lleva `resolution` (Ataque/Defensa) ni `bonus`: curar no resuelve un golpe.
+ * Resultado de una habilidad de curacion: excepcion de HU-12 (Tabla 7, Reanimacion) AMPLIADA por
+ * HU-19 v2 (contrato §1, familia `HEALING`: Toque de la Vida, Vinculo Natural, Canto del Bosque,
+ * Curacion Directa, Neutralizacion de Efectos) -- MISMO evento, mismo criterio: no hay
+ * `resolution` (Ataque/Defensa) ni `bonus`, curar no resuelve un golpe.
  */
 export interface HealSkillUsedPayload {
   readonly commandId: string
   readonly completedPosition: number
   readonly actor: CombatantKey
+  /** El aliado elegido por el cliente; con `affected` (grupo) coincide con uno de sus miembros. */
   readonly target: CombatantKey
   readonly skill: {
     readonly abilityId: string
@@ -166,10 +173,39 @@ export interface HealSkillUsedPayload {
   readonly power: { readonly before: number; readonly after: number }
   /** Turnos propios que le faltan a ESTA habilidad tras la accion. */
   readonly cooldown: { readonly remainingTurns: number }
-  /** Monto de Vida restaurado al objetivo, ya acotado a su maximo (sin overheal). */
+  /** Monto de Vida restaurado, ya acotado a su maximo (sin overheal); el mismo para cada afectado. */
   readonly heal: { readonly amount: number }
   readonly targetHealth: { readonly before: number; readonly after: number }
+  /**
+   * HU-19 v2 (contrato §4): presente UNICAMENTE cuando el efecto es de grupo (`ALLIED_GROUP`,
+   * Canto del Bosque) -- cada miembro elegible del equipo del actor que recibio la sanacion,
+   * resuelto SERVER-SIDE. Ausente para una sanacion de un unico aliado.
+   */
+  readonly affected?: readonly CombatantKey[]
   /** Vista POSTERIOR: Vida, Poder, recargas y turno ya avanzado. */
+  readonly battle: BattleView
+}
+
+/**
+ * Resultado de un dano directo (HU-19 v2, contrato §3: `kind: DAMAGE`, Agonia) -- sin resolucion
+ * de Ataque/Defensa ni efecto de HU-25: el dano se materializa directo contra el objetivo.
+ */
+export interface DirectDamageSkillUsedPayload {
+  readonly commandId: string
+  readonly completedPosition: number
+  readonly actor: CombatantKey
+  readonly target: CombatantKey
+  readonly skill: {
+    readonly abilityId: string
+    readonly name: string
+    readonly powerCost: CombatPowerCost
+    readonly chargeTurns: number
+  }
+  readonly power: { readonly before: number; readonly after: number }
+  readonly cooldown: { readonly remainingTurns: number }
+  /** `floor(dano base x porcentaje / 100)` no aplica: el dano se materializa tal cual. */
+  readonly damage: { readonly calculatedDamage: number; readonly appliedDamage: number }
+  readonly targetHealth: { readonly before: number; readonly after: number }
   readonly battle: BattleView
 }
 
@@ -183,6 +219,7 @@ export interface BattleEvent {
     | BasicAttackResolvedPayload
     | SkillUsedPayload
     | HealSkillUsedPayload
+    | DirectDamageSkillUsedPayload
     | TurnTimedOutPayload
     | BattleFinishedPayload
 }

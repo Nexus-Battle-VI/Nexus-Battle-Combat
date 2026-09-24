@@ -1,6 +1,16 @@
 import type { BattleEvent } from '../../domain/entities/BattleEvent'
-import type { BattleRoom, SkillOutcome, SkillReadyPlan } from '../../domain/entities/BattleRoom'
-import type { CombatantKey } from '../../domain/entities/Combatant'
+import type {
+  BattleRoom,
+  DirectDamageOutcome,
+  HealingOutcome,
+  ResolvableTemporalEffect,
+  ResolvedTemporalEffect,
+  SkillDirectDamageReadyPlan,
+  SkillHealingReadyPlan,
+  SkillOutcome,
+  SkillReadyPlan,
+} from '../../domain/entities/BattleRoom'
+import type { ActiveSkillEffect, Combatant, CombatantKey } from '../../domain/entities/Combatant'
 import { UnsupportedCombatProfileError } from '../../domain/errors/BattleErrors'
 import { DomainError } from '../../domain/errors/DomainError'
 import { dieFaceFromIndex } from '../../domain/policies/AttackProfile'
@@ -149,6 +159,27 @@ export class UseSkill {
       return this.persist(room, next, actionSeq, input)
     }
 
+    if (plan.kind === 'healingSkill') {
+      // HU-19 v2 (contrato §1, familia `HEALING`): la magnitud propia puede traer dados
+      // (`RandomSequencePort`, nunca un segundo generador), pero NO hay resolucion de
+      // Ataque/Defensa: se resuelve una sola vez y se aplica igual a cada afectado.
+      const outcome = this.resolveHealing(plan)
+      const actionSeq = room.lastSeq + 1
+      const next = room.applyHealingSkill(plan, outcome, input.commandId, this.clock.now())
+
+      return this.persist(room, next, actionSeq, input)
+    }
+
+    if (plan.kind === 'directDamageSkill') {
+      // HU-19 v2 (contrato §3): `kind: DAMAGE` (Agonia) se materializa directo, sin resolucion
+      // de Ataque/Defensa ni efecto de HU-25.
+      const outcome = this.resolveDirectDamage(plan)
+      const actionSeq = room.lastSeq + 1
+      const next = room.applyDirectDamageSkill(plan, outcome, input.commandId, this.clock.now())
+
+      return this.persist(room, next, actionSeq, input)
+    }
+
     // A partir de aqui se consume la secuencia: todo lo que puede fallar por el perfil ya se
     // comprobo (planSkill) o se comprueba en `prepare`, que no sortea.
     const prepared = this.prepare(plan)
@@ -159,6 +190,49 @@ export class UseSkill {
     const next = room.applySkill(plan, outcome, input.commandId, this.clock.now())
 
     return this.persist(room, next, actionSeq, input)
+  }
+
+  /** HU-19 v2 (contrato §3): magnitud del dano directo, con su dado si lo trae. */
+  private resolveDirectDamage(plan: SkillDirectDamageReadyPlan): DirectDamageOutcome {
+    return { calculatedDamage: plan.damageBonus.fixed + this.roll(plan.damageBonus.dice) }
+  }
+
+  /** HU-19 v2 (contrato §1): la magnitud de sanacion, con su dado si lo trae, mas los efectos temporales. */
+  private resolveHealing(plan: SkillHealingReadyPlan): HealingOutcome {
+    return {
+      healAmount: plan.healBonus.fixed + this.roll(plan.healBonus.dice),
+      resolvedTemporalEffects: this.resolveTemporalEffects(plan.temporalEffects),
+    }
+  }
+
+  /**
+   * HU-19 v2 (contrato §2): resuelve cada plantilla de efecto temporal a un `ActiveSkillEffect`
+   * -- si trae dados (`STAT_MODIFIER` con magnitud `DICE`), se tiran UNA sola vez aqui, contra
+   * `RandomSequencePort` (nunca un segundo generador); una inmunidad no tiene magnitud que tirar.
+   */
+  private resolveTemporalEffects(
+    templates: readonly ResolvableTemporalEffect[],
+  ): readonly ResolvedTemporalEffect[] {
+    return templates.map((item): ResolvedTemporalEffect => {
+      const effect: ActiveSkillEffect =
+        item.template.family === 'IMMUNITY'
+          ? {
+              sourceAbilityId: item.sourceAbilityId,
+              sourceCombatant: item.sourceCombatant,
+              immunityCode: item.template.immunityCode,
+              remainingOwnTurns: item.initialRemainingOwnTurns,
+            }
+          : {
+              sourceAbilityId: item.sourceAbilityId,
+              sourceCombatant: item.sourceCombatant,
+              statistic: item.template.statistic,
+              operation: item.template.operation,
+              amount: item.template.bonus.fixed + this.roll(item.template.bonus.dice),
+              remainingOwnTurns: item.initialRemainingOwnTurns,
+            }
+
+      return { targetKey: item.targetKey, effect }
+    })
   }
 
   /**
@@ -199,8 +273,8 @@ export class UseSkill {
   private prepare(plan: SkillReadyPlan): ReturnType<typeof prepareAttack> {
     try {
       return prepareAttack(
-        toAttackParticipant(plan.attackerProfile),
-        toAttackParticipant(plan.targetProfile),
+        toAttackParticipant(plan.attackerProfile, plan.attacker),
+        toAttackParticipant(plan.targetProfile, plan.target),
       )
     } catch (error: unknown) {
       if (error instanceof DomainError) {
@@ -232,6 +306,9 @@ export class UseSkill {
         baseDamage: null,
         attackBonus,
         damageBonus: null,
+        // HU-19 v2 (contrato §2): incondicional, como el Poder y la recarga (v1 §4.2): un
+        // golpe no efectivo igualmente crea/mantiene los efectos temporales de la habilidad.
+        resolvedTemporalEffects: this.resolveTemporalEffects(plan.temporalEffects),
       }
     }
 
@@ -247,14 +324,17 @@ export class UseSkill {
       baseDamage: damage.base,
       attackBonus,
       damageBonus: damage.bonus,
+      resolvedTemporalEffects: this.resolveTemporalEffects(plan.temporalEffects),
     }
   }
 
   /**
    * Dano base = tirada (o valor fijo) del Dano del heroe + bono de Dano de la habilidad (fijo +
-   * dados). `FIXED` no sortea. Los dados solo se tiran con un porcentaje > 0: con 0 % el
-   * resultado es 0 sea cual sea el dado, asi que si hicieran falta dados no se tira nada y el
-   * dano base queda en `null`.
+   * dados) + el ajuste NETO de los efectos temporales ACTIVOS del propio actor sobre su Dano
+   * (HU-19 v2, contrato §2 -- p.ej. Bola de hielo debilito a un rival que ahora ataca; nunca
+   * negativo, acotado en 0 igual que un Ataque). `FIXED` no sortea. Los dados solo se tiran con
+   * un porcentaje > 0: con 0 % el resultado es 0 sea cual sea el dado, asi que si hicieran falta
+   * dados no se tira nada y el dano base queda en `null`.
    */
   private materializeDamage(
     plan: SkillReadyPlan,
@@ -272,8 +352,10 @@ export class UseSkill {
         ? plan.damage.amount
         : this.roll([{ count: plan.damage.count, sides: plan.damage.sides }])
     const bonus = plan.damageBonus.fixed + this.roll(plan.damageBonus.dice)
+    const netDamageBonus = plan.attacker.statBonus('DAMAGE')
+    const adjustedHero = hero + netDamageBonus > 0 ? hero + netDamageBonus : 0
 
-    return { base: hero + bonus, bonus }
+    return { base: adjustedHero + bonus, bonus }
   }
 
   /** La cara de un dado es `dieFaceFromIndex`, la misma del dado de Ataque; el indice sale de la secuencia. */
@@ -316,10 +398,34 @@ export class UseSkill {
   }
 }
 
-/** Adapta el perfil congelado a lo que HU-20 lee (`prepareAttack`), sin copiar mas de lo necesario. */
-const toAttackParticipant = (profile: SkillReadyPlan['attackerProfile']): AttackParticipant => ({
-  heroId: profile.heroId,
-  subtype: profile.subtype,
-  activeEffects: profile.activeEffects,
-  effectiveStats: { attack: profile.attack, defense: profile.defense },
-})
+/**
+ * Adapta el combatiente congelado a lo que HU-20 lee (`prepareAttack`), sin copiar mas de lo
+ * necesario. HU-19 v2 (contrato §2): el Ataque y la Defensa YA incluyen el ajuste neto de los
+ * efectos temporales ACTIVOS de este combatiente (p.ej. Mano de piedra, o el rival que Cono de
+ * hielo debilito en un turno anterior) -- se acotan en 0, igual que ya hace `prepareAttack` con
+ * lo que el equipo del objetivo resta; no se reescribe el valor base persistido.
+ */
+const toAttackParticipant = (
+  profile: SkillReadyPlan['attackerProfile'],
+  combatant: Combatant,
+): AttackParticipant => {
+  const attack = profile.attack === null ? null : withStatBonus(profile.attack, combatant, 'ATTACK')
+
+  return {
+    heroId: profile.heroId,
+    subtype: profile.subtype,
+    activeEffects: profile.activeEffects,
+    effectiveStats: { attack, defense: withStatBonus(profile.defense, combatant, 'DEFENSE') },
+  }
+}
+
+/** `base + statBonus`, acotado en 0 (un Ataque/una Defensa nunca son negativos). */
+const withStatBonus = (
+  base: number,
+  combatant: Combatant,
+  statistic: 'ATTACK' | 'DEFENSE',
+): number => {
+  const adjusted = base + combatant.statBonus(statistic)
+
+  return adjusted > 0 ? adjusted : 0
+}

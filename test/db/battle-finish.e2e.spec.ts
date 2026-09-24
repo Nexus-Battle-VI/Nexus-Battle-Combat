@@ -56,6 +56,7 @@ import {
   down as downFinishMigration,
   up as upFinishMigration,
 } from '../../src/adapters/outbound/persistence/migrations/009-battle-rooms-finish'
+import { up as upSkillEffectsMigration } from '../../src/adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
 import { indexForEffect, indexForFace } from '../fixtures/basic-attack'
 import { MutableClock } from '../fixtures/chat-harness'
 import { equippedHeroFixture, shieldStrikeAbility } from '../fixtures/equipped-hero'
@@ -1207,6 +1208,7 @@ describe('HU-21 de extremo a extremo (protocolo): finalizacion entre dos cliente
         ).rejects.toBeInstanceOf(MongoServerError)
       } finally {
         await upFinishMigration(db)
+        await upSkillEffectsMigration(db)
       }
 
       await expect(
