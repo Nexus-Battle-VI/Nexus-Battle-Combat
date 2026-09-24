@@ -92,7 +92,7 @@ Combat la **reimplementa a propósito** en `HeroPowerPolicy` (no puede importar 
 
 - **Player/Inventory** (síncrono, `operationId`): perfil de combate del héroe y compromiso `BATTLE`. El Poder máximo del héroe es `effectiveStats.power` del contrato `equipped-hero`, que Combat modela como `maxPower`.
 - **Wallet** (síncrono, `operationId`): reservar apuestas, transferir al ganador, liberar al cancelar.
-- **Entrada interna de Missions** (`POST /api/internal/v1/combat/simulations`, HMAC): recibe y valida la solicitud, conserva el `operationId` y detecta un cuerpo diferente con la misma clave. Hasta integrar el motor de HU-72 devuelve `503 SIMULATION_UNAVAILABLE`; no genera resultados. Ver [docs/hu-72-simulation-intake.md](docs/hu-72-simulation-intake.md).
+- **Simulación interna de Missions** (`POST /api/internal/v1/combat/simulations`, HMAC): valida el contenido, resuelve encuentros, jefe, Máster y botín, y conserva el resultado por `operationId`. Ver [docs/hu-72-simulation-intake.md](docs/hu-72-simulation-intake.md).
 - **Tiempo real** (ADR-020): WebSocket en `/api/v1/combat/realtime` a través de Caddy. Autentica con un **ticket de un solo uso** (HU-17): se pide por HTTP y se envía como primer mensaje; el JWT no viaja por el socket. Lo usan el aviso de cambios de sala (HU-15.2), la batalla (HU-17) y el chat (HU-13).
 
 Detalle en [docs/architecture.md](docs/architecture.md).

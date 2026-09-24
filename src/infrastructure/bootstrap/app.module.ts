@@ -43,6 +43,7 @@ import {
   RESUME_BATTLE,
   RESOLVE_EXPERIENCE_ROLLS,
   ACCEPT_MISSION_SIMULATION_REQUEST,
+  RUN_MISSION_SIMULATION,
   ROOM_COMMAND_LOCK,
   STAKE_RELEASER,
   STAKE_RESERVER,
@@ -182,6 +183,8 @@ import { ExecuteBasicAttack } from '../../application/use-cases/ExecuteBasicAtta
 import { GetRewardStatus } from '../../application/use-cases/GetRewardStatus'
 import { ResolveExperienceRolls } from '../../application/use-cases/ResolveExperienceRolls'
 import { AcceptMissionSimulationRequest } from '../../application/use-cases/AcceptMissionSimulationRequest'
+import { RunMissionSimulation } from '../../application/use-cases/RunMissionSimulation'
+import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
 import { RecoverBattleDeadlines } from '../../application/use-cases/RecoverBattleDeadlines'
@@ -923,6 +926,20 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         repository: MissionSimulationIntakeRepositoryPort,
       ): AcceptMissionSimulationRequest => new AcceptMissionSimulationRequest(repository),
       inject: [MISSION_SIMULATION_INTAKE_REPOSITORY],
+    },
+    {
+      provide: RUN_MISSION_SIMULATION,
+      useFactory: (
+        repository: MissionSimulationIntakeRepositoryPort,
+        sequences: RandomSequenceFactoryPort,
+        config: AppConfig,
+      ): RunMissionSimulation =>
+        new RunMissionSimulation(
+          repository,
+          sequences,
+          new HmacMissionSeedFactory(config.internalServiceAuthSecret),
+        ),
+      inject: [MISSION_SIMULATION_INTAKE_REPOSITORY, RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
     },
     {
       // HU-22: cierra el hueco entre "sala FINISHED persistida" y

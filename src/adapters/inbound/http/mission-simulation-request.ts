@@ -1,4 +1,10 @@
 import { InvalidMissionSimulationRequestError } from '../../../application/errors/MissionSimulationIntakeErrors'
+import type { CombatMagnitude } from '../../../domain/entities/CombatProfile'
+import { createCombatProfile } from '../../../domain/entities/CombatProfile'
+import type {
+  MissionFighter,
+  MissionSimulationRequest,
+} from '../../../application/services/MissionSimulation'
 
 type JsonObject = Record<string, unknown>
 
@@ -27,9 +33,8 @@ const optionalFiniteNumberAt = (value: unknown, field: string): void => {
 }
 
 /**
- * Validates the stable transport envelope sent by Missions. Enemy numbers,
- * strategy feasibility and AI behavior belong to the future engine, not here.
- * In particular, a null enemy profile is accepted while content is undecided.
+ * Validates the stable transport envelope sent by Missions. Full combat content
+ * is checked separately so an invalid snapshot receives a useful 422 response.
  */
 export const missionSimulationOperationIdOf = (body: unknown): string => {
   const request = objectAt(body, 'body')
@@ -120,4 +125,265 @@ export const missionSimulationOperationIdOf = (body: unknown): string => {
 
   if (request.master !== null) objectAt(request.master, 'master')
   return operationId
+}
+
+/** Content can be edited in Missions, so reject an incomplete frozen snapshot explicitly. */
+export class MissionSimulationContentError extends Error {
+  constructor(field: string) {
+    super(`${field} necesita estadisticas de combate completas.`)
+    this.name = 'MissionSimulationContentError'
+  }
+}
+
+const content = (value: unknown, field: string): JsonObject => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new MissionSimulationContentError(field)
+  }
+  return value as JsonObject
+}
+
+const integer = (value: unknown, field: string, min = 0, max = 1_000_000): number => {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new MissionSimulationContentError(field)
+  }
+  return value
+}
+
+const fraction = (value: unknown, field: string): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new MissionSimulationContentError(field)
+  }
+  return value
+}
+
+const magnitude = (value: unknown, field: string): CombatMagnitude => {
+  if (typeof value === 'number') return { mode: 'FIXED', amount: integer(value, field) }
+  const raw = content(value, field)
+  if (raw.mode === 'FIXED') return { mode: 'FIXED', amount: integer(raw.amount, `${field}.amount`) }
+  if (raw.mode === 'DICE') {
+    return {
+      mode: 'DICE',
+      count: integer(raw.count, `${field}.count`, 1, 100),
+      sides: integer(raw.sides, `${field}.sides`, 2, 8000),
+    }
+  }
+  throw new MissionSimulationContentError(field)
+}
+
+const fighter = (value: unknown, field: string): MissionFighter => {
+  const raw = content(value, field)
+  const ai = raw.ai ?? 'AGGRESSIVE'
+  if (typeof ai !== 'string' || !['AGGRESSIVE', 'GUARDED', 'BOSS'].includes(ai)) {
+    throw new MissionSimulationContentError(`${field}.ai`)
+  }
+  return {
+    maxHealth: integer(raw.maxHealth ?? raw.health, `${field}.maxHealth`, 1),
+    attack: integer(raw.attack, `${field}.attack`),
+    defense: integer(raw.defense, `${field}.defense`),
+    damage: magnitude(raw.damage, `${field}.damage`),
+    ai: ai as MissionFighter['ai'],
+    ...(ai === 'BOSS'
+      ? {
+          enrageBelowPercent: integer(
+            raw.enrageBelowPercent ?? 50,
+            `${field}.enrageBelowPercent`,
+            1,
+            100,
+          ),
+          enrageAttackBonus: integer(raw.enrageAttackBonus ?? 0, `${field}.enrageAttackBonus`),
+        }
+      : {}),
+  }
+}
+
+export const missionSimulationRequestOf = (body: unknown): MissionSimulationRequest => {
+  missionSimulationOperationIdOf(body)
+  const raw = body as JsonObject
+  const hero = content(raw.hero, 'hero')
+  const profile = content(hero.profile, 'hero.profile')
+  const stats = content(profile.effectiveStats, 'hero.profile.effectiveStats')
+  if (typeof profile.subtype !== 'string' || profile.subtype.length === 0) {
+    throw new MissionSimulationContentError('hero.profile.subtype')
+  }
+  const attack =
+    stats.attack === null ? null : integer(stats.attack, 'hero.profile.effectiveStats.attack')
+  const damage =
+    stats.damage === null ? null : magnitude(stats.damage, 'hero.profile.effectiveStats.damage')
+  if (!Array.isArray(profile.abilities))
+    throw new MissionSimulationContentError('hero.profile.abilities')
+  const abilities = profile.abilities
+  const encounters = (raw.encounters as JsonObject[]).map((encounter, index) => ({
+    index: encounter.index as number,
+    kind: encounter.kind as 'REGULAR' | 'BOSS',
+    powerStep: encounter.powerStep as number | null,
+    enemies: (encounter.enemies as JsonObject[]).map((enemy, enemyIndex) => ({
+      enemyRef: enemy.enemyRef as string,
+      name: enemy.name as string,
+      count: enemy.count as number,
+      profile: fighter(
+        enemy.profile,
+        `encounters[${String(index)}].enemies[${String(enemyIndex)}].profile`,
+      ),
+    })),
+  }))
+  const masterRaw = raw.master === null ? null : content(raw.master, 'master')
+  const candidates = masterRaw?.candidates
+  if (
+    masterRaw !== null &&
+    (!Array.isArray(masterRaw.evaluationPoints) ||
+      !Array.isArray(candidates) ||
+      candidates.length === 0)
+  ) {
+    throw new MissionSimulationContentError('master')
+  }
+  const master =
+    masterRaw === null
+      ? null
+      : {
+          evaluationPoints: (masterRaw.evaluationPoints as unknown[]).map((entry, index) => ({
+            afterEncounter: integer(
+              content(entry, `master.evaluationPoints[${String(index)}]`).afterEncounter,
+              'master.evaluationPoints.afterEncounter',
+              1,
+            ),
+          })),
+          maxAppearances: integer(masterRaw.maxAppearances, 'master.maxAppearances', 1),
+          candidates: (candidates as unknown[]).map((entry, index) => {
+            const candidate = content(entry, `master.candidates[${String(index)}]`)
+            return {
+              masterRef: textAt(
+                candidate.masterRef,
+                `master.candidates[${String(index)}].masterRef`,
+              ),
+              subtype: textAt(candidate.subtype, `master.candidates[${String(index)}].subtype`),
+              probability: fraction(
+                candidate.probability,
+                `master.candidates[${String(index)}].probability`,
+              ),
+              levelOffset: integer(
+                candidate.levelOffset,
+                `master.candidates[${String(index)}].levelOffset`,
+              ),
+              profile: fighter(candidate.profile, `master.candidates[${String(index)}].profile`),
+              epicRef: textAt(candidate.epicRef, `master.candidates[${String(index)}].epicRef`),
+            }
+          }),
+        }
+  const rulesRaw = raw.rules === undefined ? null : content(raw.rules, 'rules')
+  if (raw.bossDrops !== undefined && !Array.isArray(raw.bossDrops)) {
+    throw new MissionSimulationContentError('bossDrops')
+  }
+  const bossDrops = (raw.bossDrops as unknown[] | undefined)?.map((entry, index) => {
+    const drop = content(entry, `bossDrops[${String(index)}]`)
+    const probability = fraction(drop.probability, `bossDrops[${String(index)}].probability`)
+    const productId = drop.productId ?? null
+    if (
+      productId !== null &&
+      (typeof productId !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+          productId,
+        ))
+    ) {
+      throw new MissionSimulationContentError(`bossDrops[${String(index)}].productId`)
+    }
+    return {
+      label: textAt(drop.label, `bossDrops[${String(index)}].label`),
+      probability,
+      rolls: integer(drop.rolls, `bossDrops[${String(index)}].rolls`, 1, 100),
+      productId,
+    }
+  })
+  const rules =
+    rulesRaw === null
+      ? undefined
+      : {
+          turnDurationSeconds: integer(
+            rulesRaw.turnDurationSeconds,
+            'rules.turnDurationSeconds',
+            1,
+            3600,
+          ),
+          maxTurnsPerEncounter: integer(
+            rulesRaw.maxTurnsPerEncounter,
+            'rules.maxTurnsPerEncounter',
+            1,
+            1000,
+          ),
+          recoveryPercent: integer(rulesRaw.recoveryPercent, 'rules.recoveryPercent', 0, 100),
+          criticalChance: fraction(rulesRaw.criticalChance, 'rules.criticalChance'),
+          criticalMultiplier:
+            typeof rulesRaw.criticalMultiplier === 'number' &&
+            rulesRaw.criticalMultiplier >= 1 &&
+            rulesRaw.criticalMultiplier <= 1.8
+              ? rulesRaw.criticalMultiplier
+              : (() => {
+                  throw new MissionSimulationContentError('rules.criticalMultiplier')
+                })(),
+          ...(rulesRaw.supportAttack === undefined
+            ? {}
+            : { supportAttack: integer(rulesRaw.supportAttack, 'rules.supportAttack', 0, 100) }),
+          ...(rulesRaw.supportDamage === undefined
+            ? {}
+            : { supportDamage: integer(rulesRaw.supportDamage, 'rules.supportDamage', 0, 100) }),
+          ...(rulesRaw.supportRegen === undefined
+            ? {}
+            : { supportRegen: integer(rulesRaw.supportRegen, 'rules.supportRegen', 0, 100) }),
+        }
+  const multiplier = raw.enemyStatMultiplier
+  if (
+    typeof multiplier !== 'number' ||
+    !Number.isFinite(multiplier) ||
+    multiplier <= 0 ||
+    multiplier > 10
+  ) {
+    throw new MissionSimulationContentError('enemyStatMultiplier')
+  }
+  const health = integer(stats.health, 'hero.profile.effectiveStats.health', 1)
+  const power = integer(stats.power, 'hero.profile.effectiveStats.power')
+  const defense = integer(stats.defense, 'hero.profile.effectiveStats.defense')
+  let checkedAbilities: MissionSimulationRequest['hero']['profile']['abilities']
+  try {
+    checkedAbilities =
+      createCombatProfile({
+        heroId: hero.heroId as string,
+        subtype: profile.subtype,
+        maxHealth: health,
+        maxPower: power,
+        attack,
+        defense,
+        damage,
+        activeEffects: [],
+        abilities: abilities as MissionSimulationRequest['hero']['profile']['abilities'],
+      }).abilities ?? []
+  } catch {
+    throw new MissionSimulationContentError('hero.profile.abilities')
+  }
+  return {
+    schemaVersion: 1,
+    operationId: raw.operationId as string,
+    enrollmentId: raw.enrollmentId as string,
+    missionId: raw.missionId as string,
+    difficulty: raw.difficulty as MissionSimulationRequest['difficulty'],
+    enemyStatMultiplier: multiplier,
+    timeBudget: raw.timeBudget as string,
+    hero: {
+      heroId: hero.heroId as string,
+      profile: {
+        subtype: profile.subtype,
+        effectiveStats: {
+          health,
+          power,
+          attack,
+          defense,
+          damage,
+        },
+        abilities: checkedAbilities,
+      },
+    },
+    strategy: raw.strategy as MissionSimulationRequest['strategy'],
+    encounters,
+    ...(rules === undefined ? {} : { rules }),
+    ...(bossDrops === undefined ? {} : { bossDrops }),
+    master,
+  }
 }

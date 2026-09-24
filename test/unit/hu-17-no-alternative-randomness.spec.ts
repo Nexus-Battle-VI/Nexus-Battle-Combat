@@ -96,6 +96,7 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
     expect(users).toEqual([
       'adapters/outbound/identity/internal-signature.ts',
       'adapters/outbound/system/CryptoRealtimeTicketCodec.ts',
+      'adapters/outbound/system/HmacMissionSeedFactory.ts',
       'adapters/outbound/system/UuidGenerator.ts',
     ])
   })

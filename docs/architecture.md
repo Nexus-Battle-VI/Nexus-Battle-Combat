@@ -26,7 +26,7 @@ Motor: **MongoDB**, base lógica `combat` con usuario y credenciales propios en 
 
 - **Player/Inventory** (síncrono, `operationId`): perfil de combate del héroe y compromiso `BATTLE`.
 - **Wallet** (síncrono, `operationId`): reservar apuestas, transferir al ganador, liberar al cancelar.
-- **Entrada interna** (`POST /api/internal/v1/combat/simulations`, HMAC): Missions envía solicitudes. El ingreso e idempotencia están implementados; el motor todavía no, por lo que responde `503`. Ver [hu-72-simulation-intake.md](hu-72-simulation-intake.md).
+- **Simulación interna** (`POST /api/internal/v1/combat/simulations`, HMAC): Missions envía solicitudes completas. Combat resuelve los encuentros y persiste el resultado idempotente. Ver [hu-72-simulation-intake.md](hu-72-simulation-intake.md).
 - **Tiempo real** (ADR-020, `Accepted`): WebSocket en `/api/v1/combat/realtime` a través de Caddy. Implementado: aviso de cambios de sala (HU-15.2); ticket de un solo uso, `seq` de batalla y `resume` (HU-17); y chat (HU-13, con su propio `seq` por canal).
 
 Todas las llamadas salientes que mueven créditos o productos siguen el patrón de ADR-019:
@@ -72,7 +72,7 @@ Manejador (`adapters/inbound/ws/ChatRealtimeHandler`) dentro del gateway existen
 - `POST /api/v1/combat/realtime/tickets` — ticket para el WebSocket (HU-17, implementado).
 - `GET /api/v1/combat/rooms/{roomId}` y `POST /api/v1/combat/rooms/{roomId}/start` — leer una sala y iniciar su batalla, solo participantes (HU-17, implementado).
 - WebSocket `/api/v1/combat/realtime` — `chat.subscribe`, `chat.send`, `chat.unsubscribe` (HU-13, implementado; protocolo en [hu-13-chat.md](hu-13-chat.md)).
-- `POST /api/internal/v1/combat/simulations` — ingreso firmado e idempotente de Missions; sin resultado de combate hasta integrar el motor.
+- `POST /api/internal/v1/combat/simulations` — simulación firmada e idempotente de Missions.
 
 ## Temporizadores
 

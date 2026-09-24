@@ -7,6 +7,7 @@ import {
   Inject,
   Post,
   ServiceUnavailableException,
+  UnprocessableEntityException,
 } from '@nestjs/common'
 import { ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger'
 
@@ -15,14 +16,18 @@ import {
   MissionSimulationOperationReusedError,
 } from '../../../application/errors/MissionSimulationIntakeErrors'
 import { AcceptMissionSimulationRequest } from '../../../application/use-cases/AcceptMissionSimulationRequest'
+import { RunMissionSimulation } from '../../../application/use-cases/RunMissionSimulation'
+import type { MissionSimulationResult } from '../../../application/services/MissionSimulation'
 import { canonicalBodyHash } from '../../outbound/identity/internal-signature'
 import { InternalOnly } from './auth/decorators'
-import { missionSimulationOperationIdOf } from './mission-simulation-request'
-import { ACCEPT_MISSION_SIMULATION_REQUEST } from './tokens'
+import {
+  MissionSimulationContentError,
+  missionSimulationRequestOf,
+} from './mission-simulation-request'
+import { ACCEPT_MISSION_SIMULATION_REQUEST, RUN_MISSION_SIMULATION } from './tokens'
 
 /**
- * Signed, durable intake for HU-72. It deliberately cannot return a fabricated
- * combat result: the simulation engine and mission content are still pending.
+ * Signed, durable mission simulation. The response is persisted before 200.
  */
 @ApiTags('combat-internal')
 @ApiHeader({ name: 'x-internal-service', required: true, description: 'missions' })
@@ -34,6 +39,8 @@ export class MissionSimulationsController {
   constructor(
     @Inject(ACCEPT_MISSION_SIMULATION_REQUEST)
     private readonly accept: AcceptMissionSimulationRequest,
+    @Inject(RUN_MISSION_SIMULATION)
+    private readonly run: RunMissionSimulation,
   ) {}
 
   @Post()
@@ -41,14 +48,12 @@ export class MissionSimulationsController {
   @ApiOperation({
     summary: 'Recibe una solicitud de simulacion de Missions (HU-72)',
     description:
-      'Valida y reserva operationId. Hasta integrar el motor real responde 503; ' +
-      'la misma solicitud puede reintentarse y otra con el mismo operationId recibe 409.',
+      'Valida el contenido, simula y persiste el resultado. Un reintento devuelve el mismo resultado.',
   })
-  async simulate(@Body() body: unknown): Promise<never> {
+  async simulate(@Body() body: unknown): Promise<MissionSimulationResult> {
+    let request
     try {
-      const operationId = missionSimulationOperationIdOf(body)
-      const requestHash = canonicalBodyHash(body)
-      await this.accept.execute(operationId, requestHash)
+      request = missionSimulationRequestOf(body)
     } catch (error: unknown) {
       if (error instanceof InvalidMissionSimulationRequestError) {
         throw new BadRequestException({
@@ -57,6 +62,20 @@ export class MissionSimulationsController {
           message: error.message,
         })
       }
+      if (error instanceof MissionSimulationContentError) {
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          code: 'MISSION_CONTENT_INVALID',
+          message: error.message,
+        })
+      }
+      throw error
+    }
+    try {
+      const requestHash = canonicalBodyHash(body)
+      await this.accept.execute(request.operationId, requestHash)
+      return await this.run.execute(request, requestHash)
+    } catch (error: unknown) {
       if (error instanceof MissionSimulationOperationReusedError) {
         throw new ConflictException({
           statusCode: 409,
@@ -70,11 +89,5 @@ export class MissionSimulationsController {
         message: 'Combat no puede registrar la simulacion ahora. Reintente la misma operacion.',
       })
     }
-
-    throw new ServiceUnavailableException({
-      statusCode: 503,
-      code: 'SIMULATION_UNAVAILABLE',
-      message: 'El motor de simulacion de misiones aun no esta disponible.',
-    })
   }
 }

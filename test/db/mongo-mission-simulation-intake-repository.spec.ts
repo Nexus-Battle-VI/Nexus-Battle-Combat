@@ -36,7 +36,7 @@ describe('MongoMissionSimulationIntakeRepository', () => {
   })
 
   it('registers migration 014 after experience rolls', () => {
-    expect(MIGRATIONS.at(-1)?.name).toBe('014-mission-simulation-intake')
+    expect(MIGRATIONS.at(-1)?.name).toBe('015-mission-simulation-results')
   })
 
   it('stores one durable fingerprint and rejects a conflicting retry after restart', async () => {
