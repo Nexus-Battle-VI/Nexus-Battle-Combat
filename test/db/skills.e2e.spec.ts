@@ -42,7 +42,9 @@ import {
   databaseOf,
   migrateToLatest,
 } from '../../src/infrastructure/persistence/database'
+import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
 import { indexForEffect, indexForFace } from '../fixtures/basic-attack'
+import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import {
   equippedHeroFixture,
   shieldStrikeAbility,
@@ -264,6 +266,11 @@ describe('HU-19 de extremo a extremo (protocolo): habilidades entre dos clientes
       .useValue(accounts)
       .overrideProvider(PLAYER_INVENTORY_EQUIPPED_HERO)
       .useValue(heroes)
+      // HU-29: el compromiso de equipamiento es una llamada saliente a
+      // Player/Inventory; aqui se sustituye por un doble (el cliente HTTP tiene su
+      // propia prueba unitaria).
+      .overrideProvider(BATTLE_HERO_COMMITMENTS)
+      .useValue(recordingBattleCommitments())
       .overrideProvider(BATTLE_RANDOM_SEQUENCE)
       .useValue(sequence)
       .compile()

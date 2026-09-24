@@ -13,6 +13,7 @@ import {
   PLAYER_INVENTORY_EQUIPPED_HERO,
   type PlayerInventoryEquippedHeroPort,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
+import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
 import {
   Role,
   TOKEN_VERIFIER,
@@ -26,6 +27,7 @@ import {
 } from '../../src/application/ports/BattleRoomRepositoryPort'
 import { AppModule } from '../../src/infrastructure/bootstrap/app.module'
 import { equippedHeroFixture, equippedProductNotOwnedBlocker } from '../fixtures/equipped-hero'
+import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 
 /**
  * HU-17 sobre HTTP (memoria): `POST /rooms/:id/start`, `GET /rooms/:id` y
@@ -76,6 +78,14 @@ const heroes: PlayerInventoryEquippedHeroPort = {
     ),
 }
 
+/**
+ * HU-29: el compromiso de equipamiento es una llamada saliente a
+ * Player/Inventory. Aqui se sustituye por un doble que REGISTRA, igual que el
+ * heroe equipado: lo que se prueba en esta suite es el cableado del modulo, no
+ * el cliente HTTP (que tiene su propia prueba unitaria).
+ */
+const commitments = recordingBattleCommitments()
+
 const withEnv = (values: Record<string, string>): (() => void) => {
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]))
 
@@ -121,6 +131,8 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
       .useValue(accounts)
       .overrideProvider(PLAYER_INVENTORY_EQUIPPED_HERO)
       .useValue(heroes)
+      .overrideProvider(BATTLE_HERO_COMMITMENTS)
+      .useValue(commitments)
       .compile()
 
     app = moduleRef.createNestApplication()
@@ -141,6 +153,10 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
   beforeEach(() => {
     heroState.notReady.clear()
     heroState.loadoutVersion.clear()
+    commitments.commits.length = 0
+    commitments.releases.length = 0
+    commitments.failCommits = false
+    commitments.failReleases = false
   })
 
   const http = () => request(app.getHttpServer())
@@ -248,6 +264,28 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
       expect(
         new Set(started.body.battle.turnOrder.map((entry: { playerId: string }) => entry.playerId)),
       ).toEqual(new Set(['sujeto-a', 'sujeto-b']))
+    })
+
+    it('HU-29: iniciar por HTTP compromete el heroe equipado de CADA humano de la sala', async () => {
+      const roomId = await preparingRoom()
+
+      const started = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+
+      expect(started.status).toBe(200)
+      expect(commitments.commits.map(({ playerId }) => playerId).sort()).toEqual([
+        'sujeto-a',
+        'sujeto-b',
+      ])
+      expect(commitments.commits.map(({ heroId }) => heroId).sort()).toEqual([
+        'heroe-de-sujeto-a',
+        'heroe-de-sujeto-b',
+      ])
+      expect(new Set(commitments.commits.map(({ roomId: reference }) => reference))).toEqual(
+        new Set([roomId]),
+      )
+      expect(commitments.commits[0]?.expiresAt.getTime()).toBeGreaterThan(Date.now())
     })
 
     it('el equipo inicial lo decide el motor HU-24 (secuencia de proceso con la semilla validada), no el cliente', async () => {
