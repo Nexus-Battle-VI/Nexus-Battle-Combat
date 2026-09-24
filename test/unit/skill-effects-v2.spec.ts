@@ -361,7 +361,12 @@ describe('BattleRoom — kind DAMAGE directo (Agonia, contrato §3)', () => {
 
   it('planSkill produce un plan directDamageSkill, sin resolucion de Ataque/Defensa', () => {
     const room = setup()
-    const plan = room.planSkill('a1', 'cmd-1', AGONY_FIXED_ID, TARGET_B) as SkillDirectDamageReadyPlan
+    const plan = room.planSkill(
+      'a1',
+      'cmd-1',
+      AGONY_FIXED_ID,
+      TARGET_B,
+    ) as SkillDirectDamageReadyPlan
 
     expect(plan.kind).toBe('directDamageSkill')
     expect(plan.damageBonus).toEqual({ fixed: 7, dice: [] })
@@ -369,7 +374,12 @@ describe('BattleRoom — kind DAMAGE directo (Agonia, contrato §3)', () => {
 
   it('applyDirectDamageSkill materializa el dano tal cual, publica directDamageSkillUsed y avanza el turno', () => {
     const room = setup()
-    const plan = room.planSkill('a1', 'cmd-1', AGONY_FIXED_ID, TARGET_B) as SkillDirectDamageReadyPlan
+    const plan = room.planSkill(
+      'a1',
+      'cmd-1',
+      AGONY_FIXED_ID,
+      TARGET_B,
+    ) as SkillDirectDamageReadyPlan
     const outcome: DirectDamageOutcome = { calculatedDamage: 7 }
 
     const next = room.applyDirectDamageSkill(plan, outcome, 'cmd-1', LATER)
@@ -419,7 +429,12 @@ describe('BattleRoom — familia HEALING (Toque de la Vida / Canto del Bosque, c
   it('Canto del Bosque adjunta la sanacion de grupo (temporal, contrato §2) a CADA afectado y reporta `affected` (contrato §4)', () => {
     const room = setup()
     // El wire sigue exigiendo un target valido de forma; Combat lo IGNORA a efectos de alcance.
-    const plan = room.planSkill('a1', 'cmd-1', FOREST_SONG_FIXED_ID, TARGET_A1) as SkillHealingReadyPlan
+    const plan = room.planSkill(
+      'a1',
+      'cmd-1',
+      FOREST_SONG_FIXED_ID,
+      TARGET_A1,
+    ) as SkillHealingReadyPlan
 
     expect(plan.recipients.map((r) => r.entry.seat).sort()).toEqual([0, 1]) // a1 Y a2
     // Canto del Bosque (fixture) es PURAMENTE temporal (durationTurns:2): sin componente
@@ -506,7 +521,14 @@ describe('BattleRoom — kind REFLECT_DAMAGE (Pare de fuego, contrato §6)', () 
 
     const afterHit = room.applyBasicAttack(
       hitPlan,
-      { attackValue: 20, defenseValue: 5, effective: true, effect: 'DAMAGE', percent: 100, baseDamage: 8 },
+      {
+        attackValue: 20,
+        defenseValue: 5,
+        effective: true,
+        effect: 'DAMAGE',
+        percent: 100,
+        baseDamage: 8,
+      },
       'hit',
       LATER,
     )

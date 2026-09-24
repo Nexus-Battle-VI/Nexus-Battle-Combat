@@ -250,7 +250,8 @@ export class ExecuteBasicAttack {
    */
   private materializeDamage(plan: BasicAttackReadyPlan, percent: number): number | null {
     const netDamageBonus = plan.attacker.statBonus('DAMAGE')
-    const withBonus = (value: number): number => (value + netDamageBonus > 0 ? value + netDamageBonus : 0)
+    const withBonus = (value: number): number =>
+      value + netDamageBonus > 0 ? value + netDamageBonus : 0
 
     if (plan.damage.mode === 'FIXED') {
       return withBonus(plan.damage.amount)

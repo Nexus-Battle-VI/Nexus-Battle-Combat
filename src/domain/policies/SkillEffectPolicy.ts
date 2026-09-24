@@ -162,13 +162,22 @@ const EMPTY_BONUS: SkillBonus = { fixed: 0, dice: [] }
 const aggregate = (bonuses: readonly SkillBonus[]): SkillBonus =>
   bonuses.reduce(addBonus, EMPTY_BONUS)
 
-const TEMPORAL_AUDIENCES: readonly TemporalEffectAudience[] = ['SELF', 'OPPONENT', 'ALLY', 'ALLIED_GROUP']
+const TEMPORAL_AUDIENCES: readonly TemporalEffectAudience[] = [
+  'SELF',
+  'OPPONENT',
+  'ALLY',
+  'ALLIED_GROUP',
+]
 const isTemporalAudience = (value: string): value is TemporalEffectAudience =>
   (TEMPORAL_AUDIENCES as readonly string[]).includes(value)
 
 /** Clasificacion de UN efecto: a que patron pertenece, o por que ninguno lo acepta. */
 type EffectClass =
-  | { readonly family: 'INSTANT_STAT'; readonly statistic: 'ATTACK' | 'DAMAGE'; readonly bonus: SkillBonus }
+  | {
+      readonly family: 'INSTANT_STAT'
+      readonly statistic: 'ATTACK' | 'DAMAGE'
+      readonly bonus: SkillBonus
+    }
   | {
       readonly family: 'TEMPORAL_STAT'
       readonly statistic: 'ATTACK' | 'DAMAGE' | 'DEFENSE'
@@ -177,7 +186,11 @@ type EffectClass =
       readonly bonus: SkillBonus
       readonly durationTurns: number | null
     }
-  | { readonly family: 'INSTANT_HEAL'; readonly audience: 'ALLY' | 'ALLIED_GROUP'; readonly bonus: SkillBonus }
+  | {
+      readonly family: 'INSTANT_HEAL'
+      readonly audience: 'ALLY' | 'ALLIED_GROUP'
+      readonly bonus: SkillBonus
+    }
   | {
       readonly family: 'TEMPORAL_HEAL'
       readonly audience: 'ALLY' | 'ALLIED_GROUP'
@@ -186,9 +199,15 @@ type EffectClass =
     }
   | { readonly family: 'DIRECT_DAMAGE'; readonly bonus: SkillBonus }
   | { readonly family: 'REFLECT'; readonly basisPoints: number }
-  | { readonly family: 'IMMUNITY'; readonly immunityCode: string; readonly durationTurns: number | null }
+  | {
+      readonly family: 'IMMUNITY'
+      readonly immunityCode: string
+      readonly durationTurns: number | null
+    }
 
-const classifyStatModifier = (effect: CombatAbilityEffect): EffectClass | { readonly reason: string } => {
+const classifyStatModifier = (
+  effect: CombatAbilityEffect,
+): EffectClass | { readonly reason: string } => {
   if (!isTemporalAudience(effect.target)) {
     return { reason: `un efecto sobre ${effect.target} no esta definido.` }
   }
@@ -198,7 +217,9 @@ const classifyStatModifier = (effect: CombatAbilityEffect): EffectClass | { read
   }
 
   if (effect.hasActivationCondition) {
-    return { reason: 'un efecto condicionado no se evalua: la condicion no esta definida formalmente.' }
+    return {
+      reason: 'un efecto condicionado no se evalua: la condicion no esta definida formalmente.',
+    }
   }
 
   if (!isUsableMagnitude(effect) || effect.magnitude === undefined) {
@@ -231,7 +252,9 @@ const classifyStatModifier = (effect: CombatAbilityEffect): EffectClass | { read
 
   if (effect.statistic === 'DEFENSE') {
     if (effect.target !== 'SELF' && effect.target !== 'OPPONENT') {
-      return { reason: 'un modificador de DEFENSE solo esta definido sobre uno mismo o el oponente.' }
+      return {
+        reason: 'un modificador de DEFENSE solo esta definido sobre uno mismo o el oponente.',
+      }
     }
 
     return {
@@ -250,7 +273,9 @@ const classifyStatModifier = (effect: CombatAbilityEffect): EffectClass | { read
     }
 
     if (effect.target !== 'ALLY' && effect.target !== 'ALLIED_GROUP') {
-      return { reason: 'una sanacion sobre ese objetivo no esta definida: solo aliado o grupo aliado.' }
+      return {
+        reason: 'una sanacion sobre ese objetivo no esta definida: solo aliado o grupo aliado.',
+      }
     }
 
     return durationTurns === null
@@ -261,13 +286,17 @@ const classifyStatModifier = (effect: CombatAbilityEffect): EffectClass | { read
   return { reason: `la estadistica ${String(effect.statistic)} no se soporta.` }
 }
 
-const classifyDirectDamage = (effect: CombatAbilityEffect): EffectClass | { readonly reason: string } => {
+const classifyDirectDamage = (
+  effect: CombatAbilityEffect,
+): EffectClass | { readonly reason: string } => {
   if (effect.target !== 'OPPONENT') {
     return { reason: 'un dano directo solo esta definido sobre el oponente.' }
   }
 
   if (effect.hasActivationCondition) {
-    return { reason: 'un efecto condicionado no se evalua: la condicion no esta definida formalmente.' }
+    return {
+      reason: 'un efecto condicionado no se evalua: la condicion no esta definida formalmente.',
+    }
   }
 
   if (effect.durationTurns !== undefined) {
@@ -281,17 +310,23 @@ const classifyDirectDamage = (effect: CombatAbilityEffect): EffectClass | { read
   return { family: 'DIRECT_DAMAGE', bonus: bonusOf(effect.magnitude) }
 }
 
-const classifyReflectDamage = (effect: CombatAbilityEffect): EffectClass | { readonly reason: string } => {
+const classifyReflectDamage = (
+  effect: CombatAbilityEffect,
+): EffectClass | { readonly reason: string } => {
   if (effect.target !== 'OPPONENT') {
     return { reason: 'un reflejo de dano solo esta definido sobre el oponente.' }
   }
 
   if (!effect.hasActivationCondition) {
-    return { reason: 'un reflejo de dano exige su condicion de activacion declarada (contrato §6).' }
+    return {
+      reason: 'un reflejo de dano exige su condicion de activacion declarada (contrato §6).',
+    }
   }
 
   if (effect.durationTurns !== undefined) {
-    return { reason: 'un reflejo de dano no tiene una duracion propia (usa la memoria de 1 turno).' }
+    return {
+      reason: 'un reflejo de dano no tiene una duracion propia (usa la memoria de 1 turno).',
+    }
   }
 
   const magnitude = effect.magnitude
@@ -310,13 +345,17 @@ const classifyReflectDamage = (effect: CombatAbilityEffect): EffectClass | { rea
   return { family: 'REFLECT', basisPoints: magnitude.basisPoints }
 }
 
-const classifyImmunity = (effect: CombatAbilityEffect): EffectClass | { readonly reason: string } => {
+const classifyImmunity = (
+  effect: CombatAbilityEffect,
+): EffectClass | { readonly reason: string } => {
   if (effect.target !== 'SELF') {
     return { reason: 'una inmunidad solo esta definida sobre uno mismo.' }
   }
 
   if (effect.hasActivationCondition) {
-    return { reason: 'un efecto condicionado no se evalua: la condicion no esta definida formalmente.' }
+    return {
+      reason: 'un efecto condicionado no se evalua: la condicion no esta definida formalmente.',
+    }
   }
 
   if (effect.magnitude !== undefined) {
@@ -327,7 +366,11 @@ const classifyImmunity = (effect: CombatAbilityEffect): EffectClass | { readonly
     return { reason: 'una inmunidad necesita su codigo (immunityCode) formalmente declarado.' }
   }
 
-  return { family: 'IMMUNITY', immunityCode: effect.immunityCode, durationTurns: effect.durationTurns ?? null }
+  return {
+    family: 'IMMUNITY',
+    immunityCode: effect.immunityCode,
+    durationTurns: effect.durationTurns ?? null,
+  }
 }
 
 /** Clasifica UN efecto en uno de los patrones soportados, o el motivo por el que ninguno lo acepta. */
@@ -420,19 +463,24 @@ export const evaluateSkill = (ability: CombatAbility): SkillSupport => {
   }
 
   const directDamage = classified.filter(
-    (item): item is Extract<EffectClass, { family: 'DIRECT_DAMAGE' }> => item.family === 'DIRECT_DAMAGE',
+    (item): item is Extract<EffectClass, { family: 'DIRECT_DAMAGE' }> =>
+      item.family === 'DIRECT_DAMAGE',
   )
   const instantHeal = classified.filter(
-    (item): item is Extract<EffectClass, { family: 'INSTANT_HEAL' }> => item.family === 'INSTANT_HEAL',
+    (item): item is Extract<EffectClass, { family: 'INSTANT_HEAL' }> =>
+      item.family === 'INSTANT_HEAL',
   )
   const temporalHeal = classified.filter(
-    (item): item is Extract<EffectClass, { family: 'TEMPORAL_HEAL' }> => item.family === 'TEMPORAL_HEAL',
+    (item): item is Extract<EffectClass, { family: 'TEMPORAL_HEAL' }> =>
+      item.family === 'TEMPORAL_HEAL',
   )
   const instantStat = classified.filter(
-    (item): item is Extract<EffectClass, { family: 'INSTANT_STAT' }> => item.family === 'INSTANT_STAT',
+    (item): item is Extract<EffectClass, { family: 'INSTANT_STAT' }> =>
+      item.family === 'INSTANT_STAT',
   )
   const temporalStat = classified.filter(
-    (item): item is Extract<EffectClass, { family: 'TEMPORAL_STAT' }> => item.family === 'TEMPORAL_STAT',
+    (item): item is Extract<EffectClass, { family: 'TEMPORAL_STAT' }> =>
+      item.family === 'TEMPORAL_STAT',
   )
   const reflect = classified.filter(
     (item): item is Extract<EffectClass, { family: 'REFLECT' }> => item.family === 'REFLECT',
@@ -447,18 +495,28 @@ export const evaluateSkill = (ability: CombatAbility): SkillSupport => {
 
   if (directDamage.length > 0) {
     if (isHealing || isOffensive) {
-      return unsupported('un dano directo no se combina con otros patrones (no se aplica a medias).')
+      return unsupported(
+        'un dano directo no se combina con otros patrones (no se aplica a medias).',
+      )
     }
 
-    return { supported: true, kind: 'DIRECT_DAMAGE', damageBonus: aggregate(directDamage.map((d) => d.bonus)) }
+    return {
+      supported: true,
+      kind: 'DIRECT_DAMAGE',
+      damageBonus: aggregate(directDamage.map((d) => d.bonus)),
+    }
   }
 
   if (isHealing) {
     if (isOffensive) {
-      return unsupported('una sanacion no se combina con patrones ofensivos (no se aplica a medias).')
+      return unsupported(
+        'una sanacion no se combina con patrones ofensivos (no se aplica a medias).',
+      )
     }
 
-    const audience = [...instantHeal, ...temporalHeal].some((item) => item.audience === 'ALLIED_GROUP')
+    const audience = [...instantHeal, ...temporalHeal].some(
+      (item) => item.audience === 'ALLIED_GROUP',
+    )
       ? 'ALLIED_GROUP'
       : 'ALLY'
 
@@ -483,23 +541,19 @@ export const evaluateSkill = (ability: CombatAbility): SkillSupport => {
   }
 
   const temporalEffects: TemporalEffectTemplate[] = [
-    ...temporalStat.map(
-      (item): TemporalEffectTemplate => ({
-        family: 'STAT',
-        statistic: item.statistic,
-        operation: item.operation,
-        audience: item.audience,
-        bonus: item.bonus,
-        durationTurns: item.durationTurns,
-      }),
-    ),
-    ...immunity.map(
-      (item): TemporalEffectTemplate => ({
-        family: 'IMMUNITY',
-        immunityCode: item.immunityCode,
-        durationTurns: item.durationTurns,
-      }),
-    ),
+    ...temporalStat.map((item): TemporalEffectTemplate => ({
+      family: 'STAT',
+      statistic: item.statistic,
+      operation: item.operation,
+      audience: item.audience,
+      bonus: item.bonus,
+      durationTurns: item.durationTurns,
+    })),
+    ...immunity.map((item): TemporalEffectTemplate => ({
+      family: 'IMMUNITY',
+      immunityCode: item.immunityCode,
+      durationTurns: item.durationTurns,
+    })),
   ]
 
   return {

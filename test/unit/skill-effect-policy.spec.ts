@@ -105,15 +105,28 @@ describe('evaluateSkill — lo que NO se soporta se rechaza de forma explicita',
   })
 
   it.each([
-    ['una sanacion (HEALING) sobre un objetivo que no es aliado ni grupo aliado', effect({ kind: 'HEALING', target: 'ALLIED_GROUP' })],
+    [
+      'una sanacion (HEALING) sobre un objetivo que no es aliado ni grupo aliado',
+      effect({ kind: 'HEALING', target: 'ALLIED_GROUP' }),
+    ],
     ['una inmunidad sin immunityCode', effect({ kind: 'IMMUNITY', magnitude: undefined })],
     ['una inmunidad con magnitud (no se amplia ese esquema)', effect({ kind: 'IMMUNITY' })],
     [
       'un reflejo de dano sin su condicion de activacion',
-      effect({ kind: 'REFLECT_DAMAGE', target: 'OPPONENT', magnitude: { mode: 'PERCENTAGE', basisPoints: 5000 } }),
+      effect({
+        kind: 'REFLECT_DAMAGE',
+        target: 'OPPONENT',
+        magnitude: { mode: 'PERCENTAGE', basisPoints: 5000 },
+      }),
     ],
-    ['una reanimacion (REVIVE) con magnitud FIXED', effect({ kind: 'REVIVE', target: 'ALLY', magnitude: fixed(2) })],
-    ['un estado temporal de kind desconocido', effect({ kind: 'TEMPORARY_STATUS', durationTurns: 2 })],
+    [
+      'una reanimacion (REVIVE) con magnitud FIXED',
+      effect({ kind: 'REVIVE', target: 'ALLY', magnitude: fixed(2) }),
+    ],
+    [
+      'un estado temporal de kind desconocido',
+      effect({ kind: 'TEMPORARY_STATUS', durationTurns: 2 }),
+    ],
     ['un modificador de ATTACK sobre un aliado', effect({ target: 'ALLY' })],
     ['un modificador de ATTACK sobre un grupo aliado', effect({ target: 'ALLIED_GROUP' })],
     ['un producto (MULTIPLY)', effect({ operation: 'MULTIPLY' })],
@@ -123,7 +136,10 @@ describe('evaluateSkill — lo que NO se soporta se rechaza de forma explicita',
     ['la Vida', effect({ statistic: 'HEALTH' })],
     ['el critico', effect({ statistic: 'CRITICAL_CHANCE' })],
     ['un efecto sin estadistica', effect({ statistic: undefined })],
-    ['una condicion de activacion en un modificador de estadistica', effect({ hasActivationCondition: true })],
+    [
+      'una condicion de activacion en un modificador de estadistica',
+      effect({ hasActivationCondition: true }),
+    ],
     ['una magnitud en porcentaje', effect({ magnitude: { mode: 'PERCENTAGE', basisPoints: 500 } })],
     ['un efecto sin magnitud', effect({ magnitude: undefined })],
     ['un FIXED de 0', effect({ magnitude: fixed(0) })],
@@ -172,7 +188,12 @@ describe('evaluateSkill — lo que NO se soporta se rechaza de forma explicita',
   it('mezclar dano directo con otros patrones no esta soportado (no se aplica a medias)', () => {
     const result = evaluateSkill(
       abilityWith([
-        { kind: 'DAMAGE', target: 'OPPONENT', magnitude: dice(2, 9), hasActivationCondition: false },
+        {
+          kind: 'DAMAGE',
+          target: 'OPPONENT',
+          magnitude: dice(2, 9),
+          hasActivationCondition: false,
+        },
         attackBonus(fixed(1)),
       ]),
     )
@@ -249,12 +270,16 @@ describe('evaluateSkill — STAT_MODIFIER · DEFENSE (v2, Mano de piedra)', () =
   })
 
   it('DEFENSE con operation DECREASE (generico) tambien esta soportado', () => {
-    expect(evaluateSkill(abilityWith([defenseBonus({ operation: 'DECREASE' })])).supported).toBe(true)
+    expect(evaluateSkill(abilityWith([defenseBonus({ operation: 'DECREASE' })])).supported).toBe(
+      true,
+    )
   })
 
   it('DEFENSE sobre un aliado o un grupo aliado no esta definido', () => {
     expect(evaluateSkill(abilityWith([defenseBonus({ target: 'ALLY' })])).supported).toBe(false)
-    expect(evaluateSkill(abilityWith([defenseBonus({ target: 'ALLIED_GROUP' })])).supported).toBe(false)
+    expect(evaluateSkill(abilityWith([defenseBonus({ target: 'ALLIED_GROUP' })])).supported).toBe(
+      false,
+    )
   })
 })
 
@@ -322,7 +347,9 @@ describe('evaluateSkill — kind DAMAGE directo (v2, Agonia)', () => {
 
   it('con duracion o condicion no esta definido', () => {
     expect(evaluateSkill(abilityWith([direct({ durationTurns: 1 })])).supported).toBe(false)
-    expect(evaluateSkill(abilityWith([direct({ hasActivationCondition: true })])).supported).toBe(false)
+    expect(evaluateSkill(abilityWith([direct({ hasActivationCondition: true })])).supported).toBe(
+      false,
+    )
   })
 })
 
@@ -352,7 +379,9 @@ describe('evaluateSkill — kind REFLECT_DAMAGE (v2, Pare de fuego)', () => {
   })
 
   it('sin su condicion de activacion no esta soportado', () => {
-    expect(evaluateSkill(abilityWith([reflect({ hasActivationCondition: false })])).supported).toBe(false)
+    expect(evaluateSkill(abilityWith([reflect({ hasActivationCondition: false })])).supported).toBe(
+      false,
+    )
   })
 
   it('sobre uno mismo no esta definido', () => {
@@ -393,7 +422,9 @@ describe('evaluateSkill — kind IMMUNITY (v2, estructural)', () => {
   })
 
   it('sin immunityCode no esta soportada', () => {
-    expect(evaluateSkill(abilityWith([immunity({ immunityCode: undefined })])).supported).toBe(false)
+    expect(evaluateSkill(abilityWith([immunity({ immunityCode: undefined })])).supported).toBe(
+      false,
+    )
   })
 
   it('con magnitud no esta soportada (no se amplia ese esquema)', () => {
@@ -488,7 +519,9 @@ describe('evaluateSkill — STAT_MODIFIER · HEALING (v2)', () => {
   })
 
   it('mezclar sanacion con y sin duracion no es un problema: cada efecto es independiente', () => {
-    const result = evaluateSkill(abilityWith([heal(fixed(2)), heal(fixed(3), { durationTurns: 1 })]))
+    const result = evaluateSkill(
+      abilityWith([heal(fixed(2)), heal(fixed(3), { durationTurns: 1 })]),
+    )
 
     expect(result).toMatchObject({
       supported: true,
@@ -649,11 +682,7 @@ describe('evaluateSkill — el Catalog desplegado (24 habilidades, contrato v2 �
     // Chaman
     ['Toque de la Vida', true, [mod('HEALING', fixed(2), {}, 'ALLY')]],
     ['Vinculo Natural', true, [mod('HEALING', fixed(2), { durationTurns: 2 }, 'ALLY')]],
-    [
-      'Canto del Bosque',
-      true,
-      [mod('HEALING', dice(2, 6), { durationTurns: 2 }, 'ALLIED_GROUP')],
-    ],
+    ['Canto del Bosque', true, [mod('HEALING', dice(2, 6), { durationTurns: 2 }, 'ALLIED_GROUP')]],
     // Medico
     ['Curacion Directa', true, [mod('HEALING', fixed(2), {}, 'ALLY')]],
     [

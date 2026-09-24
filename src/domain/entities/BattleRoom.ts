@@ -1356,7 +1356,9 @@ export class BattleRoom {
     // HU-19 v2 (contrato §6): un ataque basico tambien alimenta la memoria de dano de
     // `REFLECT_DAMAGE` -- es generica, de cualquier fuente de dano, no solo de habilidades.
     const battle = this.battle
-      .withCombatant(plan.target.withHealth(applied.healthAfter).withDamageTaken(applied.appliedDamage))
+      .withCombatant(
+        plan.target.withHealth(applied.healthAfter).withDamageTaken(applied.appliedDamage),
+      )
       .completeTurn(at)
     const seq = this.lastSeq + 1
     const event: BattleEvent = {
@@ -1587,7 +1589,10 @@ export class BattleRoom {
       damage: assertSupportedDamage(attackerProfile.damage),
       ability,
       attackBonus: support.attackBonus,
-      damageBonus: { fixed: support.damageBonus.fixed + reflectBonus, dice: support.damageBonus.dice },
+      damageBonus: {
+        fixed: support.damageBonus.fixed + reflectBonus,
+        dice: support.damageBonus.dice,
+      },
       powerBefore: currentPower,
       powerAfter: payment.state.current,
       temporalEffects: BattleRoom.resolveTemporalEffectTemplates(
@@ -1635,7 +1640,8 @@ export class BattleRoom {
       .filter((entry) => entry.teamLabel === attackerEntry.teamLabel)
       .flatMap((entry): readonly HealingRecipient[] => {
         const combatant = battle.combatantFor(entry)
-        const eligible = combatant?.profile !== null && combatant?.profile !== undefined && combatant.alive
+        const eligible =
+          combatant?.profile !== null && combatant?.profile !== undefined && combatant.alive
 
         return eligible ? [{ entry, combatant }] : []
       })
@@ -1643,7 +1649,9 @@ export class BattleRoom {
     // Inalcanzable en la practica: el propio actor esta vivo y con perfil (ya comprobado por
     // `requireAttackerTurn`), asi que siempre aparece en su propio equipo.
     if (recipients.length === 0) {
-      throw new DomainError('Ningun miembro elegible del equipo del actor para la sanacion de grupo.')
+      throw new DomainError(
+        'Ningun miembro elegible del equipo del actor para la sanacion de grupo.',
+      )
     }
 
     return recipients
@@ -1749,16 +1757,22 @@ export class BattleRoom {
       .withCooldown(plan.ability.abilityId, plan.ability.chargeTurns + 1)
     // HU-19 v2 (contrato §6): el objetivo recuerda el dano recibido (memoria de 1 turno propio
     // para `REFLECT_DAMAGE`), igual que ya hace un ataque basico.
-    const targetCombatant = plan.target.withHealth(applied.healthAfter).withDamageTaken(applied.appliedDamage)
-    const turnClosed = this.battle.withCombatant(actor).withCombatant(targetCombatant).completeTurn(at)
+    const targetCombatant = plan.target
+      .withHealth(applied.healthAfter)
+      .withDamageTaken(applied.appliedDamage)
+    const turnClosed = this.battle
+      .withCombatant(actor)
+      .withCombatant(targetCombatant)
+      .completeTurn(at)
     // Los efectos temporales NUEVOS de esta habilidad se adjuntan DESPUES de `completeTurn`
     // (contrato §2): asi el cierre del turno propio de ESTA MISMA transaccion no los alcanza --
     // ni los decrementa ni, si son de Sanacion, los tira una vez de mas antes de haber existido
     // un solo turno completo. Solo entonces empiezan a valer para resoluciones FUTURAS.
-    const battle = BattleRoom.withActiveEffectsAttached(turnClosed, outcome.resolvedTemporalEffects, [
-      plan.attackerEntry,
-      plan.targetEntry,
-    ])
+    const battle = BattleRoom.withActiveEffectsAttached(
+      turnClosed,
+      outcome.resolvedTemporalEffects,
+      [plan.attackerEntry, plan.targetEntry],
+    )
     const seq = this.lastSeq + 1
     const event: BattleEvent = {
       seq,
@@ -1946,7 +1960,10 @@ export class BattleRoom {
           remainingTurns:
             battle.combatantFor(plan.attackerEntry)?.cooldownOf(plan.ability.abilityId) ?? 0,
         },
-        damage: { calculatedDamage: applied.calculatedDamage, appliedDamage: applied.appliedDamage },
+        damage: {
+          calculatedDamage: applied.calculatedDamage,
+          appliedDamage: applied.appliedDamage,
+        },
         targetHealth: { before: applied.healthBefore, after: applied.healthAfter },
         battle: battle.toView(this.id),
       },
@@ -1998,7 +2015,11 @@ export class BattleRoom {
       .withCooldown(plan.ability.abilityId, plan.ability.chargeTurns + 1)
 
     let battle = this.battle.withCombatant(actor)
-    const healed: { readonly key: CombatantKey; readonly before: number; readonly after: number }[] = []
+    const healed: {
+      readonly key: CombatantKey
+      readonly before: number
+      readonly after: number
+    }[] = []
 
     for (const recipient of plan.recipients) {
       const maxHealth = recipient.combatant.profile?.maxHealth ?? 0
@@ -2006,7 +2027,11 @@ export class BattleRoom {
       const applied = applyHeal(currentHealth, maxHealth, outcome.healAmount)
 
       battle = battle.withCombatant(recipient.combatant.withHealth(applied.healthAfter))
-      healed.push({ key: recipient.entry, before: applied.healthBefore, after: applied.healthAfter })
+      healed.push({
+        key: recipient.entry,
+        before: applied.healthBefore,
+        after: applied.healthAfter,
+      })
     }
 
     battle = battle.completeTurn(at)
@@ -2021,7 +2046,11 @@ export class BattleRoom {
     )
 
     // Siempre hay al menos un afectado (`resolveHealingRecipients` nunca devuelve `[]`).
-    const primary = healed[0] as { readonly key: CombatantKey; readonly before: number; readonly after: number }
+    const primary = healed[0] as {
+      readonly key: CombatantKey
+      readonly before: number
+      readonly after: number
+    }
     const seq = this.lastSeq + 1
     const event: BattleEvent = {
       seq,
@@ -2047,7 +2076,12 @@ export class BattleRoom {
         targetHealth: { before: primary.before, after: primary.after },
         // HU-19 v2 (contrato §4): solo presente cuando afecto a mas de un combatiente.
         ...(healed.length > 1
-          ? { affected: healed.map((entry) => ({ teamLabel: entry.key.teamLabel, seat: entry.key.seat })) }
+          ? {
+              affected: healed.map((entry) => ({
+                teamLabel: entry.key.teamLabel,
+                seat: entry.key.seat,
+              })),
+            }
           : {}),
         battle: battle.toView(this.id),
       },
