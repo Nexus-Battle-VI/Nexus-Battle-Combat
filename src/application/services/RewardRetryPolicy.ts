@@ -49,6 +49,10 @@ export const isRewardRetryDue = (
   workflow: { readonly attempts: number; readonly updatedAt: Date },
   now: Date,
 ): boolean =>
+  // Sin fallos previos no hay nada que esperar, aunque `updatedAt` quede por
+  // delante del reloj (un ajuste de hora hacia atras no debe dejar un workflow
+  // recien creado sin procesar).
+  workflow.attempts <= 0 ||
   now.getTime() - workflow.updatedAt.getTime() >= rewardRetryDelayMs(policy, workflow.attempts)
 
 /** Si un fallo transitorio mas agota el tope de `attempts` ya acumulados. */

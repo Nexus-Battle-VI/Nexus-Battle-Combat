@@ -64,8 +64,11 @@ class FixedSequence implements RandomSequencePort {
 }
 
 /** Reloj manual: la prueba lo coloca a voluntad respecto del ultimo fallo registrado. */
+// Arranca en 1970, ANTES de cualquier `updatedAt`: un workflow sin fallos debe procesarse
+// igual (con el reloj real, la prueba dependia de que el reloj y `updatedAt` cayeran en el
+// mismo milisegundo, y fallaba en un runner lento).
 class ManualClock implements ClockPort {
-  private current = new Date()
+  private current = new Date(0)
   now(): Date {
     return this.current
   }
@@ -187,6 +190,15 @@ describe('RewardRetryPolicy', () => {
     expect(isRewardRetryDue(policy, { attempts: 0, updatedAt: at }, at)).toBe(true)
     expect(isRewardRetryDue(policy, workflow, new Date(at.getTime() + 1_999))).toBe(false)
     expect(isRewardRetryDue(policy, workflow, new Date(at.getTime() + 2_000))).toBe(true)
+  })
+
+  it('sin fallos previos esta vencida AUNQUE updatedAt vaya por delante del reloj', () => {
+    const now = new Date('2026-09-23T19:00:00.000Z')
+    const ahead = { attempts: 0, updatedAt: new Date(now.getTime() + 5_000) }
+
+    expect(isRewardRetryDue(policy, ahead, now)).toBe(true)
+    // Con fallos previos, en cambio, la espera cuenta desde el ultimo fallo.
+    expect(isRewardRetryDue(policy, { ...ahead, attempts: 1 }, now)).toBe(false)
   })
 
   it('por defecto: 1 s -> 5 min entre intentos y 100 fallos', () => {
