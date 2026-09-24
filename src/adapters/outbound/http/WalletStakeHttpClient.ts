@@ -102,6 +102,15 @@ export class WalletStakeHttpClient implements WalletStakePort {
       throw new StakeRejectedError(SERVICE, describeRejection(result.body), codeOf(result.body))
     }
 
+    if (result.outcome === 'invalid') {
+      // HU-23 conserva, a proposito, el tratamiento previo a la clasificacion de
+      // `postInternalJson`: un 4xx permanente se sigue viendo como un fallo
+      // reintentable. Clasificarlo distinto exige decidir que hacen
+      // `StakeSettler`/`StakeReleaser` con un rechazo permanente mientras hay
+      // creditos retenidos, y eso no se decide dentro de un arreglo de HU-22.
+      throw new UpstreamServiceError(SERVICE, 'error_servidor')
+    }
+
     return result.body
   }
 }

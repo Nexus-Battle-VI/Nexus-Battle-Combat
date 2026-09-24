@@ -150,14 +150,60 @@ export const getInternalJson = async (
  *  - `ok`: `200`, cuerpo JSON crudo.
  *  - `conflict`: `409` (mismo `operationId`, cuerpo distinto).
  *  - `rejected`: `422` (rechazo terminal de negocio; el cuerpo trae `code`/`message`).
+ *  - `invalid`: `4xx` PERMANENTE (`400`, `413`, `415`...): el destino rechazo
+ *    la peticion misma y responderia igual a cualquier reintento con el mismo
+ *    cuerpo. `detail` es su mensaje de validacion, acotado, o `null`.
  *
- * Cualquier otro resultado (no alcanzable, tiempo agotado, 401, 5xx, cuerpo
- * no parseable) lanza `UpstreamServiceError`, igual que `getInternalJson`.
+ * Solo lanzan `UpstreamServiceError` los fallos TRANSITORIOS, los que un
+ * reintento con espera puede resolver: no alcanzable, tiempo agotado, 5xx,
+ * 401/403 (secreto o reloj mal configurados), 404/405 (el destino aun no
+ * tiene la ruta: orden de despliegue), 408/425/429 (tiempo o carga) y un
+ * cuerpo no parseable.
  */
 export type InternalPostResult =
   | { readonly outcome: 'ok'; readonly body: unknown }
   | { readonly outcome: 'conflict'; readonly body: unknown }
   | { readonly outcome: 'rejected'; readonly body: unknown }
+  | { readonly outcome: 'invalid'; readonly status: number; readonly detail: string | null }
+
+/**
+ * `4xx` cuya causa NO esta en el cuerpo enviado sino en el estado o el
+ * despliegue del destino, asi que reintentar con espera puede resolverlos. El
+ * resto de los `4xx` (salvo 409/422, ya de negocio) es permanente.
+ * 401/403 se tratan antes, como `no_autorizado`.
+ */
+const RETRYABLE_CLIENT_STATUSES: ReadonlySet<number> = new Set([404, 405, 408, 425, 429])
+
+const isPermanentRequestError = (status: number): boolean =>
+  status >= 400 &&
+  status < 500 &&
+  status !== 409 &&
+  status !== 422 &&
+  !RETRYABLE_CLIENT_STATUSES.has(status)
+
+const MAX_DETAIL_LENGTH = 200
+
+/**
+ * Mensaje de validacion del destino (`{"message": string | string[]}`, forma de
+ * NestJS), acotado. Nunca devuelve el cuerpo completo ni valores enviados:
+ * solo texto que el destino escribio para explicar el rechazo.
+ */
+const describeInvalidRequest = (body: unknown): string | null => {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return null
+  }
+
+  const message = (body as Readonly<Record<string, unknown>>).message
+  const text = Array.isArray(message)
+    ? message.filter((entry): entry is string => typeof entry === 'string').join('; ')
+    : message
+
+  if (typeof text !== 'string' || text.length === 0) {
+    return null
+  }
+
+  return text.length > MAX_DETAIL_LENGTH ? `${text.slice(0, MAX_DETAIL_LENGTH)}...` : text
+}
 
 export const postInternalJson = async (
   service: string,
@@ -213,6 +259,23 @@ export const postInternalJson = async (
     })
 
     throw new UpstreamServiceError(service, 'no_autorizado')
+  }
+
+  if (isPermanentRequestError(response.status)) {
+    options.logger.warn('internal_http_client_fallo', {
+      service,
+      path,
+      reason: 'peticion_invalida',
+      status: response.status,
+    })
+
+    const body: unknown = await response.json().catch(() => null)
+
+    return {
+      outcome: 'invalid' as const,
+      status: response.status,
+      detail: describeInvalidRequest(body),
+    }
   }
 
   if (response.status !== 200 && response.status !== 409 && response.status !== 422) {

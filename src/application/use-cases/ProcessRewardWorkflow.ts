@@ -4,6 +4,7 @@ import {
   RewardRejectedError,
 } from '../errors/RewardIntegrationErrors'
 import { UpstreamServiceError } from '../errors/UpstreamErrors'
+import type { ClockPort } from '../ports/ClockPort'
 import type { RewardCreditPort } from '../ports/RewardCreditPort'
 import type { RewardGrantPort } from '../ports/RewardGrantPort'
 import type {
@@ -11,6 +12,12 @@ import type {
   RewardWorkflowSnapshot,
 } from '../ports/RewardWorkflowRepositoryPort'
 import type { RandomSequencePort } from '../ports/RandomSequencePort'
+import {
+  DEFAULT_REWARD_RETRY_POLICY,
+  isRewardRetryDue,
+  isRewardRetryExhausted,
+  type RewardRetryPolicy,
+} from '../services/RewardRetryPolicy'
 import { RandomIndex } from '../../domain/value-objects/RandomIndex'
 import {
   isTerminalRewardWorkflowState,
@@ -36,6 +43,13 @@ export interface ProcessRewardWorkflowLogger {
  * NINGÚN paso revierte un credito ya acreditado por Wallet (HU-22 §66): un
  * fallo despues de `CREDIT_CONFIRMED`/`CHEST_ELIGIBLE` deja el saldo firme y
  * solo la entrega del cofre queda pendiente o fallida.
+ *
+ * REINTENTOS ACOTADOS (`RewardRetryPolicy`): un fallo transitorio no se
+ * reintenta en el siguiente segundo sino tras una espera que se duplica hasta
+ * un techo, y agotado el tope de fallos el workflow pasa a `TERMINAL_FAILURE`
+ * (visible como `rewardDelivery: FAILED`) en vez de reintentarse sin fin. Un
+ * rechazo PERMANENTE (`RewardRejectedError`, incluido `RewardInvalidRequestError`)
+ * no se reintenta nunca.
  */
 export class ProcessRewardWorkflow {
   constructor(
@@ -45,10 +59,22 @@ export class ProcessRewardWorkflow {
     private readonly sequence: RandomSequencePort,
     private readonly rewardTable: RewardTable,
     private readonly logger: ProcessRewardWorkflowLogger,
+    private readonly clock: ClockPort,
+    private readonly retryPolicy: RewardRetryPolicy = DEFAULT_REWARD_RETRY_POLICY,
   ) {}
 
   async execute(id: string): Promise<void> {
     let workflow = await this.repository.findById(id)
+
+    if (
+      workflow !== null &&
+      !isTerminalRewardWorkflowState(workflow.state) &&
+      !isRewardRetryDue(this.retryPolicy, workflow, this.clock.now())
+    ) {
+      // Sigue esperando desde su ultimo fallo transitorio: el barrido lo vera
+      // otra vez cuando venza la espera.
+      return
+    }
 
     while (workflow !== null && !isTerminalRewardWorkflowState(workflow.state)) {
       const before = workflow.state
@@ -160,6 +186,22 @@ export class ProcessRewardWorkflow {
     })
 
     await this.repository.registerRetryableFailure(workflow.id, `${stage}: ${reason}`)
+
+    const attempts = workflow.attempts + 1
+
+    if (isRewardRetryExhausted(this.retryPolicy, attempts)) {
+      this.logger.error('reward_workflow_reintentos_agotados', {
+        workflowId: workflow.id,
+        stage,
+        reason,
+        attempts,
+      })
+
+      return this.repository.applyTerminalFailure(
+        workflow.id,
+        `${stage}: ${reason} (reintentos agotados tras ${String(attempts)} fallos)`,
+      )
+    }
 
     return workflow
   }
