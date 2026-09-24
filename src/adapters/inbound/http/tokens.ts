@@ -50,3 +50,6 @@ export const STAKE_SCHEDULER_OPTIONS = Symbol('StakeSchedulerOptions')
  * declarado en su puerto como el resto de repositorios del servicio.
  */
 export const RESOLVE_EXPERIENCE_ROLLS = Symbol('ResolveExperienceRolls')
+/** HU-72: durable intake and idempotency boundary for Missions simulations. */
+export const ACCEPT_MISSION_SIMULATION_REQUEST = Symbol('AcceptMissionSimulationRequest')
+export const RUN_MISSION_SIMULATION = Symbol('RunMissionSimulation')
