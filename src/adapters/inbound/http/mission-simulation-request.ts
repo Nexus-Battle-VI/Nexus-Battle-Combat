@@ -205,6 +205,10 @@ export const missionSimulationRequestOf = (body: unknown): MissionSimulationRequ
   if (typeof profile.subtype !== 'string' || profile.subtype.length === 0) {
     throw new MissionSimulationContentError('hero.profile.subtype')
   }
+  const level =
+    profile.level === undefined || profile.level === null
+      ? undefined
+      : integer(profile.level, 'hero.profile.level', 1, 8)
   const attack =
     stats.attack === null ? null : integer(stats.attack, 'hero.profile.effectiveStats.attack')
   const damage =
@@ -370,6 +374,7 @@ export const missionSimulationRequestOf = (body: unknown): MissionSimulationRequ
       heroId: hero.heroId as string,
       profile: {
         subtype: profile.subtype,
+        ...(level === undefined ? {} : { level }),
         effectiveStats: {
           health,
           power,

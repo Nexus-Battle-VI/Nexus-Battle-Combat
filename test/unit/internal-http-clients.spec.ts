@@ -245,7 +245,7 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
     expect(equipped).toEqual(equippedHeroFixture())
   })
 
-  it('HU-08 CA-06: ignora level/levelStats y usa effectiveStats, que YA incorpora el nivel', async () => {
+  it('HU-08 CA-06: usa effectiveStats (que YA incorpora el nivel), conserva level para el Dano e ignora levelStats', async () => {
     // Heroe de nivel 3: la base de ataque 10 pasa a 30 y el arma suma 3 => 33. Combat
     // toma 33 de `effectiveStats` y NO vuelve a multiplicar por el nivel.
     const leveled = {
@@ -273,7 +273,7 @@ describe('PlayerInventoryHttpClient (HU-15.2, DP-4)', () => {
     }).getEquippedHero('jugador-1')
 
     expect(equipped?.effectiveStats.attack).toBe(33)
-    expect(equipped).not.toHaveProperty('level')
+    expect(equipped?.level).toBe(3)
     expect(equipped).not.toHaveProperty('levelStats')
   })
 

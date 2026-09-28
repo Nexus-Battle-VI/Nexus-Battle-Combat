@@ -2,6 +2,7 @@ import { UnsupportedCombatProfileError } from '../../src/domain/errors/BattleErr
 import { DomainError } from '../../src/domain/errors/DomainError'
 import {
   applyDamage,
+  applyLevelToMagnitudeResult,
   assertSupportedDamage,
   calculateDamage,
   MAX_EFFECT_PERCENT,
@@ -131,5 +132,43 @@ describe('assertSupportedDamage — se decide ANTES de consumir un solo sorteo',
     { mode: 'DICE', count: 1, sides: 6.5 },
   ] as const)('un Dano invalido (%j) se rechaza como perfil no soportado', (magnitude) => {
     expect(() => assertSupportedDamage(magnitude)).toThrow(UnsupportedCombatProfileError)
+  })
+})
+
+/**
+ * HU-08, CA-06 — OPCION A (decision del PO): el nivel multiplica el RESULTADO FINAL de la
+ * magnitud. No cambia la notacion del dado ni el numero de sorteos.
+ */
+describe('applyLevelToMagnitudeResult (HU-08, CA-06, opcion A)', () => {
+  it('1d6, nivel 3, tirada 4: 4 x 3 = 12', () => {
+    expect(applyLevelToMagnitudeResult(4, 3)).toBe(12)
+  })
+
+  it('compuesta 6 + 1d6, nivel 3, tirada 4: (6 + 4) x 3 = 30, y no 6 x 3 + 4', () => {
+    expect(applyLevelToMagnitudeResult(6 + 4, 3)).toBe(30)
+    expect(applyLevelToMagnitudeResult(6 + 4, 3)).not.toBe(6 * 3 + 4)
+  })
+
+  it('nivel 1 y nivel ausente (perfil anterior a CA-06) no cambian el resultado', () => {
+    expect(applyLevelToMagnitudeResult(5, 1)).toBe(5)
+    expect(applyLevelToMagnitudeResult(5, undefined)).toBe(5)
+  })
+
+  it('el factor es exactamente el nivel en los ocho niveles', () => {
+    for (let level = 1; level <= 8; level += 1) {
+      expect(applyLevelToMagnitudeResult(7, level)).toBe(7 * level)
+    }
+  })
+
+  it('cero sigue siendo cero', () => {
+    expect(applyLevelToMagnitudeResult(0, 8)).toBe(0)
+  })
+
+  it.each([0, 9, -1, 2.5, Number.NaN])('rechaza el nivel %s', (level) => {
+    expect(() => applyLevelToMagnitudeResult(4, level)).toThrow(DomainError)
+  })
+
+  it.each([-1, 1.5, Number.NaN])('rechaza un resultado invalido (%s)', (result) => {
+    expect(() => applyLevelToMagnitudeResult(result, 2)).toThrow(DomainError)
   })
 })

@@ -151,7 +151,7 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
     expect(profile?.damage).toEqual({ mode: 'DICE', count: 1, sides: 6 })
   })
 
-  it('el snapshot es un modelo LOCAL MINIMO: no copia inventario, nombre, referencia ni fecha (solo el Poder MAXIMO y las habilidades de HU-19)', async () => {
+  it('el snapshot es un modelo LOCAL MINIMO: no copia inventario, nombre, referencia ni fecha (solo el Poder MAXIMO, el nivel y las habilidades de HU-19)', async () => {
     const { repo } = await start()
     const profile = (await repo.findById(ROOM_ID))?.battle?.combatantFor({
       teamLabel: 'A',
@@ -165,10 +165,13 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
       'damage',
       'defense',
       'heroId',
+      'level',
       'maxHealth',
       'maxPower',
       'subtype',
     ])
+    // HU-08 (CA-06): el nivel se congela con el perfil (multiplica el resultado del Dano).
+    expect(profile?.level).toBe(1)
     expect(JSON.stringify(profile)).not.toMatch(/selectedAt|baseStats|blockers|loadout|sourceSlot/i)
     // La `reference` (alias) de una habilidad es trazabilidad de Player-Inventory: no se congela.
     expect(JSON.stringify(profile?.abilities)).not.toMatch(/reference|golpe-con-escudo/)
