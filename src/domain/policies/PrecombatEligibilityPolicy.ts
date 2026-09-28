@@ -29,8 +29,9 @@ import { HeroSubtype } from '../value-objects/HeroSubtype'
  * comprobacion puntual, no en la elegibilidad completa).
  *
  * GAPS DELIBERADAMENTE NO CUBIERTOS (HU-16.1, DP-2/DP-3/DP-4): nivel del
- * heroe, nivel minimo de sala y mision activa. Ninguno de los tres tiene
- * hoy una fuente autoritativa real en ningun servicio (ver
+ * heroe, nivel minimo de sala y mision activa. El nivel del heroe existe ya
+ * en Player-Inventory (HU-08) pero ninguna regla formal lo exige aqui, y los
+ * otros dos no tienen fuente autoritativa (ver
  * `docs/hu-16-precombat-eligibility.md`). Esta politica NO LOS EVALUA:
  * inventar `level = 1` o `missionActive = false` para aparentar
  * cumplimiento esta expresamente prohibido por la TASK HU-16.2.

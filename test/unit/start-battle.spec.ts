@@ -21,8 +21,10 @@ import {
   UnsupportedTeamCompositionError,
 } from '../../src/domain/errors/BattleErrors'
 import { BattleRoomStatus } from '../../src/domain/value-objects/BattleRoomStatus'
+import { battleDeadline, commitmentExpiresAt } from '../../src/domain/policies/BattleTimingPolicy'
 import type { BoundedRandom } from '../../src/domain/policies/TurnOrderPolicy'
 import { equippedHeroFixture, equippedProductNotOwnedBlocker } from '../fixtures/equipped-hero'
+import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import {
   NOW,
   ROOM_ID,
@@ -46,14 +48,17 @@ const build = (
     heroes?: ReturnType<typeof heroesPort>
     random?: BoundedRandom
     publisher?: ReturnType<typeof recordingPublisher>
+    commitments?: ReturnType<typeof recordingBattleCommitments>
   } = {},
 ): {
   useCase: StartBattle
   heroes: ReturnType<typeof heroesPort>
   publisher: ReturnType<typeof recordingPublisher>
+  commitments: ReturnType<typeof recordingBattleCommitments>
 } => {
   const heroes = overrides.heroes ?? heroesPort()
   const publisher = overrides.publisher ?? recordingPublisher()
+  const commitments = overrides.commitments ?? recordingBattleCommitments()
 
   return {
     useCase: new StartBattle(
@@ -62,7 +67,9 @@ const build = (
       heroes,
       overrides.random ?? scriptedRandom([0]),
       publisher,
+      commitments,
     ),
+    commitments,
     heroes,
     publisher,
   }
@@ -355,7 +362,14 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       }
 
       await expect(
-        new StartBattle(repo, clock, heroes, scriptedRandom([0]), publisher).execute(ROOM_ID, 'a1'),
+        new StartBattle(
+          repo,
+          clock,
+          heroes,
+          scriptedRandom([0]),
+          publisher,
+          recordingBattleCommitments(),
+        ).execute(ROOM_ID, 'a1'),
       ).rejects.toBeInstanceOf(UpstreamServiceError)
       await expectNoBattle(repo, publisher)
     })
@@ -549,6 +563,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
         heroesPort(),
         scriptedRandom([0]),
         publisher,
+        recordingBattleCommitments(),
       ).execute(ROOM_ID, 'a1')
 
       expect(dto.status).toBe('IN_BATTLE')
@@ -563,5 +578,124 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
     const dto = await build(repo).useCase.execute(ROOM_ID, 'a1')
 
     expect(dto.battle?.startedAt).toBe(NOW.toISOString())
+  })
+
+  /**
+   * HU-29: el inicio de la batalla es el unico punto donde Combat puede pedir el
+   * compromiso. Si no se pide aqui, el equipamiento queda modificable durante el
+   * combate y la HU no se cumple; si se pide y algo falla, la batalla NO puede
+   * empezar (contrato `hu-29-battle-commitment-v1`).
+   */
+  describe('compromiso de equipamiento al iniciar (HU-29)', () => {
+    it('compromete a cada humano con el heroe que la revalidacion acaba de confirmar', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+
+      await seed(repo)
+      const { useCase, commitments } = build(repo)
+
+      await useCase.execute(ROOM_ID, 'a1')
+
+      expect(commitments.commits).toEqual([
+        { roomId: ROOM_ID, playerId: 'a1', heroId: 'hero-a1', expiresAt: commitmentExpiresAt(NOW) },
+        { roomId: ROOM_ID, playerId: 'b1', heroId: 'hero-b1', expiresAt: commitmentExpiresAt(NOW) },
+      ])
+    })
+
+    it('el compromiso sobrevive a la batalla: vence despues del temporizador global', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+
+      await seed(repo)
+      const { useCase, commitments } = build(repo)
+
+      await useCase.execute(ROOM_ID, 'a1')
+
+      for (const { expiresAt } of commitments.commits) {
+        expect(expiresAt.getTime()).toBeGreaterThan(battleDeadline(NOW).getTime())
+      }
+    })
+
+    it('los AI no se comprometen: no tienen equipamiento que bloquear', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+
+      await seed(repo, { teamSizes: [1, 1], aiInTeamB: 1 })
+      const { useCase, commitments } = build(repo, { random: scriptedRandom([0]) })
+
+      await useCase.execute(ROOM_ID, 'a1')
+
+      expect(commitments.commits.map((command) => command.playerId)).toEqual(['a1'])
+    })
+
+    it('compromete ANTES de persistir: el orden observado es commit y luego save', async () => {
+      const log: string[] = []
+      const repo = loggingRepository(new InMemoryBattleRoomRepository(), log)
+      const commitments = recordingBattleCommitments()
+      const inner = commitments.commit.bind(commitments)
+
+      commitments.commit = (command) => {
+        log.push(`commit:${command.playerId}`)
+
+        return inner(command)
+      }
+
+      await repo.save(preparingRoom(), 0)
+      log.length = 0
+      await build(repo, { commitments }).useCase.execute(ROOM_ID, 'a1')
+
+      expect(log).toEqual(['commit:a1', 'commit:b1', 'save:v2'])
+    })
+
+    it('si Player/Inventory no confirma, la batalla NO arranca: sin cola, sin evento y sin persistir', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+      const publisher = recordingPublisher()
+      const commitments = recordingBattleCommitments()
+
+      await seed(repo)
+      commitments.failCommits = true
+
+      await expect(
+        build(repo, { commitments, publisher }).useCase.execute(ROOM_ID, 'a1'),
+      ).rejects.toBeInstanceOf(UpstreamServiceError)
+
+      const room = await repo.findById(ROOM_ID)
+
+      expect(room?.status).toBe(BattleRoomStatus.Preparing)
+      expect(room?.battle).toBeNull()
+      expect(room?.events).toEqual([])
+      expect(publisher.published).toEqual([])
+      expect(commitments.commits).toEqual([])
+    })
+
+    it('para en el PRIMER fallo, sin deshacer lo ya comprometido (caduca solo)', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+      const commitments = recordingBattleCommitments()
+      const inner = commitments.commit.bind(commitments)
+
+      // El segundo humano falla: el primero ya quedo comprometido.
+      commitments.commit = (command) =>
+        command.playerId === 'b1'
+          ? Promise.reject(new UpstreamServiceError('player-inventory', 'no_alcanzable'))
+          : inner(command)
+
+      await seed(repo)
+
+      await expect(
+        build(repo, { commitments }).useCase.execute(ROOM_ID, 'a1'),
+      ).rejects.toBeInstanceOf(UpstreamServiceError)
+
+      expect(commitments.commits.map((command) => command.playerId)).toEqual(['a1'])
+      expect((await repo.findById(ROOM_ID))?.status).toBe(BattleRoomStatus.Preparing)
+    })
+
+    it('iniciar dos veces NO vuelve a comprometer (la sala ya esta IN_BATTLE)', async () => {
+      const repo = new InMemoryBattleRoomRepository()
+
+      await seed(repo)
+      const { useCase, commitments } = build(repo)
+
+      await useCase.execute(ROOM_ID, 'a1')
+      await useCase.execute(ROOM_ID, 'a1')
+
+      expect(commitments.commits).toHaveLength(2)
+    })
   })
 })

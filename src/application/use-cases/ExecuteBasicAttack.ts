@@ -8,6 +8,7 @@ import type { Combatant, CombatantKey } from '../../domain/entities/Combatant'
 import { UnsupportedCombatProfileError } from '../../domain/errors/BattleErrors'
 import { DomainError } from '../../domain/errors/DomainError'
 import { dieFaceFromIndex } from '../../domain/policies/AttackProfile'
+import { applyLevelToMagnitudeResult } from '../../domain/policies/BasicAttackDamagePolicy'
 import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import {
   RoomAccessForbiddenError,
@@ -250,8 +251,13 @@ export class ExecuteBasicAttack {
    */
   private materializeDamage(plan: BasicAttackReadyPlan, percent: number): number | null {
     const netDamageBonus = plan.attacker.statBonus('DAMAGE')
-    const withBonus = (value: number): number =>
-      value + netDamageBonus > 0 ? value + netDamageBonus : 0
+    // CA-06 (opcion A): el nivel multiplica el RESULTADO de la magnitud del heroe; el
+    // ajuste de efectos temporales se suma despues, sin multiplicarse.
+    const withBonus = (value: number): number => {
+      const leveled = applyLevelToMagnitudeResult(value, plan.attackerProfile.level)
+
+      return leveled + netDamageBonus > 0 ? leveled + netDamageBonus : 0
+    }
 
     if (plan.damage.mode === 'FIXED') {
       return withBonus(plan.damage.amount)

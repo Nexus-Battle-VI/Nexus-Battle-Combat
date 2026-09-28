@@ -210,10 +210,10 @@ describe('PlayerInventoryHttpClient — activeEffects validos (HU-25)', () => {
 })
 
 describe('PlayerInventoryHttpClient — lista blanca (contrato aditivo)', () => {
-  it('campos extra del cuerpo NO llegan al puerto (raw, sourceSlot, name, level...)', async () => {
+  it('campos extra del cuerpo NO llegan al puerto (raw, sourceSlot, name, levelStats...)', async () => {
     const hero = await fetchHero(
       equippedHeroContractBody({
-        level: 7,
+        levelStats: { power: 1, health: 1, defense: 1, attack: 1, damage: null, healing: null },
         imageUrl: 'https://x/y.png',
         activeEffects: [
           { ...criticalChancePercentageEffect, raw: { stackable: false }, sourceSlot: 'WEAPON_1' },
@@ -222,12 +222,40 @@ describe('PlayerInventoryHttpClient — lista blanca (contrato aditivo)', () => 
     )
 
     expect(hero).not.toHaveProperty('name')
-    expect(hero).not.toHaveProperty('level')
+    expect(hero).not.toHaveProperty('levelStats')
     expect(hero).not.toHaveProperty('imageUrl')
     expect(hero?.activeEffects[0]).not.toHaveProperty('raw')
     expect(hero?.activeEffects[0]).not.toHaveProperty('sourceSlot')
     expect(JSON.stringify(hero)).not.toContain('stackable')
   })
+
+  /**
+   * HU-08 (CA-06): `level` SI llega al puerto, opcional. Solo multiplica el Dano; el resto de
+   * estadisticas ya vienen escaladas en `effectiveStats`.
+   */
+  it('level (1..8) llega al puerto cuando Player-Inventory lo publica', async () => {
+    for (const level of [1, 3, 8]) {
+      const hero = await fetchHero(equippedHeroContractBody({ level }))
+
+      expect(hero?.level).toBe(level)
+    }
+  })
+
+  it('un Player-Inventory anterior a CA-06 (sin level) sigue siendo valido: level se omite, no se inventa', async () => {
+    const body = equippedHeroContractBody()
+    delete body.level
+
+    const hero = await fetchHero(body)
+
+    expect(hero).not.toHaveProperty('level')
+  })
+
+  it.each([0, 9, 2.5, '3', true])(
+    'un level invalido (%s) se rechaza como respuesta invalida',
+    async (level) => {
+      await expectRejected(equippedHeroContractBody({ level }))
+    },
+  )
 
   it('el resultado tiene exactamente las claves del puerto', async () => {
     const hero = await fetchHero(equippedHeroContractBody())
@@ -238,6 +266,7 @@ describe('PlayerInventoryHttpClient — lista blanca (contrato aditivo)', () => 
         'heroId',
         'reference',
         'subtype',
+        'level',
         'baseStats',
         'effectiveStats',
         'maxPower',

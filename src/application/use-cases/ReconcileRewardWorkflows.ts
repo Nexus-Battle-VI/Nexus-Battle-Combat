@@ -1,4 +1,5 @@
 import { buildBattleFinishedNotification } from '../services/BattleFinalizer'
+import type { BattleHeroCommitmentPort } from '../ports/BattleHeroCommitmentPort'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { CreateRewardWorkflows } from './CreateRewardWorkflows'
 
@@ -27,6 +28,7 @@ export class ReconcileRewardWorkflows {
   constructor(
     private readonly rooms: BattleRoomRepositoryPort,
     private readonly createWorkflows: CreateRewardWorkflows,
+    private readonly commitments: BattleHeroCommitmentPort,
     private readonly logger: ReconcileRewardWorkflowsLogger,
   ) {}
 
@@ -41,6 +43,12 @@ export class ReconcileRewardWorkflows {
         continue
       }
 
+      // HU-29: la liberacion del compromiso tambien se reintenta aqui. Es el
+      // MISMO hueco que los workflows -- `afterFinished` la dispara sin esperar y
+      // el proceso puede morir antes de que llegue -- y la liberacion es
+      // idempotente por contrato, asi que reintentarla no puede hacer dano.
+      await this.releaseCommitments(room.id, notification.participants)
+
       try {
         await this.createWorkflows.execute(notification)
       } catch (error: unknown) {
@@ -52,5 +60,30 @@ export class ReconcileRewardWorkflows {
     }
 
     return finished.length
+  }
+
+  private async releaseCommitments(
+    roomId: string,
+    participants: readonly { readonly playerId: string | null }[],
+  ): Promise<void> {
+    const playerIds = [
+      ...new Set(
+        participants.flatMap((participant) =>
+          participant.playerId === null ? [] : [participant.playerId],
+        ),
+      ),
+    ]
+
+    for (const playerId of playerIds) {
+      try {
+        await this.commitments.release(roomId, playerId)
+      } catch (error: unknown) {
+        this.logger.error('battle_commitment_reconciliacion_fallo', {
+          roomId,
+          playerId,
+          reason: error instanceof Error ? error.name : 'desconocido',
+        })
+      }
+    }
   }
 }

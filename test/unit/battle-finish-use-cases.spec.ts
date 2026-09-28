@@ -6,6 +6,7 @@ import { BattleEventType } from '../../src/domain/entities/BattleEvent'
 import { BattleRoom } from '../../src/domain/entities/BattleRoom'
 import type { CombatantKey } from '../../src/domain/entities/Combatant'
 import { BattleNotInProgressError, NotYourTurnError } from '../../src/domain/errors/BattleErrors'
+import { BattleRoomStatus } from '../../src/domain/value-objects/BattleRoomStatus'
 import { RandomEffectType } from '../../src/domain/random-effects/RandomEffectType'
 import {
   NOW,
@@ -17,6 +18,7 @@ import {
   scriptedSequence,
 } from '../fixtures/battle'
 import { battleWithCombat, indexForEffect, indexForFace } from '../fixtures/basic-attack'
+import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import { finalizationHarness, mutableClock } from '../fixtures/finalization'
 import { battleWithSkills, SHIELD_STRIKE_ID } from '../fixtures/skills'
 
@@ -276,6 +278,7 @@ describe('StartBattle — siembra de presencia (HU-21, contrato §4.2)', () => {
       {
         publish: () => undefined,
       },
+      recordingBattleCommitments(),
       h.presence,
       h.book,
       connections,
@@ -288,5 +291,61 @@ describe('StartBattle — siembra de presencia (HU-21, contrato §4.2)', () => {
     expect(absences.has('a1')).toBe(false)
     expect(absences.get('b1')).toEqual(NOW)
     expect(h.book.due.get(ROOM_ID)).toEqual(new Date(NOW.getTime() + 30_000))
+  })
+})
+
+/**
+ * HU-29: el compromiso se libera al terminar la batalla. Sin esto el bloqueo de
+ * equipamiento seria permanente y el jugador no podria volver a equiparse.
+ *
+ * Son las DOS entradas reales de la finalizacion: la accion que cierra la batalla
+ * (el caso de uso deja la sala `FINISHED` y quien la cierra llama a
+ * `afterFinished`, igual que `BasicAttackRealtimeHandler`) y el vencimiento, que
+ * lo llama el propio `BattleDeadlineSettler`.
+ *
+ * La liberacion es FIRE-AND-FORGET (la sala ya esta persistida), asi que el doble
+ * registra la llamada de forma sincrona: lo que se prueba es que SE PIDE.
+ */
+describe('BattleFinalizer — liberacion del compromiso de batalla (HU-29)', () => {
+  it('un golpe letal libera el compromiso de cada participante humano', async () => {
+    const clock = mutableClock(NOW)
+    const h = finalizationHarness([], clock)
+    const saved = await h.rooms.save(battleWithCombat({ health: { 'B#0': 4 } }), 0)
+    const sequence = scriptedSequence([attackDie(5), effect(RandomEffectType.Damage), damageDie(6)])
+    const useCase = new ExecuteBasicAttack(h.rooms, clock, sequence, new ChannelLock(), h.settler)
+
+    const result = await useCase.execute({
+      roomId: saved.id,
+      requesterId: 'a1',
+      commandId: 'cmd-hu29-libera',
+      target: TARGET,
+    })
+
+    // El llamador real es el handler: tras difundir, aplica los efectos del final.
+    const finished = result.finished
+
+    if (finished === null) {
+      throw new Error('El golpe no cerro la batalla: la prueba no mide lo que cree.')
+    }
+
+    h.finalizer.afterFinished(finished)
+
+    expect(h.commitments.releases.map(({ playerId }) => playerId).sort()).toEqual(['a1', 'b1'])
+    expect(new Set(h.commitments.releases.map(({ roomId }) => roomId))).toEqual(new Set([saved.id]))
+  })
+
+  it('una sala cerrada por abandono libera a los humanos y no al AI (no tiene `playerId`)', async () => {
+    const clock = mutableClock(NOW)
+    const h = finalizationHarness([], clock)
+    const saved = await h.rooms.save(battleWithCombat({ teamSizes: [1, 1], aiInTeamB: 1 }), 0)
+
+    // El humano deja de estar presente: al vencer la gracia, su equipo queda
+    // eliminado y el vencimiento cierra la sala (y llama al finalizador).
+    h.presence.markAbsent(saved.id, 'a1', NOW)
+    clock.advance(30_000)
+    const settled = await h.settler.settle(saved)
+
+    expect(settled.status).toBe(BattleRoomStatus.Finished)
+    expect(h.commitments.releases.map(({ playerId }) => playerId)).toEqual(['a1'])
   })
 })

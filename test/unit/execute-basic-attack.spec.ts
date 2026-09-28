@@ -278,6 +278,70 @@ describe('ExecuteBasicAttack — flujo principal (CA-01, CA-05, CA-06, CA-07)', 
     expect(healthOf(await room(), 'B')?.current).toBe(40)
   })
 
+  /**
+   * HU-08, CA-06 (OPCION A, decision del PO): el nivel multiplica el RESULTADO FINAL de la
+   * magnitud de Dano. `1d6` de nivel 3 con tirada 4 hace 4 x 3 = 12: el dado NO pasa a
+   * `3d6` ni a `1d18` (mismos sorteos que sin nivel).
+   */
+  it('CA-06 opcion A: Dano 1d6, nivel 3, tirada 4 => 4 x 3 = 12, con UN solo sorteo de dano', async () => {
+    const nivel3 = combatProfileFixture({ level: 3 })
+    const { useCase, sequence, room } = await setup({ profiles: { a1: nivel3 } }, [
+      attackDie(5),
+      effect(RandomEffectType.Damage),
+      damageDie(4),
+    ])
+
+    const { event } = await useCase.execute(command())
+
+    expect(sequence.consumed()).toBe(3)
+    expect(event.payload).toMatchObject({
+      resolution: { baseDamage: 12, calculatedDamage: 12, appliedDamage: 12 },
+    })
+    expect(healthOf(await room(), 'B')?.current).toBe(44 - 12)
+  })
+
+  it('CA-06 opcion A: el Dano fijo tambien se multiplica por el nivel (4 x 3 = 12), sin sorteo', async () => {
+    const fixed = combatProfileFixture({ damage: { mode: 'FIXED', amount: 4 }, level: 3 })
+    const { useCase, sequence } = await setup({ profiles: { a1: fixed } }, [
+      attackDie(5),
+      effect(RandomEffectType.Damage),
+    ])
+
+    const { event } = await useCase.execute(command())
+
+    expect(sequence.consumed()).toBe(2)
+    expect(event.payload).toMatchObject({ resolution: { baseDamage: 12 } })
+  })
+
+  it('CA-06: 2d6 en nivel 2 suma los dados y multiplica el total: (3 + 4) x 2 = 14', async () => {
+    const dos = combatProfileFixture({ damage: { mode: 'DICE', count: 2, sides: 6 }, level: 2 })
+    const { useCase, sequence } = await setup({ profiles: { a1: dos } }, [
+      attackDie(5),
+      effect(RandomEffectType.Damage),
+      damageDie(3),
+      damageDie(4),
+    ])
+
+    const { event } = await useCase.execute(command())
+
+    expect(sequence.consumed()).toBe(4)
+    expect(event.payload).toMatchObject({ resolution: { baseDamage: 14 } })
+  })
+
+  it('CA-06: nivel 1 y perfil sin nivel dan exactamente el mismo Dano que antes', async () => {
+    for (const profile of [combatProfileFixture({ level: 1 }), combatProfileFixture()]) {
+      const { useCase } = await setup({ profiles: { a1: profile } }, [
+        attackDie(5),
+        effect(RandomEffectType.Damage),
+        damageDie(4),
+      ])
+
+      const { event } = await useCase.execute(command())
+
+      expect(event.payload).toMatchObject({ resolution: { baseDamage: 4 } })
+    }
+  })
+
   it('Dano en varios dados (2d6): consume exactamente `count` indices', async () => {
     const dos = combatProfileFixture({ damage: { mode: 'DICE', count: 2, sides: 6 } })
     const { useCase, sequence } = await setup({ profiles: { a1: dos } }, [

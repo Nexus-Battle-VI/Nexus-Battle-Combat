@@ -8,6 +8,7 @@ import { Combatant } from '../../src/domain/entities/Combatant'
 import { createCombatProfile } from '../../src/domain/entities/CombatProfile'
 import type { TurnOrderEntry } from '../../src/domain/entities/TurnOrder'
 import { RoomConflictError } from '../../src/application/errors/ApplicationError'
+import { up as addHeroLevelToProfiles } from '../../src/adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
 import { MongoBattleRoomRepository } from '../../src/adapters/outbound/persistence/MongoBattleRoomRepository'
 import { describeError } from '../../src/infrastructure/observability/describe-error'
 import {
@@ -349,7 +350,7 @@ describe('MongoBattleRoomRepository', () => {
    * HU-21 (migracion 009): `findInBattle` solo devuelve salas con batalla EN
    * CURSO, y una sala FINISHED sobrevive al viaje con su `result` intacto.
    */
-  const startedRoom = (id: string): BattleRoom => {
+  const startedRoom = (id: string, level?: number): BattleRoom => {
     let room = BattleRoom.create(id, CREATOR, validInput(), AT)
 
     room = room.join(CREATOR, 'A', AT, 'Creador', 'hero-a', 0)
@@ -386,12 +387,58 @@ describe('MongoBattleRoomRepository', () => {
           defense: 11,
           damage: { mode: 'DICE', count: 1, sides: 6 },
           activeEffects: [],
+          ...(level === undefined ? {} : { level }),
         }),
       ),
     )
 
     return room.startBattle(order, AT, combatants)
   }
+
+  /**
+   * HU-08 (CA-06, migracion 017): el perfil congelado lleva `level`. El validador tenia
+   * `additionalProperties: false` en el perfil, asi que sin la migracion la batalla no
+   * podria persistirse. Se comprueba contra el motor real, y que reaplicarla es inocua.
+   */
+  it('el perfil de combate con `level` se persiste y se recupera (migracion 017)', async () => {
+    await repository.save(startedRoom('3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a01', 3), 0)
+
+    const found = await repository.findById('3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a01')
+    const profile = found?.battle?.combatantFor({ teamLabel: 'A', seat: 0 })?.profile
+
+    expect(profile?.level).toBe(3)
+  })
+
+  it('un perfil sin `level` (anterior a CA-06) sigue siendo valido', async () => {
+    await repository.save(startedRoom('3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a02'), 0)
+
+    const profile = (
+      await repository.findById('3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a02')
+    )?.battle?.combatantFor({
+      teamLabel: 'A',
+      seat: 0,
+    })?.profile
+
+    expect(profile).not.toHaveProperty('level')
+  })
+
+  it('la migracion 017 es idempotente y el motor rechaza un `level` fuera de 1..8', async () => {
+    await addHeroLevelToProfiles(db)
+    await addHeroLevelToProfiles(db)
+
+    await repository.save(startedRoom('3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a03', 8), 0)
+    expect(
+      (await repository.findById('3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a03'))?.battle,
+    ).not.toBeNull()
+
+    const stored = await rooms().findOne({ _id: '3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a03' })
+    const fixed = JSON.parse(JSON.stringify(stored)) as Record<string, unknown>
+    const battle = fixed.battle as { combatants: { profile: { level: number } }[] }
+    battle.combatants[0]!.profile.level = 9
+    fixed._id = '3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a04'
+
+    await expect(rooms().insertOne(fixed as never)).rejects.toThrow()
+  })
 
   it('findInBattle devuelve solo salas IN_BATTLE', async () => {
     const inBattleId = nextId()

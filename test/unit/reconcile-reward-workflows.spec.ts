@@ -1,8 +1,10 @@
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryRewardWorkflowRepository } from '../../src/adapters/outbound/persistence/InMemoryRewardWorkflowRepository'
+import { UpstreamServiceError } from '../../src/application/errors/UpstreamErrors'
 import { CreateRewardWorkflows } from '../../src/application/use-cases/CreateRewardWorkflows'
 import { ReconcileRewardWorkflows } from '../../src/application/use-cases/ReconcileRewardWorkflows'
 import { battleWithCombat } from '../fixtures/basic-attack'
+import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import { silentLogger } from '../fixtures/battle'
 
 const AT = new Date('2026-09-21T10:05:00.000Z')
@@ -28,7 +30,12 @@ describe('ReconcileRewardWorkflows (HU-22): cierra el hueco entre sala FINISHED 
 
     const workflows = new InMemoryRewardWorkflowRepository()
     const createWorkflows = new CreateRewardWorkflows(workflows)
-    const reconcile = new ReconcileRewardWorkflows(rooms, createWorkflows, silentLogger)
+    const reconcile = new ReconcileRewardWorkflows(
+      rooms,
+      createWorkflows,
+      recordingBattleCommitments(),
+      silentLogger,
+    )
 
     expect(await workflows.findByBattleAndPlayer(room.id, 'a1')).toBeNull()
 
@@ -49,7 +56,12 @@ describe('ReconcileRewardWorkflows (HU-22): cierra el hueco entre sala FINISHED 
 
     const workflows = new InMemoryRewardWorkflowRepository()
     const createWorkflows = new CreateRewardWorkflows(workflows)
-    const reconcile = new ReconcileRewardWorkflows(rooms, createWorkflows, silentLogger)
+    const reconcile = new ReconcileRewardWorkflows(
+      rooms,
+      createWorkflows,
+      recordingBattleCommitments(),
+      silentLogger,
+    )
     const since = new Date('2026-09-21T00:00:00.000Z')
 
     await reconcile.execute(since)
@@ -68,7 +80,12 @@ describe('ReconcileRewardWorkflows (HU-22): cierra el hueco entre sala FINISHED 
 
     const workflows = new InMemoryRewardWorkflowRepository()
     const createWorkflows = new CreateRewardWorkflows(workflows)
-    const reconcile = new ReconcileRewardWorkflows(rooms, createWorkflows, silentLogger)
+    const reconcile = new ReconcileRewardWorkflows(
+      rooms,
+      createWorkflows,
+      recordingBattleCommitments(),
+      silentLogger,
+    )
 
     const roomsChecked = await reconcile.execute(new Date('2026-09-21T10:05:01.000Z'))
 
@@ -85,15 +102,107 @@ describe('ReconcileRewardWorkflows (HU-22): cierra el hueco entre sala FINISHED 
       execute: () => Promise.reject(new Error('fallo simulado')),
     } as unknown as CreateRewardWorkflows
     const errors: Record<string, unknown>[] = []
-    const reconcile = new ReconcileRewardWorkflows(rooms, brokenCreate, {
-      ...silentLogger,
-      error: (_message: string, context: Record<string, unknown> = {}) => errors.push(context),
-    })
+    const reconcile = new ReconcileRewardWorkflows(
+      rooms,
+      brokenCreate,
+      recordingBattleCommitments(),
+      {
+        ...silentLogger,
+        error: (_message: string, context: Record<string, unknown> = {}) => errors.push(context),
+      },
+    )
 
     const roomsChecked = await reconcile.execute(new Date('2026-09-21T00:00:00.000Z'))
 
     expect(roomsChecked).toBe(1)
     expect(errors).toHaveLength(1)
     expect(errors[0]).toMatchObject({ roomId: room.id })
+  })
+
+  /**
+   * HU-29: `afterFinished` libera el compromiso sin esperar y el proceso puede
+   * morir antes de que la llamada salga; la reconciliacion es el reintento. Es
+   * seguro porque liberar es idempotente por contrato.
+   */
+  it('libera el compromiso de batalla de cada participante humano', async () => {
+    const rooms = new InMemoryBattleRoomRepository()
+    const room = finishedRoom()
+
+    await rooms.save(room, 0)
+
+    const commitments = recordingBattleCommitments()
+    const reconcile = new ReconcileRewardWorkflows(
+      rooms,
+      new CreateRewardWorkflows(new InMemoryRewardWorkflowRepository()),
+      commitments,
+      silentLogger,
+    )
+
+    await reconcile.execute(new Date('2026-09-21T00:00:00.000Z'))
+
+    expect(commitments.releases.map(({ playerId }) => playerId).sort()).toEqual(['a1', 'b1'])
+    expect(new Set(commitments.releases.map(({ roomId }) => roomId))).toEqual(new Set([room.id]))
+  })
+
+  it('reintentar la reconciliacion vuelve a liberar: la liberacion es idempotente', async () => {
+    const rooms = new InMemoryBattleRoomRepository()
+    const room = finishedRoom()
+
+    await rooms.save(room, 0)
+
+    const commitments = recordingBattleCommitments()
+    const reconcile = new ReconcileRewardWorkflows(
+      rooms,
+      new CreateRewardWorkflows(new InMemoryRewardWorkflowRepository()),
+      commitments,
+      silentLogger,
+    )
+    const since = new Date('2026-09-21T00:00:00.000Z')
+
+    await reconcile.execute(since)
+    await reconcile.execute(since)
+
+    expect(commitments.releases).toHaveLength(4)
+  })
+
+  it('un fallo al liberar un participante se registra y NO impide liberar al resto ni crear el workflow', async () => {
+    const rooms = new InMemoryBattleRoomRepository()
+    const room = finishedRoom()
+
+    await rooms.save(room, 0)
+
+    const commitments = recordingBattleCommitments()
+    const inner = commitments.release.bind(commitments)
+
+    commitments.release = (roomId, playerId) =>
+      playerId === 'a1'
+        ? Promise.reject(new UpstreamServiceError('player-inventory', 'no_alcanzable'))
+        : inner(roomId, playerId)
+
+    const workflows = new InMemoryRewardWorkflowRepository()
+    const errors: Record<string, unknown>[] = []
+    const reconcile = new ReconcileRewardWorkflows(
+      rooms,
+      new CreateRewardWorkflows(workflows),
+      commitments,
+      {
+        ...silentLogger,
+        error: (message: string, context: Record<string, unknown> = {}) =>
+          errors.push({ message, ...context }),
+      },
+    )
+
+    await reconcile.execute(new Date('2026-09-21T00:00:00.000Z'))
+
+    expect(errors).toEqual([
+      {
+        message: 'battle_commitment_reconciliacion_fallo',
+        roomId: room.id,
+        playerId: 'a1',
+        reason: 'UpstreamServiceError',
+      },
+    ])
+    expect(commitments.releases.map(({ playerId }) => playerId)).toEqual(['b1'])
+    expect(await workflows.findByBattleAndPlayer(room.id, 'a1')).not.toBeNull()
   })
 })

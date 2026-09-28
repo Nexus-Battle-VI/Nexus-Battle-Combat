@@ -35,6 +35,17 @@ export const graceDeadline = (absentSince: Date): Date =>
   new Date(absentSince.getTime() + DISCONNECT_GRACE_MS)
 
 /**
+ * Instante en que vence el compromiso de equipamiento de una batalla (HU-29).
+ *
+ * Es el vencimiento de la batalla MAS la gracia de reconexion: el compromiso debe
+ * sobrevivir a la batalla para que nadie pueda cambiar el equipamiento miembro a
+ * miembro, y su unico proposito es acotar el peor caso (bloqueo sin liberacion
+ * explicita). No se define una duracion nueva: se reutilizan las dos constantes.
+ */
+export const commitmentExpiresAt = (startedAt: Date): Date =>
+  new Date(battleDeadline(startedAt).getTime() + DISCONNECT_GRACE_MS)
+
+/**
  * El limite es INCLUSIVO (contrato §3): en el instante exacto del vencimiento ya
  * vencio. La frontera es `deadline - 1 ms` no vence; `deadline` si.
  */

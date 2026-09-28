@@ -65,5 +65,6 @@ export const combatProfileFrom = (hero: EquippedHero): CombatProfile => ({
     appliedToStats: effect.appliedToStats,
   })),
   maxPower: hero.maxPower,
+  ...(hero.level === undefined ? {} : { level: hero.level }),
   abilities: hero.abilities.map(copyAbility),
 })
