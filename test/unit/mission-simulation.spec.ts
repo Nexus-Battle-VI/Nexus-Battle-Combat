@@ -213,6 +213,30 @@ const heroActions = (request: MissionSimulationRequest) => {
   )
 }
 
+describe('hero level multiplies the final damage result (HU-08 CA-06, option A)', () => {
+  const basicOnly = [{ priority: 'HIGH' as const, steps: [basic] }]
+  const withLevel = (level: number | undefined): MissionSimulationRequest => {
+    const request = duel([], basicOnly)
+
+    return level === undefined
+      ? request
+      : { ...request, hero: { ...request.hero, profile: { ...request.hero.profile, level } } }
+  }
+  const firstDamage = (request: MissionSimulationRequest): number =>
+    Number(heroActions(request).find((action) => Number(action.damage) > 0)?.damage)
+
+  it('level 3 deals at least 3x the damage of the same seeded hit at level 1 (fixed damage 1)', () => {
+    const base = firstDamage(withLevel(undefined))
+
+    expect(firstDamage(withLevel(1))).toBe(base)
+    expect(firstDamage(withLevel(3))).toBeGreaterThanOrEqual(base * 3)
+  })
+
+  it('is deterministic: the same request and level give the same damage', () => {
+    expect(firstDamage(withLevel(5))).toBe(firstDamage(withLevel(5)))
+  })
+})
+
 describe('rotation priority (HU-71 CA-02, CA-03)', () => {
   it('D-2: when the high rotation lacks Power, the medium one acts', () => {
     const actions = heroActions(

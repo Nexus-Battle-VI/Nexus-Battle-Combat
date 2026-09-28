@@ -93,6 +93,15 @@ export interface CombatProfile {
   readonly activeEffects: readonly CombatEffect[]
   /** HU-19: Poder maximo (`effectiveStats.power`). Ausente en un perfil anterior a HU-19. */
   readonly maxPower?: number
+  /**
+   * HU-08 (CA-06): nivel del heroe (`1..8`), tal como lo publica Player-Inventory.
+   * Multiplica el RESULTADO FINAL de la magnitud de Dano del heroe (opcion A,
+   * ver `applyLevelToMagnitudeResult`). `effectiveStats` ya incorpora el nivel en
+   * las estadisticas numericas (Ataque, Defensa, Vida, Poder); el Dano es una
+   * magnitud con dados que solo Combat puede resolver, asi que el nivel viaja
+   * aparte. Ausente en un perfil anterior a CA-06: se trata como nivel 1.
+   */
+  readonly level?: number
   /** HU-19: habilidades del heroe, en el orden de Catalog. Ausente en un perfil anterior a HU-19. */
   readonly abilities?: readonly CombatAbility[]
 }
@@ -255,10 +264,16 @@ export const createCombatProfile = (profile: CombatProfile): CombatProfile => {
     requireNonNegativeInteger(profile.attack, 'attack')
   }
 
-  const { maxPower, abilities, ...rest } = profile
+  const { maxPower, abilities, level, ...rest } = profile
 
   if (maxPower !== undefined) {
     requireNonNegativeInteger(maxPower, 'maxPower')
+  }
+
+  if (level !== undefined && (!Number.isInteger(level) || level < 1 || level > 8)) {
+    throw new InvalidCombatProfileError(
+      `El perfil de combate necesita "level" como entero entre 1 y 8. Se recibio ${String(level)}.`,
+    )
   }
 
   return Object.freeze({
@@ -268,6 +283,7 @@ export const createCombatProfile = (profile: CombatProfile): CombatProfile => {
       profile.activeEffects.map((effect) => Object.freeze({ ...effect })),
     ),
     ...(maxPower === undefined ? {} : { maxPower }),
+    ...(level === undefined ? {} : { level }),
     ...(abilities === undefined ? {} : { abilities: freezeAbilities(abilities) }),
   })
 }

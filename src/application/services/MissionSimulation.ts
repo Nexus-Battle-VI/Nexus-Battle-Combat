@@ -1,7 +1,10 @@
 import type { RandomSequenceFactoryPort } from '../ports/RandomSequencePort'
 import type { MissionSeed } from '../ports/MissionSeedPort'
 import { createBoundedRandom } from './BoundedRandom'
-import { calculateDamage } from '../../domain/policies/BasicAttackDamagePolicy'
+import {
+  applyLevelToMagnitudeResult,
+  calculateDamage,
+} from '../../domain/policies/BasicAttackDamagePolicy'
 import { dieFaceFromIndex } from '../../domain/policies/AttackProfile'
 import {
   evaluateMissionAbility,
@@ -35,6 +38,8 @@ export interface MissionSimulationRequest {
     readonly profile: {
       readonly name?: string
       readonly subtype: string
+      /** HU-08 (CA-06): nivel del heroe; multiplica el resultado final de su Dano. Ausente = 1. */
+      readonly level?: number
       readonly effectiveStats: {
         readonly health: number
         readonly power: number
@@ -410,8 +415,11 @@ export const simulateMission = (
           enemy.defense + guard - modifierOf(enemyModifiers, 'DEFENSE') + 10
         if (hit) {
           critical = random.nextInt(8000) < Math.floor(rules.criticalChance * 8000)
+          // CA-06 (opcion A): nivel x resultado de la magnitud; los bonos se suman despues.
           const baseDamage =
-            magnitude(heroDamage) + damageBonus + modifierOf(heroModifiers, 'DAMAGE')
+            applyLevelToMagnitudeResult(magnitude(heroDamage), request.hero.profile.level) +
+            damageBonus +
+            modifierOf(heroModifiers, 'DAMAGE')
           dealt = Math.min(
             enemyHealth,
             Math.max(

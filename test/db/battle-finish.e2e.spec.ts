@@ -57,6 +57,7 @@ import {
   up as upFinishMigration,
 } from '../../src/adapters/outbound/persistence/migrations/009-battle-rooms-finish'
 import { up as upSkillEffectsMigration } from '../../src/adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
+import { up as upHeroLevelMigration } from '../../src/adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
 import { indexForEffect, indexForFace } from '../fixtures/basic-attack'
 import { MutableClock } from '../fixtures/chat-harness'
 import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
@@ -1216,6 +1217,7 @@ describe('HU-21 de extremo a extremo (protocolo): finalizacion entre dos cliente
       } finally {
         await upFinishMigration(db)
         await upSkillEffectsMigration(db)
+        await upHeroLevelMigration(db)
       }
 
       await expect(
