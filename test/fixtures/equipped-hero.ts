@@ -142,7 +142,12 @@ export const equippedHeroContractBody = (
   reference: 'guerrero-armas',
   subtype: 'GUERRERO_ARMAS',
   name: 'Guerrero Armas',
+  // HU-08 (CA-06): Player-Inventory publica `level` y `levelStats` (base x nivel).
+  // Combat NO los modela (el parser los ignora): `effectiveStats` YA incorpora el
+  // nivel. El heroe del fixture esta en nivel 1, asi que `levelStats = baseStats`.
+  level: 1,
   baseStats: { ...baseStats },
+  levelStats: { ...baseStats },
   effectiveStats: { ...effectiveStats },
   activeEffects: [
     attackBonusEffect,

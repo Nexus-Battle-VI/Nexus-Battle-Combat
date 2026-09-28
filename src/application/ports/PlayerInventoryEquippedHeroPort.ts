@@ -16,16 +16,14 @@
  *    `effectiveStats`, `activeEffects`, `ready` y `selectedAt`.
  *  - `name` NO se modela: ningun caso de uso de Combat lo usa (el nombre visible
  *    del participante sale de Account, no del heroe).
- *  - `level` NO viaja en este contrato. La premisa original (DP-3: "el dato no
- *    existe en el dominio de Player-Inventory") YA NO ES CIERTA: desde HU-08/HU-09
- *    Player-Inventory guarda `HeroProgression` (nivel y XP por jugador+heroe).
- *    Sigue fuera de `equipped-hero` porque ninguna regla formal lo exige: HU-19
- *    (Management#63) condiciona una habilidad solo a clase, turno, Poder y
- *    recarga, y el multiplicador de estadisticas por nivel (`CA-06` de HU-08) esta
- *    pendiente de decision del PO. Si alguna de las dos se aprueba, ESTA frontera
- *    debe evolucionar de forma autoritativa (Player-Inventory entrega el nivel,
- *    Combat lo valida); no basta con deshabilitar botones en Web. Combat NO LO
- *    INVENTA.
+ *  - `level` y `levelStats` SI viajan upstream (HU-08, `CA-06`), pero Combat NO
+ *    los modela ni los usa: `effectiveStats` YA ES `(base x nivel) +
+ *    equipamiento`, asi que el nivel ya esta incorporado. **Combat no debe volver
+ *    a multiplicar por el nivel** (se contaria dos veces). Cuando Player-Inventory
+ *    desplego CA-06 el cambio fue aditivo; el parser ignora los campos que no
+ *    modela. Si una regla formal futura (p. ej. HU-19 o un nivel minimo de sala)
+ *    exigiera el nivel en Combat, se modelaria aqui como dato AUTORITATIVO de
+ *    Player-Inventory; Combat NO LO INVENTA.
  *  - `maxPower` NO es un campo del contrato: es `effectiveStats.power` (HU-11),
  *    la base de Catalog mas los modificadores permanentes del equipamiento
  *    (HU-28). El parser lo deriva de `effectiveStats.power`, asi que los dos
