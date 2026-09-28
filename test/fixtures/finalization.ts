@@ -1,3 +1,4 @@
+import { recordingBattleCommitments } from './battle-commitments'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import type { BattleDeadlineBookPort } from '../../src/application/ports/BattleDeadlineBookPort'
 import type { BattlePresencePort } from '../../src/application/ports/BattlePresencePort'
@@ -92,6 +93,7 @@ export interface FinalizationHarness {
   readonly notifier: RealtimeNotifierPort
   readonly release: BattleRoomReleasePort
   readonly results: BattleResultPublisherPort
+  readonly commitments: ReturnType<typeof recordingBattleCommitments>
   readonly order: string[]
   readonly notifications: BattleFinishedNotification[]
   readonly published: { roomId: string; events: readonly BattleEvent[] }[]
@@ -123,6 +125,7 @@ export const finalizationHarness = (
   const rooms = new InMemoryBattleRoomRepository()
   const presence = memoryPresence()
   const book = memoryBook()
+  const commitments = recordingBattleCommitments()
   const notifications: BattleFinishedNotification[] = []
   const published: { roomId: string; events: readonly BattleEvent[] }[] = []
 
@@ -149,7 +152,7 @@ export const finalizationHarness = (
     },
   }
 
-  const finalizer = new BattleFinalizer(book, presence, notifier, release, results, {
+  const finalizer = new BattleFinalizer(book, presence, notifier, release, results, commitments, {
     error: () => {
       order.push('log:error')
     },
@@ -164,6 +167,7 @@ export const finalizationHarness = (
     notifier,
     release,
     results,
+    commitments,
     order,
     notifications,
     published,

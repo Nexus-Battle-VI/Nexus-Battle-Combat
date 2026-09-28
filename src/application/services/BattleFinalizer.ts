@@ -1,6 +1,7 @@
 import type { BattleRoom } from '../../domain/entities/BattleRoom'
 import { creditEntitlements } from '../../domain/policies/BattleCreditsPolicy'
 import type { BattleDeadlineBookPort } from '../ports/BattleDeadlineBookPort'
+import type { BattleHeroCommitmentPort } from '../ports/BattleHeroCommitmentPort'
 import type { BattlePresencePort } from '../ports/BattlePresencePort'
 import type {
   BattleFinishedNotification,
@@ -40,6 +41,7 @@ export class BattleFinalizer {
     private readonly notifier: RealtimeNotifierPort,
     private readonly release: BattleRoomReleasePort,
     private readonly results: BattleResultPublisherPort,
+    private readonly commitments: BattleHeroCommitmentPort,
     private readonly logger: BattleFinalizerLogger,
   ) {}
 
@@ -60,6 +62,12 @@ export class BattleFinalizer {
     this.step('room_release', () => {
       this.release.release(room.id)
     })
+    // HU-29: se libera el compromiso de batalla de cada humano. La restriccion
+    // temporal de HU-29 deja de aplicarse aqui y el flujo normal de inventario
+    // vuelve.
+    this.step('battle_commitment_release', () => {
+      this.releaseBattleCommitments(room)
+    })
     this.step('result_publish', () => {
       const notification = buildBattleFinishedNotification(room)
 
@@ -67,6 +75,37 @@ export class BattleFinalizer {
         this.results.publish(notification)
       }
     })
+  }
+
+  /**
+   * HU-29: libera el compromiso de batalla de cada participante humano.
+   *
+   * FIRE-AND-FORGET, igual que `results.publish()` y por el mismo motivo: la
+   * batalla YA esta persistida como `FINISHED` y una llamada HTTP lenta no puede
+   * retrasar el cierre ni, mucho menos, revertirlo. Un fallo se registra y lo
+   * reintenta `ReconcileRewardWorkflows`, que es idempotente.
+   *
+   * Se recorre el RESULTADO y no la plantilla: los `AI` no tienen `playerId` y no
+   * hay nada que liberar por ellos.
+   */
+  private releaseBattleCommitments(room: BattleRoom): void {
+    const playerIds = [
+      ...new Set(
+        (room.result?.participants ?? []).flatMap((participant) =>
+          participant.playerId === null ? [] : [participant.playerId],
+        ),
+      ),
+    ]
+
+    for (const playerId of playerIds) {
+      void this.commitments.release(room.id, playerId).catch((error: unknown) => {
+        this.logger.error('battle_commitment_liberacion_fallo', {
+          roomId: room.id,
+          playerId,
+          reason: error instanceof Error ? error.name : 'desconocido',
+        })
+      })
+    }
   }
 
   private step(name: string, action: () => void): void {

@@ -9,6 +9,7 @@ import { ProcessRewardWorkflow } from '../../src/application/use-cases/ProcessRe
 import { ReconcileRewardWorkflows } from '../../src/application/use-cases/ReconcileRewardWorkflows'
 import type { RewardTable } from '../../src/domain/reward/RewardTable'
 import { silentLogger } from '../fixtures/battle'
+import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import { battleWithCombat } from '../fixtures/basic-attack'
 
 const fakeReconcile = (
@@ -180,7 +181,12 @@ describe('IntervalRewardWorkflowScheduler — onApplicationBootstrap con Reconci
 
     const workflows = new InMemoryRewardWorkflowRepository()
     const createWorkflows = new CreateRewardWorkflows(workflows)
-    const reconcile = new ReconcileRewardWorkflows(rooms, createWorkflows, silentLogger)
+    const reconcile = new ReconcileRewardWorkflows(
+      rooms,
+      createWorkflows,
+      recordingBattleCommitments(),
+      silentLogger,
+    )
     const process = new ProcessRewardWorkflow(
       workflows,
       { creditBattleReward: () => Promise.reject(new Error('sin Wallet en esta prueba')) },

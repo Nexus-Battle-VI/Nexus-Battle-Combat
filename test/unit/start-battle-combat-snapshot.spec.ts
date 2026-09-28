@@ -7,6 +7,7 @@ import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasic
 import { StartBattle } from '../../src/application/use-cases/StartBattle'
 import { RandomEffectType } from '../../src/domain/random-effects/RandomEffectType'
 import { equippedHeroFixture } from '../fixtures/equipped-hero'
+import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import {
   ROOM_ID,
   clock,
@@ -47,7 +48,14 @@ const start = async (
 
   await repo.save(preparingRoom(options), 0)
 
-  const useCase = new StartBattle(repo, clock, heroes, scriptedRandom([0]), recordingPublisher())
+  const useCase = new StartBattle(
+    repo,
+    clock,
+    heroes,
+    scriptedRandom([0]),
+    recordingPublisher(),
+    recordingBattleCommitments(),
+  )
   const dto = await useCase.execute(ROOM_ID, 'a1')
 
   return { repo, heroes, dto, useCase }
@@ -242,6 +250,7 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
         heroes,
         scriptedRandom([0]),
         recordingPublisher(),
+        recordingBattleCommitments(),
       )
 
       await expect(useCase.execute(ROOM_ID, 'a1')).rejects.toBeInstanceOf(UpstreamServiceError)
