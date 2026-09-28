@@ -16,6 +16,7 @@ import * as experienceRollsMigration from '../../adapters/outbound/persistence/m
 import * as missionSimulationIntakeMigration from '../../adapters/outbound/persistence/migrations/014-mission-simulation-intake'
 import * as missionSimulationResultsMigration from '../../adapters/outbound/persistence/migrations/015-mission-simulation-results'
 import * as battleRoomsSkillEffectsMigration from '../../adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
+import * as battleRoomsHeroLevelMigration from '../../adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -83,6 +84,7 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '014-mission-simulation-intake', up: missionSimulationIntakeMigration.up },
   { name: '015-mission-simulation-results', up: missionSimulationResultsMigration.up },
   { name: '016-battle-rooms-skill-effects', up: battleRoomsSkillEffectsMigration.up },
+  { name: '017-battle-rooms-hero-level', up: battleRoomsHeroLevelMigration.up },
 ]
 
 const REGISTRY = '_migrations'

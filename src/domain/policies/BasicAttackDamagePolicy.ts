@@ -69,6 +69,40 @@ export const assertSupportedDamage = (magnitude: CombatMagnitude | null): Suppor
   return { mode: 'DICE', count: magnitude.count, sides: magnitude.sides }
 }
 
+/**
+ * HU-08, CA-06 — el nivel multiplica el Dano del heroe. **OPCION A (decision del
+ * PO): se multiplica el RESULTADO FINAL de la magnitud.** No se cambia la
+ * notacion del dado (`1d6` no pasa a `3d6` ni a `1d18`) ni el numero de sorteos:
+ * se tira igual y el total se multiplica.
+ *
+ *   nivel 3, Dano `1d6`, tirada 4  ->  4 x 3 = 12
+ *   nivel 3, Dano fijo 5           ->  5 x 3 = 15
+ *
+ * Para una magnitud compuesta (`6 + 1d6`, p. ej. la Sanacion de un Chaman) la
+ * regla es `(6 + tirada) x nivel`, no `6 x nivel + tirada`; hoy ningun heroe
+ * ofensivo tiene una magnitud compuesta y la Sanacion base del heroe no tiene
+ * consumidor en el motor (las habilidades de sanacion llevan su propia magnitud).
+ *
+ * ORDEN respecto al equipamiento (CA-06): `(magnitud x nivel) + bonos`. Los
+ * ajustes de efectos temporales/equipamiento se suman DESPUES y no se multiplican.
+ * `level` ausente (perfil anterior a CA-06) equivale a 1.
+ */
+export const applyLevelToMagnitudeResult = (result: number, level: number | undefined): number => {
+  const factor = level ?? 1
+
+  if (!Number.isInteger(factor) || factor < 1 || factor > 8) {
+    throw new DomainError(`El nivel debe ser un entero entre 1 y 8. Se recibio ${String(factor)}.`)
+  }
+
+  if (!Number.isInteger(result) || result < 0) {
+    throw new DomainError(
+      `El resultado de la magnitud debe ser un entero no negativo. Se recibio ${String(result)}.`,
+    )
+  }
+
+  return result * factor
+}
+
 /** `floor(dano base x porcentaje / 100)`: aritmetica entera, sin decimales intermedios que sobrevivan. */
 export const calculateDamage = (baseDamage: number, percent: number): number => {
   if (!Number.isInteger(baseDamage) || baseDamage < 0) {

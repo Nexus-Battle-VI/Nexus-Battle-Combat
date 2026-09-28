@@ -142,7 +142,11 @@ export const equippedHeroContractBody = (
   reference: 'guerrero-armas',
   subtype: 'GUERRERO_ARMAS',
   name: 'Guerrero Armas',
+  // HU-08 (CA-06): Player-Inventory publica `level` y `levelStats` (base x nivel). Combat
+  // modela `level` (multiplica el resultado del Dano) e ignora `levelStats`.
+  level: 1,
   baseStats: { ...baseStats },
+  levelStats: { ...baseStats },
   effectiveStats: { ...effectiveStats },
   activeEffects: [
     attackBonusEffect,
@@ -164,6 +168,7 @@ export const equippedHeroFixture = (overrides: Partial<EquippedHero> = {}): Equi
   heroId: '0f0a0d0e-6c1b-4d63-8a53-2c1d5b7e9a10',
   reference: 'guerrero-armas',
   subtype: 'GUERRERO_ARMAS',
+  level: 1,
   baseStats,
   effectiveStats,
   maxPower: effectiveStats.power,

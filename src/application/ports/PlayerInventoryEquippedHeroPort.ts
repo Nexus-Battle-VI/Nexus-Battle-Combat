@@ -16,16 +16,14 @@
  *    `effectiveStats`, `activeEffects`, `ready` y `selectedAt`.
  *  - `name` NO se modela: ningun caso de uso de Combat lo usa (el nombre visible
  *    del participante sale de Account, no del heroe).
- *  - `level` NO viaja en este contrato. La premisa original (DP-3: "el dato no
- *    existe en el dominio de Player-Inventory") YA NO ES CIERTA: desde HU-08/HU-09
- *    Player-Inventory guarda `HeroProgression` (nivel y XP por jugador+heroe).
- *    Sigue fuera de `equipped-hero` porque ninguna regla formal lo exige: HU-19
- *    (Management#63) condiciona una habilidad solo a clase, turno, Poder y
- *    recarga, y el multiplicador de estadisticas por nivel (`CA-06` de HU-08) esta
- *    pendiente de decision del PO. Si alguna de las dos se aprueba, ESTA frontera
- *    debe evolucionar de forma autoritativa (Player-Inventory entrega el nivel,
- *    Combat lo valida); no basta con deshabilitar botones en Web. Combat NO LO
- *    INVENTA.
+ *  - `level` (HU-08, CA-06) SI se modela, OPCIONAL (un Player-Inventory anterior a
+ *    CA-06 no lo manda; ausente = nivel 1). `effectiveStats` YA es
+ *    `(base x nivel) + equipamiento` para Ataque, Defensa, Vida y Poder, asi que
+ *    Combat NO vuelve a multiplicar esas. Lo usa UNICAMENTE para el Dano: es una
+ *    magnitud con dados que solo Combat resuelve, y por decision del PO (opcion A)
+ *    el nivel multiplica el RESULTADO FINAL de la tirada (`applyLevelToMagnitudeResult`).
+ *    `levelStats` viaja upstream pero Combat no lo modela. Combat NO inventa el
+ *    nivel: es dato autoritativo de Player-Inventory.
  *  - `maxPower` NO es un campo del contrato: es `effectiveStats.power` (HU-11),
  *    la base de Catalog mas los modificadores permanentes del equipamiento
  *    (HU-28). El parser lo deriva de `effectiveStats.power`, asi que los dos
@@ -63,6 +61,12 @@ export interface EquippedHero {
   readonly reference: string
   /** Codigo de subtipo (`hero-subtypes-v1`), tal como lo publica Player-Inventory. */
   readonly subtype: string
+  /**
+   * Nivel del heroe (HU-08, `1..8`). Ausente si Player-Inventory es anterior a
+   * CA-06. `effectiveStats` ya incorpora el nivel en las estadisticas numericas;
+   * Combat lo usa UNICAMENTE para multiplicar el resultado final del Dano.
+   */
+  readonly level?: number
   readonly baseStats: EquippedHeroStats
   /**
    * Estadisticas con los modificadores PERMANENTES ya incorporados

@@ -307,6 +307,23 @@ const parseBlockers = (value: unknown): readonly EquippedHeroBlocker[] => {
   return value.map(parseBlocker)
 }
 
+/**
+ * `level` (HU-08, CA-06) es OPCIONAL: un Player-Inventory anterior a CA-06 no lo
+ * manda, y entonces se omite (nivel 1 implicito). Si viene, debe ser un entero
+ * `1..8`: un valor distinto es un dato upstream mal formado, no se corrige.
+ */
+const parseOptionalLevel = (value: unknown): { readonly level?: number } => {
+  if (value === undefined || value === null) {
+    return {}
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 8) {
+    throw invalidResponse()
+  }
+
+  return { level: value }
+}
+
 const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHero => {
   const record = asRecord(body)
 
@@ -324,6 +341,7 @@ const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHer
     heroId: nonEmptyString(record.heroId),
     reference: nonEmptyString(record.reference),
     subtype: nonEmptyString(record.subtype),
+    ...parseOptionalLevel(record.level),
     baseStats: parseStats(record.baseStats),
     effectiveStats,
     maxPower: effectiveStats.power,
