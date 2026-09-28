@@ -98,3 +98,66 @@ describe('BattleFinalizer — orden, resiliencia y notificacion', () => {
     expect(h.notifications).toEqual([])
   })
 })
+
+/**
+ * HU-29: al terminar la batalla deja de aplicarse la restriccion temporal de
+ * equipamiento, asi que el finalizador libera el compromiso de CADA humano. Va
+ * despues de soltar la sala y antes de notificar a los consumidores, y un fallo
+ * no puede impedir la notificacion: la batalla ya esta cerrada.
+ */
+describe('BattleFinalizer — liberacion del compromiso de batalla (HU-29)', () => {
+  it('libera el compromiso de cada participante humano, una vez por sala', () => {
+    const h = finalizationHarness()
+    const room = finishedRoom()
+
+    h.finalizer.afterFinished(room)
+
+    expect(h.commitments.releases).toEqual([
+      { roomId: room.id, playerId: 'a1' },
+      { roomId: room.id, playerId: 'b1' },
+    ])
+  })
+
+  it('libera DESPUES de soltar la sala y ANTES de notificar a los consumidores', () => {
+    const h = finalizationHarness()
+    const room = finishedRoom()
+    const inner = h.commitments.release.bind(h.commitments)
+
+    h.commitments.release = (roomId, playerId) => {
+      h.order.push(`compromiso:${playerId}`)
+
+      return inner(roomId, playerId)
+    }
+
+    h.finalizer.afterFinished(room)
+
+    expect(h.order).toEqual([
+      'notify:FINISHED',
+      `release:${room.id}`,
+      'compromiso:a1',
+      'compromiso:b1',
+      'publish:result',
+    ])
+  })
+
+  it('un fallo al liberar se registra y NO impide notificar a los consumidores', async () => {
+    const h = finalizationHarness()
+    const room = finishedRoom()
+
+    h.commitments.failReleases = true
+
+    expect(() => {
+      h.finalizer.afterFinished(room)
+    }).not.toThrow()
+
+    // La liberacion es fire-and-forget: su fallo se registra en un microtask.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0)
+    })
+
+    expect(h.order).toContain('log:error')
+    expect(h.order).toContain('publish:result')
+    expect(h.notifications).toHaveLength(1)
+    expect(h.commitments.releases).toEqual([])
+  })
+})

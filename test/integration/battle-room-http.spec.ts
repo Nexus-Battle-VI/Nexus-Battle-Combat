@@ -17,7 +17,9 @@ import {
   PLAYER_INVENTORY_EQUIPPED_HERO,
   type PlayerInventoryEquippedHeroPort,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
+import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
 import { equippedHeroFixture } from '../fixtures/equipped-hero'
+import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import {
   Role,
   TOKEN_VERIFIER,
@@ -213,6 +215,8 @@ describe('POST/GET/cancel /api/v1/combat/rooms', () => {
       .useValue(stubAccountProfiles)
       .overrideProvider(PLAYER_INVENTORY_EQUIPPED_HERO)
       .useValue(stubEquippedHeroes)
+      .overrideProvider(BATTLE_HERO_COMMITMENTS)
+      .useValue(recordingBattleCommitments())
       .compile()
 
     app = moduleRef.createNestApplication()

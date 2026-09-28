@@ -59,6 +59,8 @@ import {
 import { up as upSkillEffectsMigration } from '../../src/adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
 import { indexForEffect, indexForFace } from '../fixtures/basic-attack'
 import { MutableClock } from '../fixtures/chat-harness'
+import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
+import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import { equippedHeroFixture, shieldStrikeAbility } from '../fixtures/equipped-hero'
 
 /**
@@ -230,6 +232,11 @@ describe('HU-21 de extremo a extremo (protocolo): finalizacion entre dos cliente
       .useValue(accounts)
       .overrideProvider(PLAYER_INVENTORY_EQUIPPED_HERO)
       .useValue(heroes)
+      // HU-29: el compromiso de equipamiento es una llamada saliente a
+      // Player/Inventory; aqui se sustituye por un doble (el cliente HTTP tiene su
+      // propia prueba unitaria).
+      .overrideProvider(BATTLE_HERO_COMMITMENTS)
+      .useValue(recordingBattleCommitments())
       .overrideProvider(BATTLE_RANDOM_SEQUENCE)
       .useValue(sequence)
       .overrideProvider(CLOCK)
