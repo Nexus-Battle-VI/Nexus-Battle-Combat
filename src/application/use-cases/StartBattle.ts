@@ -28,6 +28,7 @@ import type { BattleEventPublisherPort } from '../ports/BattleEventPublisherPort
 import type { BattleConnectionsPort } from '../ports/BattleConnectionsPort'
 import type { BattleDeadlineBookPort } from '../ports/BattleDeadlineBookPort'
 import type { BattleHeroCommitmentPort } from '../ports/BattleHeroCommitmentPort'
+import type { BattleDropInventoryPort } from '../ports/BattleDropInventoryPort'
 import type { BattlePresencePort } from '../ports/BattlePresencePort'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../ports/ClockPort'
@@ -99,6 +100,8 @@ export class StartBattle {
     private readonly presence: BattlePresencePort | null = null,
     private readonly book: BattleDeadlineBookPort | null = null,
     private readonly connections: BattleConnectionsPort | null = null,
+    /** HU-30: congela las identidades/tasas mientras el compromiso HU-29 está activo. */
+    private readonly dropInventory: BattleDropInventoryPort | null = null,
   ) {}
 
   async execute(roomId: string, requesterId: string): Promise<BattleRoomDto> {
@@ -138,6 +141,16 @@ export class StartBattle {
     // con el loadout modificable, que es justo lo que la HU prohibe. En este
     // orden, el peor caso es un compromiso sin batalla, que caduca solo.
     await this.commitBattleHeroes(room, heroes, startedAt)
+    if (this.dropInventory !== null) {
+      for (const [playerId, hero] of heroes) {
+        await this.dropInventory.capture({
+          battleId: room.id,
+          playerId,
+          heroId: hero.heroId,
+          loadoutVersion: hero.loadoutVersion,
+        })
+      }
+    }
 
     let saved
     try {

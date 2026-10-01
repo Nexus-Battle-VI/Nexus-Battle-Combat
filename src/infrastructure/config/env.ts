@@ -71,6 +71,7 @@ export interface AppConfig {
   readonly playerInventoryServiceBaseUrl: string | null
   /** URL base de Wallet para el contrato interno `battle-reward` (HU-22, `hu-22-reward-contract-v1` §3). Sin barra final. */
   readonly walletServiceBaseUrl: string | null
+  readonly notificationsServiceBaseUrl?: string | null
   /** Tiempo de espera de las llamadas HTTP internas salientes (Account, Player-Inventory, Wallet). */
   readonly internalHttpTimeoutMs: number
   readonly chat: ChatConfig
@@ -220,6 +221,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   const accountServiceBaseUrl = readString(env, 'ACCOUNT_SERVICE_BASE_URL', '')
   const playerInventoryServiceBaseUrl = readString(env, 'PLAYER_INVENTORY_SERVICE_BASE_URL', '')
   const walletServiceBaseUrl = readString(env, 'WALLET_SERVICE_BASE_URL', '')
+  const notificationsServiceBaseUrl = readString(env, 'NOTIFICATIONS_SERVICE_BASE_URL', '')
 
   // Igual que AUTH_MODE/PERSISTENCE_DRIVER: en produccion, HU-15.2 no puede
   // arrancar sin poder resolver displayName/heroId -- lo contrario dejaria
@@ -266,6 +268,8 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     playerInventoryServiceBaseUrl:
       playerInventoryServiceBaseUrl === '' ? null : playerInventoryServiceBaseUrl,
     walletServiceBaseUrl: walletServiceBaseUrl === '' ? null : walletServiceBaseUrl,
+    notificationsServiceBaseUrl:
+      notificationsServiceBaseUrl === '' ? null : notificationsServiceBaseUrl,
     internalHttpTimeoutMs: readInteger(env, 'INTERNAL_HTTP_TIMEOUT_MS', 3_000, 100, 30_000),
     chat: {
       // El tope 2000 acota lo que el validador del motor admite (8000 unidades,

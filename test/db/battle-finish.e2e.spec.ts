@@ -61,7 +61,9 @@ import { up as upHeroLevelMigration } from '../../src/adapters/outbound/persiste
 import { indexForEffect, indexForFace } from '../fixtures/basic-attack'
 import { MutableClock } from '../fixtures/chat-harness'
 import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
+import { BATTLE_DROP_INVENTORY } from '../../src/application/ports/BattleDropInventoryPort'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
 import { equippedHeroFixture, shieldStrikeAbility } from '../fixtures/equipped-hero'
 
 /**
@@ -238,6 +240,8 @@ describe('HU-21 de extremo a extremo (protocolo): finalizacion entre dos cliente
       // propia prueba unitaria).
       .overrideProvider(BATTLE_HERO_COMMITMENTS)
       .useValue(recordingBattleCommitments())
+      .overrideProvider(BATTLE_DROP_INVENTORY)
+      .useValue(recordingBattleDropInventory())
       .overrideProvider(BATTLE_RANDOM_SEQUENCE)
       .useValue(sequence)
       .overrideProvider(CLOCK)

@@ -65,6 +65,14 @@ import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTo
 import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClient'
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
 import { PlayerInventoryBattleCommitmentHttpClient } from '../../adapters/outbound/http/PlayerInventoryBattleCommitmentHttpClient'
+import { PlayerInventoryBattleDropHttpClient } from '../../adapters/outbound/http/PlayerInventoryBattleDropHttpClient'
+import { NotificationsBattleDropHttpClient } from '../../adapters/outbound/http/NotificationsBattleDropHttpClient'
+import { BATTLE_DROP_INVENTORY, type BattleDropInventoryPort } from '../../application/ports/BattleDropInventoryPort'
+import { BATTLE_DROP_NOTIFIER, type BattleDropNotificationPort } from '../../application/ports/BattleDropNotificationPort'
+import { BATTLE_DROP_WORKFLOWS, type BattleDropWorkflowRepositoryPort } from '../../application/ports/BattleDropWorkflowRepositoryPort'
+import { InMemoryBattleDropWorkflowRepository } from '../../adapters/outbound/persistence/InMemoryBattleDropWorkflowRepository'
+import { MongoBattleDropWorkflowRepository } from '../../adapters/outbound/persistence/MongoBattleDropWorkflowRepository'
+import { IntervalBattleDropScheduler } from '../../adapters/outbound/system/IntervalBattleDropScheduler'
 import { PlayerInventoryGrantHttpClient } from '../../adapters/outbound/http/PlayerInventoryGrantHttpClient'
 import { WalletHttpClient } from '../../adapters/outbound/http/WalletHttpClient'
 import { WalletStakeHttpClient } from '../../adapters/outbound/http/WalletStakeHttpClient'
@@ -176,6 +184,7 @@ import {
 import { createBoundedRandom } from '../../application/services/BoundedRandom'
 import { BattleDeadlineSettler } from '../../application/services/BattleDeadlineSettler'
 import { BattleFinalizer } from '../../application/services/BattleFinalizer'
+import { PersistVersusDropDecision } from '../../application/services/PersistVersusDropDecision'
 import { StakeReleaser } from '../../application/services/StakeReleaser'
 import { StakeReserver } from '../../application/services/StakeReserver'
 import { StakeSettler } from '../../application/services/StakeSettler'
@@ -814,6 +823,34 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       inject: [DATABASE],
     },
     {
+      provide: BATTLE_DROP_WORKFLOWS,
+      useFactory: (db: Db | null): BattleDropWorkflowRepositoryPort =>
+        db === null
+          ? new InMemoryBattleDropWorkflowRepository()
+          : new MongoBattleDropWorkflowRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: IntervalBattleDropScheduler,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        workflows: BattleDropWorkflowRepositoryPort,
+        inventory: BattleDropInventoryPort,
+        commitments: BattleHeroCommitmentPort,
+        notifications: BattleDropNotificationPort,
+        logger: Logger,
+      ): IntervalBattleDropScheduler =>
+        new IntervalBattleDropScheduler(rooms, workflows, inventory, commitments, notifications, logger),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        BATTLE_DROP_WORKFLOWS,
+        BATTLE_DROP_INVENTORY,
+        BATTLE_HERO_COMMITMENTS,
+        BATTLE_DROP_NOTIFIER,
+        LOGGER,
+      ],
+    },
+    {
       provide: REWARD_CREDIT_PORT,
       useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): RewardCreditPort => {
         if (config.internalServiceAuthSecret === null || config.walletServiceBaseUrl === null) {
@@ -1100,6 +1137,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         presence: BattlePresencePort,
         book: BattleDeadlineBookPort,
         connections: BattleConnectionsPort,
+        dropInventory: BattleDropInventoryPort,
       ): StartBattle =>
         new StartBattle(
           rooms,
@@ -1111,6 +1149,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           presence,
           book,
           connections,
+          dropInventory,
         ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
@@ -1122,6 +1161,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_PRESENCE,
         BATTLE_DEADLINE_BOOK,
         BATTLE_CONNECTIONS,
+        BATTLE_DROP_INVENTORY,
       ],
     },
     // HU-29 (Task HU-29.2): el compromiso de batalla que bloquea el equipamiento
@@ -1162,6 +1202,52 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       },
       inject: [APP_CONFIG, CLOCK, LOGGER],
     },
+    {
+      provide: BATTLE_DROP_INVENTORY,
+      useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): BattleDropInventoryPort => {
+        if (
+          config.internalServiceAuthSecret === null ||
+          config.playerInventoryServiceBaseUrl === null
+        ) {
+          const unavailable = (): Promise<never> =>
+            Promise.reject(new UpstreamServiceError('player-inventory', 'no_configurado'))
+          return { capture: unavailable, find: unavailable, transfer: unavailable, closeBattle: unavailable }
+        }
+        return new PlayerInventoryBattleDropHttpClient({
+          baseUrl: config.playerInventoryServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
+    {
+      provide: BATTLE_DROP_NOTIFIER,
+      useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): BattleDropNotificationPort => {
+        if (
+          config.internalServiceAuthSecret === null ||
+          config.notificationsServiceBaseUrl === null ||
+          config.notificationsServiceBaseUrl === undefined
+        ) {
+          return {
+            notify: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('notifications', 'no_configurado')),
+          }
+        }
+        return new NotificationsBattleDropHttpClient({
+          baseUrl: config.notificationsServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
     // Sin ruta publica: lo invocaran las acciones validas de HU-18/HU-19 al
     // terminar un turno. Web nunca decide `turno + 1`.
     {
@@ -1181,6 +1267,14 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       useFactory: (): RoomCommandLockPort => new ChannelLock(),
     },
     {
+      provide: PersistVersusDropDecision,
+      useFactory: (
+        inventory: BattleDropInventoryPort,
+        sequence: RandomSequencePort,
+      ): PersistVersusDropDecision => new PersistVersusDropDecision(inventory, sequence),
+      inject: [BATTLE_DROP_INVENTORY, BATTLE_RANDOM_SEQUENCE],
+    },
+    {
       provide: EXECUTE_BASIC_ATTACK,
       useFactory: (
         rooms: BattleRoomRepositoryPort,
@@ -1188,13 +1282,16 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         sequence: RandomSequencePort,
         lock: RoomCommandLockPort,
         settler: BattleDeadlineSettler,
-      ): ExecuteBasicAttack => new ExecuteBasicAttack(rooms, clock, sequence, lock, settler),
+        versusDrop: PersistVersusDropDecision,
+      ): ExecuteBasicAttack =>
+        new ExecuteBasicAttack(rooms, clock, sequence, lock, settler, undefined, versusDrop),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
         BATTLE_RANDOM_SEQUENCE,
         ROOM_COMMAND_LOCK,
         BATTLE_DEADLINE_SETTLER,
+        PersistVersusDropDecision,
       ],
     },
     {
@@ -1218,7 +1315,9 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         lock: RoomCommandLockPort,
         basicAttack: ExecuteBasicAttack,
         settler: BattleDeadlineSettler,
-      ): UseSkill => new UseSkill(rooms, clock, sequence, lock, basicAttack, settler),
+        versusDrop: PersistVersusDropDecision,
+      ): UseSkill =>
+        new UseSkill(rooms, clock, sequence, lock, basicAttack, settler, undefined, versusDrop),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
@@ -1226,6 +1325,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         ROOM_COMMAND_LOCK,
         EXECUTE_BASIC_ATTACK,
         BATTLE_DEADLINE_SETTLER,
+        PersistVersusDropDecision,
       ],
     },
     {

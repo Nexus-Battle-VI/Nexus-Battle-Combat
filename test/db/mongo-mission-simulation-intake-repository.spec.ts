@@ -37,7 +37,7 @@ describe('MongoMissionSimulationIntakeRepository', () => {
   })
 
   it('registers migration 014 after experience rolls', () => {
-    expect(MIGRATIONS.at(-1)?.name).toBe('017-battle-rooms-hero-level')
+    expect(MIGRATIONS.at(-1)?.name).toBe('018-battle-drop-workflows')
   })
 
   it('stores one durable fingerprint and rejects a conflicting retry after restart', async () => {
