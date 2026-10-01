@@ -174,6 +174,55 @@ describe('WalletStakeHttpClient (HU-23, hu-23-battle-stake-v1 §5)', () => {
     ).toHaveLength(2)
   })
 
+  // Pasada de estabilizacion economica: un ganador SIN apuesta propia
+  // (`holdId: null`, ver `BattleStakePolicy`) debe viajar tal cual por la
+  // red -- este cliente nunca inventa un holdId ni lo omite del cuerpo.
+  it('settle envia holdId: null para un ganador sin apuesta propia, sin inventar ningun valor', async () => {
+    let capturedBody: string | undefined
+    const fetchImpl = ((_url: string, init?: RequestInit): Promise<Response> => {
+      capturedBody = init?.body as string
+
+      return Promise.resolve(
+        jsonResponse(200, {
+          operationId: 'battle:room-1:stakes:settle',
+          applied: true,
+          results: [
+            {
+              playerId: 'sub-2',
+              holdId: 'battle:room-1:stakes:settle',
+              balance: 108,
+              reserved: 0,
+              available: 108,
+            },
+          ],
+        }),
+      )
+    }) as unknown as typeof fetch
+
+    const client = new WalletStakeHttpClient({ ...baseOptions, fetchImpl })
+
+    await client.settle({
+      operationId: 'battle:room-1:stakes:settle',
+      battleId: 'room-1',
+      settlements: [
+        {
+          playerId: 'sub-1',
+          holdId: 'battle:room-1:player:sub-1:stake:reserve',
+          outcome: 'CAPTURED',
+          amount: 8,
+        },
+        { playerId: 'sub-2', holdId: null, outcome: 'CREDITED', amount: 8 },
+      ],
+    })
+
+    const sent = JSON.parse(capturedBody ?? '{}') as {
+      settlements: readonly { playerId: string; holdId: string | null }[]
+    }
+    const winner = sent.settlements.find((entry) => entry.playerId === 'sub-2')
+
+    expect(winner?.holdId).toBeNull()
+  })
+
   it('409 se traduce a StakeOperationConflictError', async () => {
     const fetchImpl = (() =>
       Promise.resolve(jsonResponse(409, { code: 'OPERATION_CONFLICT' }))) as unknown as typeof fetch
