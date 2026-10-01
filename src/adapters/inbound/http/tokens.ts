@@ -55,3 +55,10 @@ export const ACCEPT_MISSION_SIMULATION_REQUEST = Symbol('AcceptMissionSimulation
 export const RUN_MISSION_SIMULATION = Symbol('RunMissionSimulation')
 /** Estimacion de exito sin guardar nada (diseno «misiones jugables», P-J7). */
 export const ESTIMATE_MISSION_OUTCOME = Symbol('EstimateMissionOutcome')
+/**
+ * Management#517 (EN de `tournament-rooms`): salas de combate que el servicio
+ * Tournament reserva para cada justa, via rutas internas HMAC.
+ */
+export const CREATE_TOURNAMENT_ROOM = Symbol('CreateTournamentRoom')
+export const START_TOURNAMENT_ROOM = Symbol('StartTournamentRoom')
+export const GET_TOURNAMENT_ROOM_RECORD = Symbol('GetTournamentRoomRecord')

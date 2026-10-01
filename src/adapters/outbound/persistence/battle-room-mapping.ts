@@ -125,6 +125,17 @@ export interface BattleRoomDocument {
    * HU-21 no lo tiene y se restaura como `null` (y su estado nunca es FINISHED).
    */
   readonly result?: Readonly<Record<string, unknown>> | null
+  /**
+   * Management#517 (migracion 018): identificacion de torneo si la sala nacio
+   * por la ruta interna `tournament-rooms`. Aditivo y opcional: un documento
+   * de lobby (HU-14) nunca lo tiene y se restaura como `null`.
+   */
+  readonly tournament?: {
+    readonly operationId: string
+    readonly tournamentId: string
+    readonly encounterId: string
+    readonly requestHash: string
+  } | null
 }
 
 const toInt = (value: Int32 | number, field: string, roomId: string): number => {
@@ -209,6 +220,7 @@ export const toSnapshot = (document: BattleRoomDocument): BattleRoomSnapshot => 
       document.result === undefined || document.result === null
         ? null
         : parseBattleResult(document.result),
+    tournament: document.tournament ?? null,
   }
 }
 
@@ -304,4 +316,5 @@ export const toDocument = (snapshot: BattleRoomSnapshot): BattleRoomDocument => 
   // JSON puro, igual que el `payload` de un evento: el documento guarda la
   // forma validada por `parseBattleResult`, no el objeto tipado del dominio.
   result: snapshot.result as unknown as Readonly<Record<string, unknown>> | null,
+  tournament: snapshot.tournament,
 })

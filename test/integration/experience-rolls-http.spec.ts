@@ -165,8 +165,12 @@ describe('POST /api/internal/v1/combat/experience-rolls', () => {
       .send(body as object)
   }
 
-  it('la lista cerrada de consumidores sigue siendo SOLO missions (no se amplia)', () => {
-    expect(INTERNAL_CALLERS).toEqual(['missions'])
+  it('la lista cerrada de consumidores es una decision de codigo, no de configuracion', () => {
+    // Management#517 (EN de `tournament-rooms`) añadió 'tournament' a la
+    // lista: sigue siendo un arreglo fijo en código, revisado por Pull
+    // Request, no una variable de entorno que cualquier despliegue pueda
+    // ampliar en silencio.
+    expect(INTERNAL_CALLERS).toEqual(['missions', 'tournament'])
   })
 
   it('sin firma responde 401 y no toca la persistencia', async () => {

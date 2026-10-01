@@ -122,6 +122,8 @@ describe('BattleDeadlineSettler — una sola escritura y publicacion posterior',
       findFinishedSince: (since) => h.rooms.findFinishedSince(since),
       findCancelledSince: (since) => h.rooms.findCancelledSince(since),
       findActiveByParticipant: (playerId) => h.rooms.findActiveByParticipant(playerId),
+      findByTournamentOperationId: (operationId) =>
+        h.rooms.findByTournamentOperationId(operationId),
       save: () => {
         saves += 1
 
