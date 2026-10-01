@@ -44,6 +44,8 @@ export class GetTournamentRoomRecord {
 
     return {
       roomId: room.id,
+      tournamentId: room.tournament.tournamentId,
+      encounterId: room.tournament.encounterId,
       status: room.status,
       startedAt: room.battle === null ? null : room.battle.startedAt.toISOString(),
       result: room.result,

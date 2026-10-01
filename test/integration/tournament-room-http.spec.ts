@@ -392,6 +392,8 @@ describe('Management#517: rutas internas de tournament-rooms', () => {
       const afterStart = await signed('get', `${BASE_PATH}/${roomId}/record`)
       expect(afterStart.status).toBe(200)
       expect(afterStart.body.status).toBe('IN_BATTLE')
+      expect(afterStart.body.tournamentId).toBe('T1')
+      expect(afterStart.body.encounterId).toBe('T1:E1')
       expect(afterStart.body.startedAt).not.toBeNull()
       expect(afterStart.body.result).toBeNull()
       expect(afterStart.body.events.lastSeq).toBe(1)
@@ -452,6 +454,20 @@ describe('Management#517: rutas internas de tournament-rooms', () => {
 
       expect((await http().get(`${BASE_PATH}/${roomId}/record`)).status).toBe(401)
       expect((await signed('get', `${BASE_PATH}/${roomId}/record`, {}, 'catalog')).status).toBe(401)
+      expect((await signed('get', `${BASE_PATH}/${roomId}/record`, {}, 'missions')).status).toBe(
+        401,
+      )
+      expect((await signed('post', BASE_PATH, CREATE_BODY(), 'missions')).status).toBe(401)
+      expect(
+        (
+          await signed(
+            'post',
+            `${BASE_PATH}/${roomId}/start`,
+            { operationId: 'start-denied', tournamentId: 'T1', encounterId: 'T1:E1' },
+            'missions',
+          )
+        ).status,
+      ).toBe(401)
     })
   })
 })

@@ -68,6 +68,8 @@ describe('GetTournamentRoomRecord (Management#517)', () => {
     const record = await useCase.execute(ROOM_ID, 0)
 
     expect(record.roomId).toBe(ROOM_ID)
+    expect(record.tournamentId).toBe('T1')
+    expect(record.encounterId).toBe('T1:E1')
     expect(record.status).toBe('PREPARING')
     expect(record.startedAt).toBeNull()
     expect(record.result).toBeNull()

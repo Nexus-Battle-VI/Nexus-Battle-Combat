@@ -49,7 +49,7 @@ import type { CreateTournamentRoom } from '../../../application/use-cases/Create
 import type { StartTournamentRoom } from '../../../application/use-cases/StartTournamentRoom'
 import type { GetTournamentRoomRecord } from '../../../application/use-cases/GetTournamentRoomRecord'
 import { canonicalBodyHash } from '../../outbound/identity/internal-signature'
-import { InternalOnly } from './auth/decorators'
+import { InternalOnly, InternalServices } from './auth/decorators'
 import {
   tournamentRoomAfterSeqOf,
   tournamentRoomCreateRequestOf,
@@ -74,6 +74,7 @@ import { CREATE_TOURNAMENT_ROOM, GET_TOURNAMENT_ROOM_RECORD, START_TOURNAMENT_RO
 @ApiHeader({ name: 'x-internal-timestamp', required: true })
 @ApiHeader({ name: 'x-internal-signature', required: true })
 @InternalOnly()
+@InternalServices('tournament')
 @Controller('internal/v1/combat/tournament-rooms')
 export class TournamentRoomController {
   constructor(

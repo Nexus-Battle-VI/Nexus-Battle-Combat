@@ -28,6 +28,8 @@ export interface TournamentRoomEventPageDto {
  */
 export interface TournamentRoomRecordDto {
   readonly roomId: string
+  readonly tournamentId: string
+  readonly encounterId: string
   readonly status: string
   readonly startedAt: string | null
   readonly result: BattleResult | null
