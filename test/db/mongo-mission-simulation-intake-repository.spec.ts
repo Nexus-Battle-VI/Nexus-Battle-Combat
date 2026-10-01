@@ -37,7 +37,11 @@ describe('MongoMissionSimulationIntakeRepository', () => {
   })
 
   it('registers migration 014 after experience rolls', () => {
-    expect(MIGRATIONS.at(-1)?.name).toBe('017-battle-rooms-hero-level')
+    const names = MIGRATIONS.map((migration) => migration.name)
+    const experienceIndex = names.indexOf('013-experience-rolls')
+    const intakeIndex = names.indexOf('014-mission-simulation-intake')
+    expect(experienceIndex).toBeGreaterThanOrEqual(0)
+    expect(intakeIndex).toBe(experienceIndex + 1)
   })
 
   it('stores one durable fingerprint and rejects a conflicting retry after restart', async () => {
