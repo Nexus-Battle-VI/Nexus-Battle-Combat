@@ -18,7 +18,7 @@ import {
 } from '../../../outbound/identity/internal-signature'
 import type { ClockPort } from '../../../../application/ports/ClockPort'
 import type { Logger } from '../../../../infrastructure/observability/logger'
-import { IS_INTERNAL } from './decorators'
+import { INTERNAL_SERVICES, IS_INTERNAL } from './decorators'
 
 interface InternalRequest {
   readonly method?: string
@@ -90,6 +90,15 @@ export class InternalServiceGuard implements CanActivate {
     }
 
     if (!this.options.allowedServices.includes(service)) {
+      return this.reject('servicio_no_permitido')
+    }
+
+    const routeServices = this.options.reflector.getAllAndOverride<readonly string[] | undefined>(
+      INTERNAL_SERVICES,
+      [context.getHandler(), context.getClass()],
+    )
+
+    if (routeServices !== undefined && !routeServices.includes(service)) {
       return this.reject('servicio_no_permitido')
     }
 

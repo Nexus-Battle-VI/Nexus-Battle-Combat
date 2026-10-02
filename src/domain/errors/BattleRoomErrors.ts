@@ -72,6 +72,21 @@ export class InvalidRewardError extends DomainError {
 }
 
 /**
+ * Management#517 (`BattleRoom.createTournamentRoom()`): el roster declarado
+ * por el servicio Tournament no tiene la forma FIJA que exige una sala de
+ * torneo -- distinto de un numero de equipos (2) o de teams.length !== 2, de
+ * un equipo sin exactamente 2 jugadores humanos, o de dos equipos con el
+ * mismo `teamId`. 422: la peticion interna es sintacticamente valida pero
+ * incumple la regla de negocio "roster fijo de 4" (nunca "hasta 4").
+ */
+export class InvalidTournamentRosterError extends DomainError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidTournamentRosterError'
+  }
+}
+
+/**
  * Quien pide cancelar no es `createdBy`. 403: se separa de
  * `RoomNotCancellableError` porque es un error de autorizacion, no de estado
  * del agregado.

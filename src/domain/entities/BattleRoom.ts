@@ -36,6 +36,7 @@ import {
   InvalidModeCompositionError,
   InvalidRoomCapacityError,
   InvalidTeamCapacityError,
+  InvalidTournamentRosterError,
   PlayerAlreadyJoinedError,
   PlayerNotInRoomError,
   RoomCancellationForbiddenError,
@@ -295,6 +296,58 @@ export interface CreateBattleRoomInput {
   readonly reward: { readonly amount: number }
 }
 
+/**
+ * Identificacion de torneo persistida en la sala (Management#517, EN de
+ * `tournament-rooms`). Sirve DOS propositos a la vez:
+ *
+ *  1. IDEMPOTENCIA de creacion: `operationId` + `requestHash` permiten que
+ *     `CreateTournamentRoom` detecte un reintento con el MISMO cuerpo (misma
+ *     sala, sin crear una segunda) de uno con un cuerpo DISTINTO (409).
+ *  2. AISLAMIENTO del lobby publico: `BattleRoom.tournament !== null` es la
+ *     marca que `leave()` comprueba explicitamente (ver su guarda) porque el
+ *     estado `PREPARING` por si solo NO basta -- una sala de lobby normal SI
+ *     admite abandonar en `PREPARING`.
+ *
+ * `requestHash` es el resumen canonico del cuerpo HTTP original (mismo
+ * mecanismo que `MissionSimulationIntakeRepositoryPort`, HU-72): vive aqui y
+ * no en una coleccion aparte porque la propia sala ya es el documento que se
+ * guarda con bloqueo optimista, y un indice unico sobre
+ * `tournament.operationId` basta para la exclusion mutua en la insercion.
+ */
+export interface TournamentRoomMetadata {
+  readonly operationId: string
+  readonly tournamentId: string
+  readonly encounterId: string
+  readonly requestHash: string
+}
+
+/** Un jugador humano ya resuelto (Account + Player-Inventory) por `CreateTournamentRoom`. */
+export interface TournamentRosterMemberInput {
+  readonly playerId: string
+  readonly heroId: string | null
+  readonly heroLoadoutVersion: number | null
+  readonly displayName: string | null
+}
+
+/** Un equipo de la sala de torneo: `teamId` lo decide Tournament, no un enum fijo de Combat. */
+export interface TournamentTeamInput {
+  readonly teamId: string
+  readonly members: readonly TournamentRosterMemberInput[]
+}
+
+export interface CreateTournamentRoomInput {
+  readonly operationId: string
+  readonly tournamentId: string
+  readonly encounterId: string
+  readonly requestHash: string
+  /**
+   * Longitud fija 2, igual que `CreateBattleRoomInput.teamConfigs`: se recibe
+   * como arreglo (no tupla) porque procede de una peticion HTTP externa, y la
+   * longitud se valida en tiempo de ejecucion, no se asume del tipo.
+   */
+  readonly teams: readonly TournamentTeamInput[]
+}
+
 export interface BattleRoomSnapshot {
   readonly id: string
   readonly mode: BattleMode
@@ -315,6 +368,13 @@ export interface BattleRoomSnapshot {
    * si y solo si la sala esta `FINISHED` (invariante de la migracion `009`).
    */
   readonly result: BattleResult | null
+  /**
+   * Management#517: identificacion de torneo si la sala NACIO por la ruta
+   * interna `POST /internal/v1/combat/tournament-rooms`; `null` para
+   * cualquier sala del lobby publico (HU-14). Aditivo: un documento anterior
+   * a esta ampliacion no lo tiene y se restaura como `null`.
+   */
+  readonly tournament: TournamentRoomMetadata | null
 }
 
 /**
@@ -322,13 +382,16 @@ export interface BattleRoomSnapshot {
  * documentos y las instantaneas anteriores a la batalla sigan restaurandose
  * sin migracion de datos (ausente = sin batalla, sin eventos, sin comandos).
  * `result` es opcional por el mismo motivo: un documento anterior a HU-21 no lo
- * tiene y se restaura como `null`.
+ * tiene y se restaura como `null`. `tournament` es opcional por el MISMO
+ * criterio (Management#517): ausente = sala del lobby publico.
  */
 export type RestorableBattleRoomSnapshot = Omit<
   BattleRoomSnapshot,
-  'battle' | 'events' | 'handledCommands' | 'result'
+  'battle' | 'events' | 'handledCommands' | 'result' | 'tournament'
 > &
-  Partial<Pick<BattleRoomSnapshot, 'battle' | 'events' | 'handledCommands' | 'result'>>
+  Partial<
+    Pick<BattleRoomSnapshot, 'battle' | 'events' | 'handledCommands' | 'result' | 'tournament'>
+  >
 
 /** Estado de batalla que acompana a la sala; vacio hasta HU-17 `startBattle()`. */
 interface BattleExtras {
@@ -337,9 +400,23 @@ interface BattleExtras {
   readonly handledCommands: readonly HandledCommand[]
   /** HU-21: opcional en los constructores internos; ausente equivale a `null`. */
   readonly result?: BattleResult | null
+  /**
+   * Management#517: opcional en los constructores internos: ausente equivale
+   * a `null` (sala de lobby). Los metodos que mutan una sala YA creada deben
+   * preservarlo explicitamente (`tournament: this.tournament`) para que una
+   * sala de torneo conserve su identificacion durante toda la batalla -- ver
+   * el comentario de `TournamentRoomMetadata`.
+   */
+  readonly tournament?: TournamentRoomMetadata | null
 }
 
-const NO_BATTLE: BattleExtras = { battle: null, events: [], handledCommands: [], result: null }
+const NO_BATTLE: BattleExtras = {
+  battle: null,
+  events: [],
+  handledCommands: [],
+  result: null,
+  tournament: null,
+}
 
 /**
  * Causa con la que se finaliza una sala (HU-21, contrato §4). No es un estado:
@@ -399,6 +476,8 @@ export class BattleRoom {
   readonly handledCommands: readonly HandledCommand[]
   /** HU-21: resultado unico; `null` mientras la batalla no haya terminado. */
   readonly result: BattleResult | null
+  /** Management#517: `null` para toda sala del lobby publico (HU-14). */
+  readonly tournament: TournamentRoomMetadata | null
   private readonly _version: number
 
   private constructor(
@@ -424,6 +503,7 @@ export class BattleRoom {
     this.events = extras.events
     this.handledCommands = extras.handledCommands
     this.result = extras.result ?? null
+    this.tournament = extras.tournament ?? null
   }
 
   /**
@@ -508,6 +588,120 @@ export class BattleRoom {
   }
 
   /**
+   * Crea una sala de TORNEO (Management#517, EN de `tournament-rooms`): roster
+   * FIJO de 4 jugadores humanos (2 equipos de 2, nunca "hasta 4"), ya
+   * resueltos (displayName/heroId/heroLoadoutVersion) por `CreateTournamentRoom`
+   * contra los MISMOS puertos de Account/Player-Inventory que usa el flujo
+   * normal -- este metodo nunca llama a un puerto externo, igual que `create()`.
+   *
+   * DOS DIFERENCIAS DELIBERADAS frente a `create()`:
+   *
+   *  1. Nace DIRECTAMENTE en `PREPARING`, nunca en `WAITING_FOR_PLAYERS`: el
+   *     roster ya esta completo desde el origen (un torneo no tiene fase de
+   *     "esperar jugadores"), asi que la sala queda automaticamente FUERA de
+   *     `findWaitingForPlayers()` / el listado publico sin ningun filtro
+   *     adicional.
+   *  2. Lleva `tournament` (nunca `null`): ESE SOLO HECHO (1) no basta para
+   *     aislarla del lobby publico, porque `leave()` SI admite `PREPARING`
+   *     para una sala de lobby normal (abandonar libera un cupo y la sala
+   *     vuelve a `WAITING_FOR_PLAYERS`). Por eso `leave()` comprueba
+   *     `tournament !== null` explicitamente y rechaza sin importar el estado
+   *     (ver su guarda). `join()`/`cancel()` NO necesitan esa misma guarda:
+   *     su propia precondicion de estado (`WAITING_FOR_PLAYERS`) ya excluye
+   *     para siempre a una sala que nacio en `PREPARING`.
+   *
+   * `createdBy` es un identificador SINTETICO del servicio Tournament (nunca
+   * un `playerId` de jugador): la ruta publica `POST /rooms/:id/start` exige
+   * `requester === createdBy`, y un testimonio JWT de jugador jamas produce
+   * ese valor -- ningun jugador participante puede suplantar al creador.
+   *
+   * Sin apuesta (`reward.amount = 0`, ningun `stake`): un torneo no es una
+   * sala de lobby con premio configurable (RF-23 es una historia distinta).
+   */
+  static createTournamentRoom(
+    id: string,
+    createdBy: string,
+    input: CreateTournamentRoomInput,
+    at: Date,
+  ): BattleRoom {
+    const roomId = BattleRoomId.create(id)
+
+    if (createdBy.trim().length === 0) {
+      throw new DomainError('Una sala de torneo necesita un creador.')
+    }
+
+    if (input.teams.length !== 2) {
+      throw new InvalidTournamentRosterError('Una sala de torneo necesita exactamente 2 equipos.')
+    }
+
+    const teamInputA = input.teams[0]
+    const teamInputB = input.teams[1]
+
+    if (teamInputA === undefined || teamInputB === undefined) {
+      throw new InvalidTournamentRosterError('Una sala de torneo necesita exactamente 2 equipos.')
+    }
+
+    for (const teamInput of [teamInputA, teamInputB]) {
+      if (teamInput.teamId.trim().length === 0) {
+        throw new InvalidTournamentRosterError('Cada equipo de torneo necesita un identificador.')
+      }
+
+      if (teamInput.members.length !== 2) {
+        throw new InvalidTournamentRosterError(
+          `El equipo "${teamInput.teamId}" necesita exactamente 2 jugadores humanos (se recibieron ${String(teamInput.members.length)}).`,
+        )
+      }
+    }
+
+    if (teamInputA.teamId.trim() === teamInputB.teamId.trim()) {
+      throw new InvalidTournamentRosterError('Los dos equipos de torneo necesitan ids distintos.')
+    }
+
+    const toParticipants = (team: TournamentTeamInput): readonly ParticipantInput[] =>
+      team.members.map((member) => ({
+        kind: ParticipantKind.Human,
+        playerId: member.playerId,
+        heroId: member.heroId,
+        heroLoadoutVersion: member.heroLoadoutVersion,
+        displayName: member.displayName,
+      }))
+
+    const teamA = Team.create(teamInputA.teamId.trim(), 2, toParticipants(teamInputA), at)
+    const teamB = Team.create(teamInputB.teamId.trim(), 2, toParticipants(teamInputB), at)
+    const teams: readonly [Team, Team] = [teamA, teamB]
+
+    // Reutiliza EXACTAMENTE la misma comprobacion de composicion que `create()`
+    // (jugador humano duplicado entre equipos; PVP no admite AI): una sala de
+    // torneo es PVP por definicion, nunca se inventa una segunda regla.
+    BattleRoom.validateModeComposition(BattleMode.Pvp, teams)
+
+    const reward = RewardConfig.create(0)
+
+    return new BattleRoom(
+      roomId.value,
+      BattleMode.Pvp,
+      BattleRoomStatus.Preparing,
+      teams,
+      reward,
+      createdBy.trim(),
+      at,
+      0,
+      {
+        battle: null,
+        events: [],
+        handledCommands: [],
+        result: null,
+        tournament: {
+          operationId: input.operationId,
+          tournamentId: input.tournamentId,
+          encounterId: input.encounterId,
+          requestHash: input.requestHash,
+        },
+      },
+    )
+  }
+
+  /**
    * Reconstruye una sala desde persistencia. Solo comprobaciones
    * estructurales (`DomainError`): los datos ya pasaron las reglas de
    * negocio al escribirse.
@@ -573,7 +767,7 @@ export class BattleRoom {
       snapshot.createdBy.trim(),
       snapshot.createdAt,
       snapshot.version,
-      { battle, events, handledCommands, result },
+      { battle, events, handledCommands, result, tournament: snapshot.tournament ?? null },
     )
   }
 
@@ -745,6 +939,18 @@ export class BattleRoom {
    * completar el cupo total.
    */
   leave(playerId: string): BattleRoom {
+    // Management#517: una sala de torneo rechaza `leave()` SIN IMPORTAR SU
+    // ESTADO. `status !== WAITING_FOR_PLAYERS` (comprobacion de abajo) NO
+    // basta aqui: a diferencia de `join()`/`cancel()` (que exigen
+    // `WAITING_FOR_PLAYERS`, estado que una sala de torneo nunca alcanza),
+    // `leave()` SI admite `PREPARING` para una sala de lobby normal
+    // (abandonar libera un cupo y la sala vuelve a `WAITING_FOR_PLAYERS`) --
+    // y una sala de torneo nace PRECISAMENTE en `PREPARING`, con el roster ya
+    // completo. Ver `createTournamentRoom()`.
+    if (this.tournament !== null) {
+      throw new RoomNotLeavableError(this.id, this.status)
+    }
+
     // HU-17: con la batalla en curso la lista de participantes es definitiva
     // (RF-17): abandonar el lobby cambiaria el roster de una cola ya publicada.
     // HU-21: una sala FINISHED es terminal; tampoco admite `leave` (contrato §2).
@@ -827,6 +1033,7 @@ export class BattleRoom {
       events: this.events,
       handledCommands: this.handledCommands,
       result: this.result,
+      tournament: this.tournament,
     }
   }
 
@@ -979,6 +1186,7 @@ export class BattleRoom {
         events: this.events,
         handledCommands: this.handledCommands,
         result: this.result,
+        tournament: this.tournament,
       },
     )
   }
@@ -1047,7 +1255,7 @@ export class BattleRoom {
       this.createdBy,
       this.createdAt,
       this._version,
-      { battle, events: [event], handledCommands: [] },
+      { battle, events: [event], handledCommands: [], tournament: this.tournament },
     )
   }
 
@@ -1105,6 +1313,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
   }
@@ -1399,6 +1608,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
@@ -1823,6 +2033,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
@@ -1902,6 +2113,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
@@ -1982,6 +2194,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
@@ -2100,6 +2313,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
@@ -2171,6 +2385,7 @@ export class BattleRoom {
         events: [...this.events, event],
         handledCommands: this.handledCommands,
         result,
+        tournament: this.tournament,
       },
     )
   }
@@ -2298,6 +2513,7 @@ export class BattleRoom {
         events: [...this.events, event],
         // El vencimiento del turno NO consume comandos: no toca `handledCommands`.
         handledCommands: this.handledCommands,
+        tournament: this.tournament,
       },
     )
   }

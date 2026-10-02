@@ -8,6 +8,7 @@ import { MyBattleRoomsController } from '../../adapters/inbound/http/my-battle-r
 import { RewardStatusController } from '../../adapters/inbound/http/reward-status.controller'
 import { ExperienceRollsController } from '../../adapters/inbound/http/experience-rolls.controller'
 import { MissionSimulationsController } from '../../adapters/inbound/http/mission-simulations.controller'
+import { TournamentRoomController } from '../../adapters/inbound/http/tournament-room.controller'
 import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
 import {
@@ -51,6 +52,9 @@ import {
   STAKE_SCHEDULER_OPTIONS,
   STAKE_SETTLER,
   START_BATTLE,
+  CREATE_TOURNAMENT_ROOM,
+  START_TOURNAMENT_ROOM,
+  GET_TOURNAMENT_ROOM_RECORD,
 } from '../../adapters/inbound/http/tokens'
 import { AnonymousIdentityGuard } from '../../adapters/inbound/http/auth/anonymous.guard'
 import { InternalServiceGuard } from '../../adapters/inbound/http/auth/internal-service.guard'
@@ -211,6 +215,9 @@ import { JoinBattleRoom } from '../../application/use-cases/JoinBattleRoom'
 import { LeaveBattleRoom } from '../../application/use-cases/LeaveBattleRoom'
 import { ListAvailableBattleRooms } from '../../application/use-cases/ListAvailableBattleRooms'
 import { ListMyActiveBattleRooms } from '../../application/use-cases/ListMyActiveBattleRooms'
+import { CreateTournamentRoom } from '../../application/use-cases/CreateTournamentRoom'
+import { StartTournamentRoom } from '../../application/use-cases/StartTournamentRoom'
+import { GetTournamentRoomRecord } from '../../application/use-cases/GetTournamentRoomRecord'
 import { ReadChatHistory } from '../../application/use-cases/ReadChatHistory'
 import { SendChatMessage } from '../../application/use-cases/SendChatMessage'
 import { ChatRateLimiter } from '../../domain/policies/ChatRateLimiter'
@@ -235,7 +242,7 @@ export const DATABASE_LIFECYCLE = Symbol('DatabaseLifecycle')
  * de arquitectura, no un ajuste de configuracion: por eso vive en codigo, donde
  * cambiarla exige un Pull Request revisado.
  */
-export const INTERNAL_CALLERS: readonly string[] = ['missions']
+export const INTERNAL_CALLERS: readonly string[] = ['missions', 'tournament']
 
 /**
  * Identidad de Combat al llamar a las rutas `@InternalOnly()` de OTROS
@@ -262,6 +269,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     MyBattleRoomsController,
     ExperienceRollsController,
     MissionSimulationsController,
+    TournamentRoomController,
   ],
   providers: [
     {
@@ -479,6 +487,27 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         stakeReserver: StakeReserver,
       ): CreateBattleRoom => new CreateBattleRoom(rooms, ids, clock, stakeReserver),
       inject: [BATTLE_ROOM_REPOSITORY, ID_GENERATOR, CLOCK, STAKE_RESERVER],
+    },
+    // Management#517 (EN de `tournament-rooms`): reutiliza LOS MISMOS puertos
+    // de Account/Player-Inventory que `JoinBattleRoom` para resolver el
+    // roster fijo de 4 jugadores -- nunca una segunda implementacion.
+    {
+      provide: CREATE_TOURNAMENT_ROOM,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        ids: IdGeneratorPort,
+        clock: ClockPort,
+        accountProfiles: AccountBattleProfilePort,
+        equippedHeroes: PlayerInventoryEquippedHeroPort,
+      ): CreateTournamentRoom =>
+        new CreateTournamentRoom(rooms, ids, clock, accountProfiles, equippedHeroes),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        ID_GENERATOR,
+        CLOCK,
+        ACCOUNT_BATTLE_PROFILE,
+        PLAYER_INVENTORY_EQUIPPED_HERO,
+      ],
     },
     {
       provide: LIST_AVAILABLE_BATTLE_ROOMS,
@@ -1123,6 +1152,24 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_DEADLINE_BOOK,
         BATTLE_CONNECTIONS,
       ],
+    },
+    // Management#517: "arrancar esta sala de torneo concreta" delegando TAL
+    // CUAL en `StartBattle` -- NUNCA una segunda implementacion del motor.
+    {
+      provide: START_TOURNAMENT_ROOM,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        startBattle: StartBattle,
+      ): StartTournamentRoom => new StartTournamentRoom(rooms, startBattle),
+      inject: [BATTLE_ROOM_REPOSITORY, START_BATTLE],
+    },
+    // Management#517: lectura pura y paginada sobre `BattleRoom.events`, el
+    // MISMO almacenamiento que ya usan `BattleRoomRealtimeGateway`/`ResumeBattle`.
+    {
+      provide: GET_TOURNAMENT_ROOM_RECORD,
+      useFactory: (rooms: BattleRoomRepositoryPort): GetTournamentRoomRecord =>
+        new GetTournamentRoomRecord(rooms),
+      inject: [BATTLE_ROOM_REPOSITORY],
     },
     // HU-29 (Task HU-29.2): el compromiso de batalla que bloquea el equipamiento
     // del heroe mientras la sala esta activa. Sin configuracion NO se inventa un

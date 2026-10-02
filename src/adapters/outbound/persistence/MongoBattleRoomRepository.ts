@@ -81,6 +81,12 @@ export class MongoBattleRoomRepository implements BattleRoomRepositoryPort {
     return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
   }
 
+  async findByTournamentOperationId(operationId: string): Promise<BattleRoom | null> {
+    const document = await this.rooms.findOne({ 'tournament.operationId': operationId })
+
+    return document === null ? null : BattleRoom.restore(toSnapshot(document))
+  }
+
   async save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom> {
     const next: BattleRoomDocument = {
       ...toDocument(room.toSnapshot()),

@@ -68,6 +68,16 @@ export interface BattleRoomRepositoryPort {
    * vez; no se impone ninguna restriccion aqui.
    */
   findActiveByParticipant(playerId: string): Promise<readonly BattleRoom[]>
+
+  /**
+   * Sala de torneo por `operationId` (Management#517, idempotencia de
+   * `CreateTournamentRoom`): `null` si ningun `BattleRoom.tournament` tiene
+   * ese `operationId`. Lo usa el caso de uso para devolver la MISMA sala en
+   * un reintento (mismo cuerpo) o rechazar con 409 (cuerpo distinto), y
+   * tambien para resolver una carrera de insercion concurrente (el perdedor
+   * del indice unico relee por aqui en vez de fallar sin mas).
+   */
+  findByTournamentOperationId(operationId: string): Promise<BattleRoom | null>
 }
 
 /** Estados en los que una sala sigue viva para quien participa en ella. */

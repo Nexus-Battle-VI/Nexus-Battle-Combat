@@ -470,6 +470,8 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
         findFinishedSince: (since) => inner.findFinishedSince(since),
         findCancelledSince: (since) => inner.findCancelledSince(since),
         findActiveByParticipant: (playerId) => inner.findActiveByParticipant(playerId),
+        findByTournamentOperationId: (operationId) =>
+          inner.findByTournamentOperationId(operationId),
         save: async (room, expectedVersion) => {
           if (!intercepted) {
             intercepted = true
@@ -502,6 +504,8 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
         findFinishedSince: (since) => inner.findFinishedSince(since),
         findCancelledSince: (since) => inner.findCancelledSince(since),
         findActiveByParticipant: (playerId) => inner.findActiveByParticipant(playerId),
+        findByTournamentOperationId: (operationId) =>
+          inner.findByTournamentOperationId(operationId),
         save: () => Promise.reject(new RoomConflictError(ROOM_ID)),
       }
 
@@ -536,6 +540,8 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
         findFinishedSince: (since) => inner.findFinishedSince(since),
         findCancelledSince: (since) => inner.findCancelledSince(since),
         findActiveByParticipant: (playerId) => inner.findActiveByParticipant(playerId),
+        findByTournamentOperationId: (operationId) =>
+          inner.findByTournamentOperationId(operationId),
         save: () => Promise.reject(new Error('mongo caido')),
       }
 
