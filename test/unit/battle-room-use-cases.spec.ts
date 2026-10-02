@@ -308,6 +308,7 @@ describe('JoinBattleRoom', () => {
       findFinishedSince: (since) => repo.findFinishedSince(since),
       findCancelledSince: (since) => repo.findCancelledSince(since),
       findActiveByParticipant: (playerId) => repo.findActiveByParticipant(playerId),
+      findByTournamentOperationId: (operationId) => repo.findByTournamentOperationId(operationId),
       save: () => Promise.reject(new RoomConflictError(created.id)),
     }
     const join = new JoinBattleRoom(

@@ -123,6 +123,50 @@ export class StartBattle {
       throw new RoomAccessForbiddenError(roomId)
     }
 
+    return this.start(room, requesterId)
+  }
+
+  /**
+   * Arranca una sala YA AUTORIZADA por el llamante (Management#517, uso
+   * interno de `StartTournamentRoom`): SIN las dos comprobaciones de
+   * identidad de `execute()` ("¿es participante?", "¿es el creador?"),
+   * pensadas para un testimonio JWT de jugador sobre la ruta publica. Un
+   * caller interno ya se autorizo con HMAC en su propia ruta
+   * `@InternalOnly()` antes de llegar aqui -- y el `createdBy` de una sala
+   * de torneo es un identificador SINTETICO del servicio Tournament que
+   * NUNCA es participante por diseño (Management#517), asi que exigirle
+   * pasar `isParticipant()` seria imposible por construccion, no una
+   * proteccion real.
+   *
+   * Comparte TODO lo demas con `execute()`, letra por letra: idempotencia
+   * sobre `IN_BATTLE`, composicion balanceada, revalidacion precombate,
+   * compromiso de heroes, aleatoriedad centralizada, cola de turnos y
+   * difusion (ver `start()` mas abajo, factorizado de `execute()` sin
+   * cambiar su comportamiento).
+   */
+  async startRoom(roomId: string): Promise<BattleRoomDto> {
+    const room = await this.rooms.findById(roomId)
+
+    if (room === null) {
+      throw new RoomNotFoundError(roomId)
+    }
+
+    if (room.status === BattleRoomStatus.InBattle) {
+      return toBattleRoomDto(room, null)
+    }
+
+    return this.start(room, null)
+  }
+
+  /**
+   * Cuerpo compartido de `execute()`/`startRoom()`, a partir de donde ambos
+   * YA decidieron que `room` esta autorizada para arrancar. `viewerId`
+   * controla UNICAMENTE que apuesta propia expone el DTO (HU-23, §10) -- no
+   * es una comprobacion de identidad, esa ya ocurrio en el llamante.
+   */
+  private async start(room: BattleRoom, viewerId: string | null): Promise<BattleRoomDto> {
+    const roomId = room.id
+
     if (room.status !== BattleRoomStatus.Preparing) {
       throw new RoomNotStartableError(room.id, room.status)
     }
@@ -160,7 +204,7 @@ export class StartBattle {
         const current = await this.rooms.findById(roomId)
 
         if (current?.status === BattleRoomStatus.InBattle) {
-          return toBattleRoomDto(current, requesterId)
+          return toBattleRoomDto(current, viewerId)
         }
       }
 
@@ -170,7 +214,7 @@ export class StartBattle {
     this.publish(saved.id, saved.events)
     this.seedPresence(saved)
 
-    return toBattleRoomDto(saved, requesterId)
+    return toBattleRoomDto(saved, viewerId)
   }
 
   /**

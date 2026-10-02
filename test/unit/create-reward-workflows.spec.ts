@@ -80,6 +80,40 @@ describe('CreateRewardWorkflows', () => {
     })
   })
 
+  // Pasada de estabilizacion economica (seccion 6 del brief, HU-14.1): antes
+  // `configuredReward.amount` viajaba en la notificacion (HU-21 §9) pero
+  // NUNCA se sumaba al credito real -- el ganador siempre recibia solo la
+  // base de `BattleCreditsPolicy` (2/4), sin importar lo que la sala
+  // configurara. Ejemplo de aceptacion explicito del brief: base 2 + room
+  // reward 8 = 10 para el ganador (sin apuestas de por medio, esas se
+  // liquidan en Wallet via HU-23, no aqui).
+  it('roomReward > 0: se SUMA al credito del ganador; el perdedor NO la recibe', async () => {
+    const repository = new InMemoryRewardWorkflowRepository()
+    const useCase = new CreateRewardWorkflows(repository)
+
+    const [winner, loser] = await useCase.execute(notification({ configuredReward: { amount: 8 } }))
+
+    expect(winner).toMatchObject({
+      playerId: 'sub-winner',
+      creditsAmount: 10, // base 2 + room reward 8
+      victoryCreditsAmount: 2, // SIN inflar: es la senal de "victoria" para el cofre (HU-22), no el total.
+    })
+    expect(loser).toMatchObject({
+      playerId: 'sub-loser',
+      creditsAmount: 1, // intacto: la recompensa de sala nunca le corresponde al perdedor.
+      victoryCreditsAmount: 0,
+    })
+  })
+
+  it('roomReward = 0: funciona exactamente como antes (sin cambio de comportamiento)', async () => {
+    const repository = new InMemoryRewardWorkflowRepository()
+    const useCase = new CreateRewardWorkflows(repository)
+
+    const [winner] = await useCase.execute(notification({ configuredReward: { amount: 0 } }))
+
+    expect(winner).toMatchObject({ playerId: 'sub-winner', creditsAmount: 2 })
+  })
+
   it('un participante AI (sin playerId ni credits) no genera workflow', async () => {
     const repository = new InMemoryRewardWorkflowRepository()
     const useCase = new CreateRewardWorkflows(repository)

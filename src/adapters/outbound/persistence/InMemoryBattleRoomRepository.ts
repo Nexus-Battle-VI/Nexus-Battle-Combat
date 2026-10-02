@@ -82,11 +82,35 @@ export class InMemoryBattleRoomRepository implements BattleRoomRepositoryPort {
     return Promise.resolve(rooms)
   }
 
+  findByTournamentOperationId(operationId: string): Promise<BattleRoom | null> {
+    const found = [...this.byId.values()].find(
+      (snapshot) => snapshot.tournament?.operationId === operationId,
+    )
+
+    return Promise.resolve(found === undefined ? null : BattleRoom.restore(found))
+  }
+
   save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom> {
     const stored = this.byId.get(room.id)
     const storedVersion = stored?.version ?? 0
 
     if (storedVersion !== expectedVersion) {
+      return Promise.reject(new RoomConflictError(room.id))
+    }
+
+    // Management#517: reproduce el indice unico de Mongo sobre
+    // `tournament.operationId` en una insercion (ver migracion 018) -- dos
+    // creaciones concurrentes con el MISMO operationId no pueden progresar
+    // ambas, aunque generen `id` distintos.
+    if (
+      expectedVersion === 0 &&
+      room.tournament !== null &&
+      [...this.byId.values()].some(
+        (snapshot) =>
+          snapshot.id !== room.id &&
+          snapshot.tournament?.operationId === room.tournament?.operationId,
+      )
+    ) {
       return Promise.reject(new RoomConflictError(room.id))
     }
 

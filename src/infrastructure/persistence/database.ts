@@ -17,7 +17,8 @@ import * as missionSimulationIntakeMigration from '../../adapters/outbound/persi
 import * as missionSimulationResultsMigration from '../../adapters/outbound/persistence/migrations/015-mission-simulation-results'
 import * as battleRoomsSkillEffectsMigration from '../../adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
 import * as battleRoomsHeroLevelMigration from '../../adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
-import * as battleDropWorkflowsMigration from '../../adapters/outbound/persistence/migrations/018-battle-drop-workflows'
+import * as battleRoomsTournamentMigration from '../../adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
+import * as battleDropWorkflowsMigration from '../../adapters/outbound/persistence/migrations/019-battle-drop-workflows'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -86,7 +87,8 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '015-mission-simulation-results', up: missionSimulationResultsMigration.up },
   { name: '016-battle-rooms-skill-effects', up: battleRoomsSkillEffectsMigration.up },
   { name: '017-battle-rooms-hero-level', up: battleRoomsHeroLevelMigration.up },
-  { name: '018-battle-drop-workflows', up: battleDropWorkflowsMigration.up },
+  { name: '018-battle-rooms-tournament', up: battleRoomsTournamentMigration.up },
+  { name: '019-battle-drop-workflows', up: battleDropWorkflowsMigration.up },
 ]
 
 const REGISTRY = '_migrations'

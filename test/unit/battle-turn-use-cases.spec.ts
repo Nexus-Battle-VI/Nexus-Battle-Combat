@@ -197,6 +197,8 @@ describe('CompleteBattleTurn — avance server-side, idempotente y sin saltos (H
         findFinishedSince: (since) => inner.findFinishedSince(since),
         findCancelledSince: (since) => inner.findCancelledSince(since),
         findActiveByParticipant: (playerId) => inner.findActiveByParticipant(playerId),
+        findByTournamentOperationId: (operationId) =>
+          inner.findByTournamentOperationId(operationId),
         save: () => {
           saves += 1
 

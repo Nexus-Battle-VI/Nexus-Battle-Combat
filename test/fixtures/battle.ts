@@ -246,6 +246,7 @@ export const loggingRepository = (
   findFinishedSince: (since) => inner.findFinishedSince(since),
   findCancelledSince: (since) => inner.findCancelledSince(since),
   findActiveByParticipant: (playerId) => inner.findActiveByParticipant(playerId),
+  findByTournamentOperationId: (operationId) => inner.findByTournamentOperationId(operationId),
   save: async (room, expectedVersion) => {
     const saved = await inner.save(room, expectedVersion)
 

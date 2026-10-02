@@ -84,6 +84,7 @@ const setup = async (
     findFinishedSince: (since) => inner.findFinishedSince(since),
     findCancelledSince: (since) => inner.findCancelledSince(since),
     findActiveByParticipant: (playerId) => inner.findActiveByParticipant(playerId),
+    findByTournamentOperationId: (operationId) => inner.findByTournamentOperationId(operationId),
     save: (room, expectedVersion) => {
       saves += 1
 
@@ -603,6 +604,7 @@ describe('UseSkill — conflicto de version: NUNCA se vuelve a sortear', () => {
       findFinishedSince: (since) => inner.findFinishedSince(since),
       findCancelledSince: (since) => inner.findCancelledSince(since),
       findActiveByParticipant: (playerId) => inner.findActiveByParticipant(playerId),
+      findByTournamentOperationId: (operationId) => inner.findByTournamentOperationId(operationId),
       save: (room, expectedVersion) => {
         if (!thrown) {
           thrown = true

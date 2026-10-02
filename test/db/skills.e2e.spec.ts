@@ -16,6 +16,7 @@ import {
 import { up as upFinishMigration } from '../../src/adapters/outbound/persistence/migrations/009-battle-rooms-finish'
 import { up as upSkillEffectsMigration } from '../../src/adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
 import { up as upHeroLevelMigration } from '../../src/adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
+import { up as upTournamentMigration } from '../../src/adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
 import {
   ACCOUNT_BATTLE_PROFILE,
   type AccountBattleProfilePort,
@@ -1068,6 +1069,7 @@ describe('HU-19 de extremo a extremo (protocolo): habilidades entre dos clientes
         await upFinishMigration(db)
         await upSkillEffectsMigration(db)
         await upHeroLevelMigration(db)
+        await upTournamentMigration(db)
       }
 
       await expect(
