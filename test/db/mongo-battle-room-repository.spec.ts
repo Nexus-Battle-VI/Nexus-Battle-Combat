@@ -14,6 +14,8 @@ import type { TurnOrderEntry } from '../../src/domain/entities/TurnOrder'
 import { RoomConflictError } from '../../src/application/errors/ApplicationError'
 import { up as addHeroLevelToProfiles } from '../../src/adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
 import { TOURNAMENT_OPERATION_INDEX } from '../../src/adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
+import { up as addEpicToProfiles } from '../../src/adapters/outbound/persistence/migrations/020-battle-rooms-epic'
+import { golpeDeDefensaEpic } from '../fixtures/equipped-hero'
 import { MongoBattleRoomRepository } from '../../src/adapters/outbound/persistence/MongoBattleRoomRepository'
 import { describeError } from '../../src/infrastructure/observability/describe-error'
 import {
@@ -441,6 +443,101 @@ describe('MongoBattleRoomRepository', () => {
     const battle = fixed.battle as { combatants: { profile: { level: number } }[] }
     battle.combatants[0]!.profile.level = 9
     fixed._id = '3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a04'
+
+    await expect(rooms().insertOne(fixed as never)).rejects.toThrow()
+  })
+
+  /**
+   * HU-31 (contrato `hu-31-equipped-epic-v1`, migracion 020): el perfil congelado lleva
+   * `epic`. El validador tenia `additionalProperties: false` en el perfil, asi que sin la
+   * migracion la batalla no podria persistirse con una epica equipada. Se comprueba contra el
+   * motor real, y que reaplicarla es inocua.
+   */
+  const startedRoomWithEpic = (id: string): BattleRoom => {
+    let room = BattleRoom.create(id, CREATOR, validInput(), AT)
+
+    room = room.join(CREATOR, 'A', AT, 'Creador', 'hero-a', 0)
+    room = room.join('jugador-b', 'B', AT, 'Rival', 'hero-b', 0)
+
+    const order: TurnOrderEntry[] = [
+      {
+        teamLabel: 'A',
+        seat: 0,
+        kind: 'HUMAN',
+        playerId: CREATOR,
+        displayName: 'Creador',
+        heroId: 'hero-a',
+        heroSubtype: 'GUERRERO_ARMAS',
+      },
+      {
+        teamLabel: 'B',
+        seat: 0,
+        kind: 'HUMAN',
+        playerId: 'jugador-b',
+        displayName: 'Rival',
+        heroId: 'hero-b',
+        heroSubtype: 'GUERRERO_ARMAS',
+      },
+    ]
+    const combatants = order.map((entry) =>
+      Combatant.start(
+        entry,
+        createCombatProfile({
+          heroId: entry.heroId ?? 'hero',
+          subtype: 'GUERRERO_ARMAS',
+          maxHealth: 44,
+          attack: 10,
+          defense: 11,
+          damage: { mode: 'DICE', count: 1, sides: 6 },
+          activeEffects: [],
+          epic: golpeDeDefensaEpic,
+        }),
+      ),
+    )
+
+    return room.startBattle(order, AT, combatants)
+  }
+
+  it('el perfil de combate con `epic` se persiste y se recupera (migracion 020)', async () => {
+    const id = nextId()
+    await repository.save(startedRoomWithEpic(id), 0)
+
+    const profile = (await repository.findById(id))?.battle?.combatantFor({
+      teamLabel: 'A',
+      seat: 0,
+    })?.profile
+
+    expect(profile?.epic?.epicReference).toBe(golpeDeDefensaEpic.epicReference)
+    expect(profile?.epic?.applied.additionalApplied).not.toBeNull()
+  })
+
+  it('un perfil sin `epic` (heroe sin epica equipada) sigue siendo valido', async () => {
+    const id = nextId()
+    await repository.save(startedRoom(id), 0)
+
+    const profile = (await repository.findById(id))?.battle?.combatantFor({
+      teamLabel: 'A',
+      seat: 0,
+    })?.profile
+
+    expect(profile).not.toHaveProperty('epic')
+  })
+
+  it('la migracion 020 es idempotente y el motor rechaza una `epic` incompleta', async () => {
+    await addEpicToProfiles(db)
+    await addEpicToProfiles(db)
+
+    const id = nextId()
+    await repository.save(startedRoomWithEpic(id), 0)
+    expect((await repository.findById(id))?.battle).not.toBeNull()
+
+    const stored = await rooms().findOne({ _id: id })
+    const fixed = JSON.parse(JSON.stringify(stored)) as Record<string, unknown>
+    const battle = fixed.battle as {
+      combatants: { profile: { epic?: Record<string, unknown> } }[]
+    }
+    delete battle.combatants[0]!.profile.epic!.applied
+    fixed._id = nextId()
 
     await expect(rooms().insertOne(fixed as never)).rejects.toThrow()
   })

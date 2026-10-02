@@ -107,6 +107,46 @@ export interface EquippedHero {
   readonly loadoutVersion: number
   /** Instante ISO-8601 en que el jugador preparo el heroe. */
   readonly selectedAt: string
+  /**
+   * AMPLIACION ADITIVA (HU-31, contrato `hu-31-equipped-epic-v1` §5/§8).
+   *
+   * Epica equipada del heroe, YA RESUELTA por Player-Inventory (misma
+   * `applyEpicEffects` de siempre, invocada una vez por peticion, igual
+   * patron que `abilities`). Combat la RECIBE y la congela en el snapshot
+   * inicial de batalla (`CombatProfile.epic`); no la vuelve a resolver, no
+   * la ejecuta como accion de turno (eso sigue bloqueado, ver
+   * `docs/hu-19-skills.md`) y no la trata como candidata de drop PvP
+   * (HU-30: ese canal es `battle-drops/snapshots`, uno completamente
+   * distinto que nunca lee este campo).
+   *
+   * AUSENTE (no `null`) cuando el heroe no tiene epica equipada -- mismo
+   * criterio de ausencia explicita que el resto de este contrato.
+   */
+  readonly epic?: EquippedHeroEpic
+}
+
+/**
+ * Epica equipada, ya resuelta (HU-31). Lista blanca: ningun campo adicional
+ * de Catalog cruza esta frontera.
+ *
+ * `baseEffect`/`specificEffect` son la definicion cruda (para que una vista
+ * publica pueda mostrar "que hace" incluso sin coincidencia de subtipo);
+ * `applied.*` es el resultado YA resuelto por `applyEpicEffects` con el
+ * subtype real del heroe -- esto es lo que importa para congelar el
+ * snapshot: `baseApplied` siempre que la definicion lo declare (o `null` si
+ * es "No aplica"), `additionalApplied` SOLO si el subtype coincidio.
+ */
+export interface EquippedHeroEpic {
+  readonly epicProductId: string
+  readonly epicReference: string
+  readonly name: string
+  readonly compatibleHeroSubtype: string
+  readonly baseEffect: Readonly<Record<string, unknown>> | null
+  readonly specificEffect: Readonly<Record<string, unknown>>
+  readonly applied: {
+    readonly baseApplied: Readonly<Record<string, unknown>> | null
+    readonly additionalApplied: Readonly<Record<string, unknown>> | null
+  }
 }
 
 /** Costo de Poder de una habilidad tal como lo publica Catalog v1 (Tabla 7). */

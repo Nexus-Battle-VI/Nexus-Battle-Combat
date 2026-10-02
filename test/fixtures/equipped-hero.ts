@@ -3,6 +3,7 @@ import type {
   EquippedHeroAbility,
   EquippedHeroBlocker,
   EquippedHeroEffect,
+  EquippedHeroEpic,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
 
 /**
@@ -120,6 +121,48 @@ export const stoneHandAbility: EquippedHeroAbility = {
       hasActivationCondition: true,
     },
   ],
+}
+
+/**
+ * Epica equipada (HU-31, contrato `hu-31-equipped-epic-v1`), YA RESUELTA:
+ * subtipo coincidente con `GUERRERO_ARMAS` (`equippedHeroFixture`'s hero
+ * subtype), asi que `applied` lleva base Y especifico.
+ */
+export const golpeDeDefensaEpic: EquippedHeroEpic = {
+  epicProductId: '3f1e2d3c-4b5a-4c6d-8e7f-9a0b1c2d3e4f',
+  epicReference: 'golpe-de-defensa',
+  name: 'Golpe de defensa',
+  compatibleHeroSubtype: 'GUERRERO_ARMAS',
+  baseEffect: {
+    kind: 'STAT_MODIFIER',
+    target: 'SELF',
+    statistic: 'DEFENSE',
+    operation: 'INCREASE',
+    magnitude: { mode: 'FIXED', amount: 4 },
+  },
+  specificEffect: {
+    kind: 'STAT_MODIFIER',
+    target: 'SELF',
+    statistic: 'ATTACK',
+    operation: 'INCREASE',
+    magnitude: { mode: 'FIXED', amount: 2 },
+  },
+  applied: {
+    baseApplied: {
+      kind: 'STAT_MODIFIER',
+      target: 'SELF',
+      statistic: 'DEFENSE',
+      operation: 'INCREASE',
+      magnitude: { mode: 'FIXED', amount: 4 },
+    },
+    additionalApplied: {
+      kind: 'STAT_MODIFIER',
+      target: 'SELF',
+      statistic: 'ATTACK',
+      operation: 'INCREASE',
+      magnitude: { mode: 'FIXED', amount: 2 },
+    },
+  },
 }
 
 const baseStats = {

@@ -5,6 +5,7 @@ import type {
   EquippedHeroAbilityEffect,
   EquippedHeroBlocker,
   EquippedHeroEffect,
+  EquippedHeroEpic,
   EquippedHeroMagnitude,
   EquippedHeroPowerCost,
   EquippedHeroStats,
@@ -324,6 +325,50 @@ const parseOptionalLevel = (value: unknown): { readonly level?: number } => {
   return { level: value }
 }
 
+/**
+ * Un efecto de epica es un objeto OPACO (HU-31): Combat no interpreta su
+ * contenido, solo lo transporta dentro del snapshot congelado. Mismo criterio
+ * de forma minima que `asRecord`, sin exigir ningun campo concreto.
+ */
+const parseOpaqueEffect = (value: unknown): Readonly<Record<string, unknown>> => asRecord(value)
+
+const parseNullableOpaqueEffect = (value: unknown): Readonly<Record<string, unknown>> | null =>
+  value === null ? null : parseOpaqueEffect(value)
+
+/**
+ * Epica equipada (HU-31, contrato `hu-31-equipped-epic-v1` §5), YA RESUELTA
+ * por Player-Inventory. `applied.baseApplied`/`applied.additionalApplied` son
+ * el resultado de `applyEpicEffects`: lo unico que este cliente necesita
+ * congelar en el snapshot. `baseEffect`/`specificEffect` viajan tal cual la
+ * definicion de Catalog, solo para trazabilidad.
+ */
+const parseEpic = (value: unknown): EquippedHeroEpic => {
+  const record = asRecord(value)
+  const applied = asRecord(record.applied)
+
+  return {
+    epicProductId: nonEmptyString(record.epicProductId),
+    epicReference: nonEmptyString(record.epicReference),
+    name: nonEmptyString(record.name),
+    compatibleHeroSubtype: nonEmptyString(record.compatibleHeroSubtype),
+    baseEffect: parseNullableOpaqueEffect(record.baseEffect),
+    specificEffect: parseOpaqueEffect(record.specificEffect),
+    applied: {
+      baseApplied: parseNullableOpaqueEffect(applied.baseApplied),
+      additionalApplied: parseNullableOpaqueEffect(applied.additionalApplied),
+    },
+  }
+}
+
+/**
+ * `epic` es OPCIONAL (HU-31): ausente significa que el heroe no tiene
+ * ninguna epica equipada. A diferencia de `activeEffects`/`abilities`, una
+ * ausencia aqui NO es un contrato mal desplegado: es el estado normal de la
+ * mayoria de los heroes mientras HU-31 se adopta.
+ */
+const parseOptionalEpic = (value: unknown): { readonly epic?: EquippedHeroEpic } =>
+  value === undefined ? {} : { epic: parseEpic(value) }
+
 const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHero => {
   const record = asRecord(body)
 
@@ -351,5 +396,6 @@ const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHer
     blockers: parseBlockers(record.blockers),
     loadoutVersion: nonNegativeInteger(record.loadoutVersion),
     selectedAt: isoInstant(record.selectedAt),
+    ...parseOptionalEpic(record.epic),
   }
 }

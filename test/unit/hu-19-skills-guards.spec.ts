@@ -217,13 +217,22 @@ describe('HU-19 — el cliente no aporta resultados', () => {
   })
 })
 
-describe('HU-19 — la habilidad no cruza la frontera con la epica ni inventa su estado (HU-31)', () => {
-  it('ningun archivo de HU-19 declara activeEpic, epicSlot ni equivalentes', () => {
-    for (const source of [
-      ...HU_19_SOURCES,
-      file('domain/entities/CombatProfile.ts'),
-      file('domain/entities/Combatant.ts'),
-    ]) {
+describe('HU-19 — la ejecucion de habilidades no inventa un segundo estado de epica (HU-31)', () => {
+  /**
+   * HU-31 ya define la fuente autoritativa de "epica activa/equipada"
+   * (contrato `hu-31-equipped-epic-v1`, Player-Inventory): el campo
+   * `CombatProfile.epic`, congelado desde `PlayerInventoryEquippedHeroPort`.
+   * Por eso esta guarda YA NO cubre `CombatProfile.ts`/`Combatant.ts`
+   * -declaran ese campo por contrato, no por intuicion- y se queda
+   * exclusivamente en los 3 ficheros de EJECUCION de habilidades
+   * (`HU_19_SOURCES`), que siguen sin tocar la epica: ejecutarla como
+   * accion de turno (costo 0, recarga 2) sigue bloqueado -- ver
+   * `docs/hu-19-skills.md` §"Epica" -- hasta `hu-19-skills-v2`, y esta
+   * prueba es lo que impide que esa ejecucion se cuele por intuicion antes
+   * de que exista ese contrato.
+   */
+  it('ningun fichero de ejecucion de HU-19 declara activeEpic, epicSlot ni equivalentes', () => {
+    for (const source of HU_19_SOURCES) {
       expect({
         source,
         matches: /activeEpic|epicSlot|selectedEpic|equippedEpic|epicId/i.test(code(source)),

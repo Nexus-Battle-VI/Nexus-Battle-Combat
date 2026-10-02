@@ -19,6 +19,7 @@ import * as battleRoomsSkillEffectsMigration from '../../adapters/outbound/persi
 import * as battleRoomsHeroLevelMigration from '../../adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
 import * as battleRoomsTournamentMigration from '../../adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
 import * as battleDropWorkflowsMigration from '../../adapters/outbound/persistence/migrations/019-battle-drop-workflows'
+import * as battleRoomsEpicMigration from '../../adapters/outbound/persistence/migrations/020-battle-rooms-epic'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -89,6 +90,7 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '017-battle-rooms-hero-level', up: battleRoomsHeroLevelMigration.up },
   { name: '018-battle-rooms-tournament', up: battleRoomsTournamentMigration.up },
   { name: '019-battle-drop-workflows', up: battleDropWorkflowsMigration.up },
+  { name: '020-battle-rooms-epic', up: battleRoomsEpicMigration.up },
 ]
 
 const REGISTRY = '_migrations'
