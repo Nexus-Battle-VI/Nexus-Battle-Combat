@@ -30,7 +30,8 @@ export class PersistVersusDropDecision {
     if (
       action === undefined ||
       !['basicAttackResolved', 'skillUsed', 'directDamageSkillUsed'].includes(action.type)
-    ) return next
+    )
+      return next
 
     const payload = action.payload as DamagingPayload
     if (payload.targetHealth.before < 1 || payload.targetHealth.after !== 0) return next
@@ -38,10 +39,13 @@ export class PersistVersusDropDecision {
     const killer = this.participant(previous, actor)
     const defeated = this.participant(previous, payload.target)
     if (
-      killer?.playerId === null || killer?.playerId === undefined ||
-      defeated?.playerId === null || defeated?.playerId === undefined ||
+      killer?.playerId === null ||
+      killer?.playerId === undefined ||
+      defeated?.playerId === null ||
+      defeated?.playerId === undefined ||
       actor.teamLabel === payload.target.teamLabel
-    ) return next
+    )
+      return next
 
     const snapshot = await this.inventory.find(previous.id, defeated.playerId)
     const reserved = new Set(

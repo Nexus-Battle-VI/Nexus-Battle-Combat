@@ -6,8 +6,19 @@ export const up = async (db: Db): Promise<void> => {
       $jsonSchema: {
         bsonType: 'object',
         required: [
-          '_id', 'id', 'battleId', 'defeatEventSeq', 'killerPlayerId', 'defeatedPlayerId',
-          'resolution', 'state', 'receipt', 'winnerNotified', 'loserNotified', 'createdAt', 'updatedAt',
+          '_id',
+          'id',
+          'battleId',
+          'defeatEventSeq',
+          'killerPlayerId',
+          'defeatedPlayerId',
+          'resolution',
+          'state',
+          'receipt',
+          'winnerNotified',
+          'loserNotified',
+          'createdAt',
+          'updatedAt',
         ],
         additionalProperties: false,
         properties: {
@@ -18,7 +29,9 @@ export const up = async (db: Db): Promise<void> => {
           killerPlayerId: { bsonType: 'string', minLength: 1 },
           defeatedPlayerId: { bsonType: 'string', minLength: 1 },
           resolution: { bsonType: 'object' },
-          state: { enum: ['NO_DROP', 'AWAITING_TIE_RULE', 'PENDING', 'CREDITED', 'FAILED_RETRYABLE'] },
+          state: {
+            enum: ['NO_DROP', 'AWAITING_TIE_RULE', 'PENDING', 'CREDITED', 'FAILED_RETRYABLE'],
+          },
           receipt: { bsonType: ['object', 'null'] },
           winnerNotified: { bsonType: 'bool' },
           loserNotified: { bsonType: 'bool' },
@@ -29,7 +42,9 @@ export const up = async (db: Db): Promise<void> => {
     },
   })
   await db.collection('battle-drop-workflows').createIndex({ state: 1, createdAt: 1 })
-  await db.collection('battle-drop-workflows').createIndex({ battleId: 1, defeatEventSeq: 1 }, { unique: true })
+  await db
+    .collection('battle-drop-workflows')
+    .createIndex({ battleId: 1, defeatEventSeq: 1 }, { unique: true })
   await db.createCollection('battle-drop-settlements', {
     validator: {
       $jsonSchema: {

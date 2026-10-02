@@ -49,7 +49,10 @@ export const recordingBattleDropInventory = (): RecordingBattleDropInventory => 
 
       captures.push(command)
 
-      return Promise.resolve({ ...command, equipment: equipmentByKey.get(key(command.battleId, command.playerId)) ?? [] })
+      return Promise.resolve({
+        ...command,
+        equipment: equipmentByKey.get(key(command.battleId, command.playerId)) ?? [],
+      })
     },
     find: (battleId, playerId) =>
       Promise.resolve({

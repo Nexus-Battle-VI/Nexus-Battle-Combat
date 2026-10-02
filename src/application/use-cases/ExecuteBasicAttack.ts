@@ -169,9 +169,8 @@ export class ExecuteBasicAttack {
       this.clock.now(),
       input.degradedFrom,
     )
-    const next = this.versusDrop === null
-      ? applied
-      : await this.versusDrop.execute(room, applied, actionSeq)
+    const next =
+      this.versusDrop === null ? applied : await this.versusDrop.execute(room, applied, actionSeq)
 
     try {
       const saved = await this.rooms.save(next, room.version)

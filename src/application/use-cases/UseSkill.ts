@@ -249,9 +249,8 @@ export class UseSkill {
     input: UseSkillInput,
   ): Promise<UseSkillResult> {
     try {
-      const resolved = this.versusDrop === null
-        ? next
-        : await this.versusDrop.execute(room, next, actionSeq)
+      const resolved =
+        this.versusDrop === null ? next : await this.versusDrop.execute(room, next, actionSeq)
       const saved = await this.rooms.save(resolved, room.version)
       const event = saved.events.find((candidate) => candidate.seq === actionSeq)
 

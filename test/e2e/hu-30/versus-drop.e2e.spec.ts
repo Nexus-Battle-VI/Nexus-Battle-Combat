@@ -204,7 +204,8 @@ const catalogProducts: Record<string, unknown> = {
     sku: 'guerrero-b2-e2e-hu30',
     name: 'Guerrero B2 (E2E HU-30)',
     imageUrl: 'https://assets.example.test/guerrero-b2.png',
-    description: 'Segundo heroe derrotado (escenario E-02) de la prueba de extremo a extremo de HU-30.',
+    description:
+      'Segundo heroe derrotado (escenario E-02) de la prueba de extremo a extremo de HU-30.',
     type: 'HEROE',
     lifecycleStatus: 'ACTIVE',
     creditsPrice: 0,
@@ -598,7 +599,12 @@ describe('HU-30 de extremo a extremo REAL: Combat resuelve el drop, Player-Inven
       [PLAYER_A, [HERO_A_PRODUCT_ID]],
       [
         PLAYER_B,
-        [HERO_B_PRODUCT_ID, HERO_B2_PRODUCT_ID, WEAPON_NO_DROP_PRODUCT_ID, WEAPON_GUARANTEED_PRODUCT_ID],
+        [
+          HERO_B_PRODUCT_ID,
+          HERO_B2_PRODUCT_ID,
+          WEAPON_NO_DROP_PRODUCT_ID,
+          WEAPON_GUARANTEED_PRODUCT_ID,
+        ],
       ],
     ] as const) {
       for (const productId of productIds) {
@@ -1006,20 +1012,23 @@ describe('HU-30 de extremo a extremo REAL: Combat resuelve el drop, Player-Inven
     })
 
     it('notificar un drop a Notifications sin HMAC se rechaza (401)', async () => {
-      const response = await fetch(`${notifications.baseUrl}/api/internal/v1/notifications/combat/drop`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          battleId: 'sala-cualquiera',
-          defeatEventSeq: 1,
-          role: 'GAINED',
-          recipientId: PLAYER_A,
-          productInstanceId: 'x',
-          productId: 'y',
-          itemId: 'z',
-          creditedAt: new Date().toISOString(),
-        }),
-      })
+      const response = await fetch(
+        `${notifications.baseUrl}/api/internal/v1/notifications/combat/drop`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            battleId: 'sala-cualquiera',
+            defeatEventSeq: 1,
+            role: 'GAINED',
+            recipientId: PLAYER_A,
+            productInstanceId: 'x',
+            productId: 'y',
+            itemId: 'z',
+            creditedAt: new Date().toISOString(),
+          }),
+        },
+      )
       expect(response.status).toBe(401)
     })
   })

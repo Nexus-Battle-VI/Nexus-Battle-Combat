@@ -16,9 +16,7 @@ import type { Logger } from '../../../infrastructure/observability/logger'
  * FINISHED solo crea el derecho; después transfiere cada instancia con un
  * operationId derivado de battleId/seq y cierra la reserva al completar todo.
  */
-export class IntervalBattleDropScheduler
-  implements OnApplicationBootstrap, OnApplicationShutdown
-{
+export class IntervalBattleDropScheduler implements OnApplicationBootstrap, OnApplicationShutdown {
   private timer: ReturnType<typeof setInterval> | null = null
   private running = false
 
@@ -47,7 +45,9 @@ export class IntervalBattleDropScheduler
     this.running = true
     try {
       const active = await this.rooms.findInBattle()
-      const finished = await this.rooms.findFinishedSince(new Date(Date.now() - 24 * 60 * 60 * 1000))
+      const finished = await this.rooms.findFinishedSince(
+        new Date(Date.now() - 24 * 60 * 60 * 1000),
+      )
       const due = await this.workflows.findUnsettled(50)
       const roomsById = new Map([...active, ...finished].map((room) => [room.id, room]))
       for (const workflow of due) {
@@ -120,10 +120,7 @@ export class IntervalBattleDropScheduler
         allCredited = false
         continue
       }
-      if (
-        workflow.state === 'PENDING' ||
-        workflow.state === 'FAILED_RETRYABLE'
-      ) {
+      if (workflow.state === 'PENDING' || workflow.state === 'FAILED_RETRYABLE') {
         if (workflow.resolution.status !== 'PENDING') {
           throw new Error('Workflow de drop inconsistente.')
         }
@@ -153,7 +150,11 @@ export class IntervalBattleDropScheduler
     if (!allCredited || (await this.workflows.isBattleClosed(room.id))) return
     await this.inventory.closeBattle(room.id)
     const playerIds = [
-      ...new Set(room.battle?.turnOrder.flatMap((entry) => entry.playerId === null ? [] : [entry.playerId]) ?? []),
+      ...new Set(
+        room.battle?.turnOrder.flatMap((entry) =>
+          entry.playerId === null ? [] : [entry.playerId],
+        ) ?? [],
+      ),
     ]
     for (const playerId of playerIds) await this.commitments.release(room.id, playerId)
     await this.workflows.markBattleClosed(room.id)

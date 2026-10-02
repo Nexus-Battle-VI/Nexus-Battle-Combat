@@ -106,7 +106,12 @@ export class MongoBattleDropWorkflowRepository implements BattleDropWorkflowRepo
   async markNotified(id: string, role: 'winner' | 'loser'): Promise<void> {
     await this.workflows.updateOne(
       { _id: id, state: 'CREDITED' },
-      { $set: { [role === 'winner' ? 'winnerNotified' : 'loserNotified']: true, updatedAt: new Date() } },
+      {
+        $set: {
+          [role === 'winner' ? 'winnerNotified' : 'loserNotified']: true,
+          updatedAt: new Date(),
+        },
+      },
     )
   }
 

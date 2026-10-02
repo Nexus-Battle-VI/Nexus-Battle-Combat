@@ -42,7 +42,9 @@ export class InMemoryBattleDropWorkflowRepository implements BattleDropWorkflowR
   findUnnotified(limit: number): Promise<readonly BattleDropWorkflow[]> {
     return Promise.resolve(
       [...this.values.values()]
-        .filter((entry) => entry.state === 'CREDITED' && (!entry.winnerNotified || !entry.loserNotified))
+        .filter(
+          (entry) => entry.state === 'CREDITED' && (!entry.winnerNotified || !entry.loserNotified),
+        )
         .slice(0, limit),
     )
   }
@@ -66,7 +68,10 @@ export class InMemoryBattleDropWorkflowRepository implements BattleDropWorkflowR
   markNotified(id: string, role: 'winner' | 'loser'): Promise<void> {
     const value = this.values.get(id)
     if (value?.state === 'CREDITED') {
-      this.values.set(id, { ...value, [role === 'winner' ? 'winnerNotified' : 'loserNotified']: true })
+      this.values.set(id, {
+        ...value,
+        [role === 'winner' ? 'winnerNotified' : 'loserNotified']: true,
+      })
     }
     return Promise.resolve()
   }

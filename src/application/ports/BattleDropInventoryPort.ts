@@ -24,7 +24,9 @@ export interface BattleDropTransferReceipt extends BattleDropTransferCommand {
 }
 
 export interface BattleDropInventoryPort {
-  capture(command: Omit<BattleDropInventorySnapshot, 'equipment'>): Promise<BattleDropInventorySnapshot>
+  capture(
+    command: Omit<BattleDropInventorySnapshot, 'equipment'>,
+  ): Promise<BattleDropInventorySnapshot>
   find(battleId: string, playerId: string): Promise<BattleDropInventorySnapshot>
   transfer(command: BattleDropTransferCommand): Promise<BattleDropTransferReceipt>
   closeBattle(battleId: string): Promise<void>

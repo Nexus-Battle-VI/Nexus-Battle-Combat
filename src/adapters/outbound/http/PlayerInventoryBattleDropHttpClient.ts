@@ -5,7 +5,11 @@ import type {
   BattleDropTransferReceipt,
 } from '../../../application/ports/BattleDropInventoryPort'
 import { UpstreamServiceError } from '../../../application/errors/UpstreamErrors'
-import { getInternalJson, postInternalJson, type InternalHttpClientOptions } from './InternalHttpClient'
+import {
+  getInternalJson,
+  postInternalJson,
+  type InternalHttpClientOptions,
+} from './InternalHttpClient'
 import { toBattleDropOperationId } from './battle-drop-operation-id'
 
 const SERVICE = 'player-inventory'
@@ -58,7 +62,8 @@ export class PlayerInventoryBattleDropHttpClient implements BattleDropInventoryP
     const result = await postInternalJson(SERVICE, `${BASE}/snapshots`, command, this.options)
     if (result.outcome !== 'ok') throw new UpstreamServiceError(SERVICE, result.outcome)
     const snapshot = snapshotOf(result.body)
-    if (snapshot.battleId !== command.battleId || snapshot.playerId !== command.playerId) throw invalid()
+    if (snapshot.battleId !== command.battleId || snapshot.playerId !== command.playerId)
+      throw invalid()
     return snapshot
   }
 

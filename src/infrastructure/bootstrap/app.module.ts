@@ -67,9 +67,18 @@ import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerIn
 import { PlayerInventoryBattleCommitmentHttpClient } from '../../adapters/outbound/http/PlayerInventoryBattleCommitmentHttpClient'
 import { PlayerInventoryBattleDropHttpClient } from '../../adapters/outbound/http/PlayerInventoryBattleDropHttpClient'
 import { NotificationsBattleDropHttpClient } from '../../adapters/outbound/http/NotificationsBattleDropHttpClient'
-import { BATTLE_DROP_INVENTORY, type BattleDropInventoryPort } from '../../application/ports/BattleDropInventoryPort'
-import { BATTLE_DROP_NOTIFIER, type BattleDropNotificationPort } from '../../application/ports/BattleDropNotificationPort'
-import { BATTLE_DROP_WORKFLOWS, type BattleDropWorkflowRepositoryPort } from '../../application/ports/BattleDropWorkflowRepositoryPort'
+import {
+  BATTLE_DROP_INVENTORY,
+  type BattleDropInventoryPort,
+} from '../../application/ports/BattleDropInventoryPort'
+import {
+  BATTLE_DROP_NOTIFIER,
+  type BattleDropNotificationPort,
+} from '../../application/ports/BattleDropNotificationPort'
+import {
+  BATTLE_DROP_WORKFLOWS,
+  type BattleDropWorkflowRepositoryPort,
+} from '../../application/ports/BattleDropWorkflowRepositoryPort'
 import { InMemoryBattleDropWorkflowRepository } from '../../adapters/outbound/persistence/InMemoryBattleDropWorkflowRepository'
 import { MongoBattleDropWorkflowRepository } from '../../adapters/outbound/persistence/MongoBattleDropWorkflowRepository'
 import { IntervalBattleDropScheduler } from '../../adapters/outbound/system/IntervalBattleDropScheduler'
@@ -840,7 +849,14 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         notifications: BattleDropNotificationPort,
         logger: Logger,
       ): IntervalBattleDropScheduler =>
-        new IntervalBattleDropScheduler(rooms, workflows, inventory, commitments, notifications, logger),
+        new IntervalBattleDropScheduler(
+          rooms,
+          workflows,
+          inventory,
+          commitments,
+          notifications,
+          logger,
+        ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         BATTLE_DROP_WORKFLOWS,
@@ -1204,14 +1220,23 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     },
     {
       provide: BATTLE_DROP_INVENTORY,
-      useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): BattleDropInventoryPort => {
+      useFactory: (
+        config: AppConfig,
+        clock: ClockPort,
+        logger: Logger,
+      ): BattleDropInventoryPort => {
         if (
           config.internalServiceAuthSecret === null ||
           config.playerInventoryServiceBaseUrl === null
         ) {
           const unavailable = (): Promise<never> =>
             Promise.reject(new UpstreamServiceError('player-inventory', 'no_configurado'))
-          return { capture: unavailable, find: unavailable, transfer: unavailable, closeBattle: unavailable }
+          return {
+            capture: unavailable,
+            find: unavailable,
+            transfer: unavailable,
+            closeBattle: unavailable,
+          }
         }
         return new PlayerInventoryBattleDropHttpClient({
           baseUrl: config.playerInventoryServiceBaseUrl,
@@ -1226,7 +1251,11 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     },
     {
       provide: BATTLE_DROP_NOTIFIER,
-      useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): BattleDropNotificationPort => {
+      useFactory: (
+        config: AppConfig,
+        clock: ClockPort,
+        logger: Logger,
+      ): BattleDropNotificationPort => {
         if (
           config.internalServiceAuthSecret === null ||
           config.notificationsServiceBaseUrl === null ||
