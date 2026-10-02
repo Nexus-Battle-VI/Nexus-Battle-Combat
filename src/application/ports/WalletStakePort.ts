@@ -25,7 +25,8 @@ export interface WalletStakeReleaseCommand {
 
 export interface WalletStakeSettlementEntry {
   readonly playerId: string
-  readonly holdId: string
+  /** `null`: ganador SIN apuesta propia -- Wallet lo acredita sin referenciar ningun hold. */
+  readonly holdId: string | null
   readonly outcome: StakeSettlementOutcome
   readonly amount: number
 }
