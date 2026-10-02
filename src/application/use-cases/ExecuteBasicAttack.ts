@@ -22,6 +22,7 @@ import type { RoomCommandLockPort } from '../ports/RoomCommandLockPort'
 import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
 import { prepareAttack, type AttackParticipant } from './PrepareAttack'
 import { ResolveAttack } from './ResolveAttack'
+import type { PersistVersusDropDecision } from '../services/PersistVersusDropDecision'
 
 export interface ExecuteBasicAttackInput {
   readonly roomId: string
@@ -114,6 +115,7 @@ export class ExecuteBasicAttack {
      */
     private readonly settler: BattleDeadlineSettler | null = null,
     private readonly resolveAttack: ResolveAttack = new ResolveAttack(),
+    private readonly versusDrop: PersistVersusDropDecision | null = null,
   ) {}
 
   execute(input: ExecuteBasicAttackInput): Promise<ExecuteBasicAttackResult> {
@@ -160,13 +162,15 @@ export class ExecuteBasicAttack {
     // que el evento de la ACCION es el que se construye con este `seq`, no el
     // ultimo guardado.
     const actionSeq = room.lastSeq + 1
-    const next = room.applyBasicAttack(
+    const applied = room.applyBasicAttack(
       plan,
       outcome,
       input.commandId,
       this.clock.now(),
       input.degradedFrom,
     )
+    const next =
+      this.versusDrop === null ? applied : await this.versusDrop.execute(room, applied, actionSeq)
 
     try {
       const saved = await this.rooms.save(next, room.version)

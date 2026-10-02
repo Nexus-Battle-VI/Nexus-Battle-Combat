@@ -37,7 +37,9 @@ import {
 } from '../../src/infrastructure/persistence/database'
 import { indexForEffect, indexForFace } from '../fixtures/basic-attack'
 import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
+import { BATTLE_DROP_INVENTORY } from '../../src/application/ports/BattleDropInventoryPort'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
 import { equippedHeroFixture } from '../fixtures/equipped-hero'
 
 /**
@@ -234,6 +236,8 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
       // propia prueba unitaria).
       .overrideProvider(BATTLE_HERO_COMMITMENTS)
       .useValue(recordingBattleCommitments())
+      .overrideProvider(BATTLE_DROP_INVENTORY)
+      .useValue(recordingBattleDropInventory())
       .overrideProvider(BATTLE_RANDOM_SEQUENCE)
       .useValue(sequence)
       .compile()

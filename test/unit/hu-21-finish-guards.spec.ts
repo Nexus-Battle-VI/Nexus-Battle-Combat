@@ -105,6 +105,9 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
       'adapters/inbound/ws/BattleRoomRealtimeGateway.ts',
       'adapters/outbound/http/InternalHttpClient.ts',
       'adapters/outbound/system/IntervalBattleDeadlineScheduler.ts',
+      // HU-30 (Task HU-30.2): mismo patron de barrido, para conciliar y
+      // liquidar los drops diferidos de Versus.
+      'adapters/outbound/system/IntervalBattleDropScheduler.ts',
       // HU-22 (Task HU-22.3): mismo patron de barrido que el planificador de
       // vencimientos, para el RewardWorkflow.
       'adapters/outbound/system/IntervalRewardWorkflowScheduler.ts',

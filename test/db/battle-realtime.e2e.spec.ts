@@ -34,7 +34,9 @@ import {
   migrateToLatest,
 } from '../../src/infrastructure/persistence/database'
 import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
+import { BATTLE_DROP_INVENTORY } from '../../src/application/ports/BattleDropInventoryPort'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
 import { equippedHeroFixture } from '../fixtures/equipped-hero'
 
 /**
@@ -172,6 +174,8 @@ describe('HU-17 de extremo a extremo (protocolo): dos clientes WebSocket reales 
       // propia prueba unitaria).
       .overrideProvider(BATTLE_HERO_COMMITMENTS)
       .useValue(recordingBattleCommitments())
+      .overrideProvider(BATTLE_DROP_INVENTORY)
+      .useValue(recordingBattleDropInventory())
       .compile()
 
     app = moduleRef.createNestApplication()

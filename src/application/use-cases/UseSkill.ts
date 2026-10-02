@@ -29,6 +29,7 @@ import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
 import type { ExecuteBasicAttack } from './ExecuteBasicAttack'
 import { prepareAttack, type AttackParticipant } from './PrepareAttack'
 import { ResolveAttack } from './ResolveAttack'
+import type { PersistVersusDropDecision } from '../services/PersistVersusDropDecision'
 
 export interface UseSkillInput {
   readonly roomId: string
@@ -105,6 +106,7 @@ export class UseSkill {
     /** HU-21: liquidacion perezosa de vencimientos antes de validar (contrato §3). */
     private readonly settler: BattleDeadlineSettler | null = null,
     private readonly resolveAttack: ResolveAttack = new ResolveAttack(),
+    private readonly versusDrop: PersistVersusDropDecision | null = null,
   ) {}
 
   execute(input: UseSkillInput): Promise<UseSkillResult> {
@@ -247,7 +249,9 @@ export class UseSkill {
     input: UseSkillInput,
   ): Promise<UseSkillResult> {
     try {
-      const saved = await this.rooms.save(next, room.version)
+      const resolved =
+        this.versusDrop === null ? next : await this.versusDrop.execute(room, next, actionSeq)
+      const saved = await this.rooms.save(resolved, room.version)
       const event = saved.events.find((candidate) => candidate.seq === actionSeq)
 
       if (event === undefined) {

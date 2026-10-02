@@ -2,6 +2,7 @@ import { buildBattleFinishedNotification } from '../services/BattleFinalizer'
 import type { BattleHeroCommitmentPort } from '../ports/BattleHeroCommitmentPort'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { CreateRewardWorkflows } from './CreateRewardWorkflows'
+import { hasPendingVersusDrop } from '../services/BattleDropState'
 
 /** Lo unico que el reconciliador necesita de un registro estructurado. */
 export interface ReconcileRewardWorkflowsLogger {
@@ -47,7 +48,9 @@ export class ReconcileRewardWorkflows {
       // MISMO hueco que los workflows -- `afterFinished` la dispara sin esperar y
       // el proceso puede morir antes de que llegue -- y la liberacion es
       // idempotente por contrato, asi que reintentarla no puede hacer dano.
-      await this.releaseCommitments(room.id, notification.participants)
+      if (!hasPendingVersusDrop(room)) {
+        await this.releaseCommitments(room.id, notification.participants)
+      }
 
       try {
         await this.createWorkflows.execute(notification)

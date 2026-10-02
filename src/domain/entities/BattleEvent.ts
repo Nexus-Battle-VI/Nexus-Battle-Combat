@@ -2,6 +2,7 @@ import type { BattleResult } from './BattleResult'
 import type { BattleView } from './BattleState'
 import type { CombatantKey } from './Combatant'
 import type { CombatPowerCost } from './CombatProfile'
+import type { VersusDropDecision } from './VersusDrop'
 
 /**
  * Eventos de batalla con numero de secuencia (ADR-020, HU-17). `seq` es un
@@ -116,6 +117,8 @@ export interface BasicAttackResolvedPayload {
   readonly target: CombatantKey
   readonly resolution: BasicAttackResolution
   readonly targetHealth: { readonly before: number; readonly after: number }
+  /** HU-30: decisión autoritativa y durable, interna; no forma parte del wire público. */
+  readonly versusDrop?: VersusDropDecision
   /** HU-19 (opcional): por que este ataque basico sustituyo a una habilidad. */
   readonly degradedFrom?: DegradedFrom
   /** Vista POSTERIOR: Vida actualizada y turno ya avanzado. */
@@ -147,6 +150,7 @@ export interface SkillUsedPayload {
   readonly bonus: { readonly attack: number; readonly damage: number | null }
   readonly resolution: BasicAttackResolution
   readonly targetHealth: { readonly before: number; readonly after: number }
+  readonly versusDrop?: VersusDropDecision
   /** Vista POSTERIOR: Vida, Poder, recargas y turno ya avanzado. */
   readonly battle: BattleView
 }
@@ -206,6 +210,7 @@ export interface DirectDamageSkillUsedPayload {
   /** `floor(dano base x porcentaje / 100)` no aplica: el dano se materializa tal cual. */
   readonly damage: { readonly calculatedDamage: number; readonly appliedDamage: number }
   readonly targetHealth: { readonly before: number; readonly after: number }
+  readonly versusDrop?: VersusDropDecision
   readonly battle: BattleView
 }
 

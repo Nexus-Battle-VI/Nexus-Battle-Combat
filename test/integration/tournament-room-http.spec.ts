@@ -14,6 +14,7 @@ import {
   type PlayerInventoryEquippedHeroPort,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
 import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
+import { BATTLE_DROP_INVENTORY } from '../../src/application/ports/BattleDropInventoryPort'
 import {
   BATTLE_ROOM_REPOSITORY,
   type BattleRoomRepositoryPort,
@@ -29,6 +30,7 @@ import { signInternalRequest } from '../../src/adapters/outbound/identity/intern
 import { AppModule } from '../../src/infrastructure/bootstrap/app.module'
 import { equippedHeroFixture } from '../fixtures/equipped-hero'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
 
 /**
  * Rutas internas de torneo (Management#517, EN `tournament-rooms`):
@@ -72,6 +74,7 @@ const heroes: PlayerInventoryEquippedHeroPort = {
 }
 
 const commitments = recordingBattleCommitments()
+const dropInventory = recordingBattleDropInventory()
 
 const withEnv = (values: Record<string, string>): (() => void) => {
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]))
@@ -122,6 +125,8 @@ describe('Management#517: rutas internas de tournament-rooms', () => {
       .useValue(heroes)
       .overrideProvider(BATTLE_HERO_COMMITMENTS)
       .useValue(commitments)
+      .overrideProvider(BATTLE_DROP_INVENTORY)
+      .useValue(dropInventory)
       .compile()
 
     app = moduleRef.createNestApplication()
@@ -142,6 +147,7 @@ describe('Management#517: rutas internas de tournament-rooms', () => {
     heroDenylist.clear()
     commitments.commits.length = 0
     commitments.releases.length = 0
+    dropInventory.captures.length = 0
   })
 
   const http = () => request(app.getHttpServer())
@@ -332,6 +338,14 @@ describe('Management#517: rutas internas de tournament-rooms', () => {
       expect(started.body.status).toBe('IN_BATTLE')
       expect(started.body.battle.turnOrder).toHaveLength(4)
       expect(commitments.commits.map((c) => c.playerId).sort()).toEqual(['p1', 'p2', 'p3', 'p4'])
+
+      // HU-30: una sala de torneo arranca por `startRoom()`, no por
+      // `execute()`, pero ambas comparten el mismo `start()` -- la
+      // instantanea de drop se captura igual para los 4 humanos, sin que
+      // Tournament tenga que saber nada de HU-30. Prueba de compatibilidad
+      // del contrato interno de Combat, no un E2E de Tournament real (ese
+      // repo todavia no consume estas rutas, ver HU-85).
+      expect(dropInventory.captures.map((c) => c.playerId).sort()).toEqual(['p1', 'p2', 'p3', 'p4'])
     })
 
     it('es IDEMPOTENTE: reenviarlo devuelve la misma sala, incluso tras FINISHED', async () => {

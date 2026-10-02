@@ -9,6 +9,7 @@ import type {
 } from '../ports/BattleResultPublisherPort'
 import type { BattleRoomReleasePort } from '../ports/BattleRoomReleasePort'
 import type { RealtimeNotifierPort } from '../ports/RealtimeNotifierPort'
+import { hasPendingVersusDrop } from './BattleDropState'
 
 /** Lo unico que el finalizador necesita de un registro estructurado. */
 export interface BattleFinalizerLogger {
@@ -66,7 +67,9 @@ export class BattleFinalizer {
     // temporal de HU-29 deja de aplicarse aqui y el flujo normal de inventario
     // vuelve.
     this.step('battle_commitment_release', () => {
-      this.releaseBattleCommitments(room)
+      // HU-30: la pieza sigue comprometida hasta que Player-Inventory confirme
+      // todas las transferencias; el reconciliador de drops la liberará.
+      if (!hasPendingVersusDrop(room)) this.releaseBattleCommitments(room)
     })
     this.step('result_publish', () => {
       const notification = buildBattleFinishedNotification(room)

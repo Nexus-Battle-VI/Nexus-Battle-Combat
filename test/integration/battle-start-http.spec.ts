@@ -14,6 +14,7 @@ import {
   type PlayerInventoryEquippedHeroPort,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
 import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
+import { BATTLE_DROP_INVENTORY } from '../../src/application/ports/BattleDropInventoryPort'
 import {
   Role,
   TOKEN_VERIFIER,
@@ -28,6 +29,7 @@ import {
 import { AppModule } from '../../src/infrastructure/bootstrap/app.module'
 import { equippedHeroFixture, equippedProductNotOwnedBlocker } from '../fixtures/equipped-hero'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
 
 /**
  * HU-17 sobre HTTP (memoria): `POST /rooms/:id/start`, `GET /rooms/:id` y
@@ -86,6 +88,13 @@ const heroes: PlayerInventoryEquippedHeroPort = {
  */
 const commitments = recordingBattleCommitments()
 
+/**
+ * HU-30: capturar la instantanea de drop es una llamada saliente adicional a
+ * Player/Inventory al arrancar. Mismo motivo que `commitments`: se sustituye
+ * por un doble que registra para probar el cableado, no el cliente HTTP real.
+ */
+const dropInventory = recordingBattleDropInventory()
+
 const withEnv = (values: Record<string, string>): (() => void) => {
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]))
 
@@ -133,6 +142,8 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
       .useValue(heroes)
       .overrideProvider(BATTLE_HERO_COMMITMENTS)
       .useValue(commitments)
+      .overrideProvider(BATTLE_DROP_INVENTORY)
+      .useValue(dropInventory)
       .compile()
 
     app = moduleRef.createNestApplication()
@@ -157,6 +168,11 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
     commitments.releases.length = 0
     commitments.failCommits = false
     commitments.failReleases = false
+    dropInventory.captures.length = 0
+    dropInventory.transfers.length = 0
+    dropInventory.closedBattles.length = 0
+    dropInventory.equipmentByKey.clear()
+    dropInventory.failCapture = false
   })
 
   const http = () => request(app.getHttpServer())
