@@ -19,6 +19,8 @@ export const BATTLE_RANDOM_SEQUENCE = Symbol('BattleRandomSequence')
 export const EXECUTE_BASIC_ATTACK = Symbol('ExecuteBasicAttack')
 /** HU-19: habilidad especial (`useSkill`); reutiliza el ataque basico cuando el Poder no alcanza. */
 export const USE_SKILL = Symbol('UseSkill')
+/** Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): epica equipada (`useEpic`). */
+export const USE_EPIC = Symbol('UseEpic')
 /** HU-18: serializa los comandos de una misma sala (una replica, ADR-020). */
 export const ROOM_COMMAND_LOCK = Symbol('RoomCommandLock')
 /** HU-21: piezas de la finalizacion de batalla (servicios, casos de uso y planificador). */

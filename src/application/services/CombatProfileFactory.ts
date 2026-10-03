@@ -31,12 +31,15 @@ const copyEpic = (epic: EquippedHeroEpic): CombatEpic => ({
   epicReference: epic.epicReference,
   name: epic.name,
   compatibleHeroSubtype: epic.compatibleHeroSubtype,
+  powerCost: epic.powerCost,
+  cooldownTurns: epic.cooldownTurns,
   baseEffect: copyNullableOpaqueEffect(epic.baseEffect),
-  specificEffect: copyOpaqueEffect(epic.specificEffect),
+  specificEffects: epic.specificEffects.map(copyOpaqueEffect),
   applied: {
     baseApplied: copyNullableOpaqueEffect(epic.applied.baseApplied),
-    additionalApplied: copyNullableOpaqueEffect(epic.applied.additionalApplied),
+    additionalApplied: epic.applied.additionalApplied.map(copyOpaqueEffect),
   },
+  executableEffects: epic.executableEffects.map(copyAbilityEffect),
 })
 
 const copyMagnitude = (magnitude: EquippedHeroMagnitude): CombatMagnitude => ({ ...magnitude })

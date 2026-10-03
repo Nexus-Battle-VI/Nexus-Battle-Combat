@@ -283,7 +283,7 @@ describe('StartBattle — epica equipada congelada en el snapshot (HU-31, contra
     })?.profile
 
     expect(profile?.epic?.applied.baseApplied).not.toBeNull()
-    expect(profile?.epic?.applied.additionalApplied).not.toBeNull()
+    expect(profile?.epic?.applied.additionalApplied.length).toBeGreaterThan(0)
   })
 
   it('T-C-03: subtipo NO coincidente -> el snapshot congela solo el efecto base', async () => {
@@ -294,7 +294,7 @@ describe('StartBattle — epica equipada congelada en el snapshot (HU-31, contra
           subtype: 'GUERRERO_TANQUE',
           epic: {
             ...golpeDeDefensaEpic,
-            applied: { baseApplied: golpeDeDefensaEpic.baseEffect, additionalApplied: null },
+            applied: { baseApplied: golpeDeDefensaEpic.baseEffect, additionalApplied: [] },
           },
         }),
       ),
@@ -305,7 +305,7 @@ describe('StartBattle — epica equipada congelada en el snapshot (HU-31, contra
     })?.profile
 
     expect(profile?.epic?.applied.baseApplied).not.toBeNull()
-    expect(profile?.epic?.applied.additionalApplied).toBeNull()
+    expect(profile?.epic?.applied.additionalApplied).toEqual([])
   })
 
   it('T-C-04: batalla sin epica equipada -> comportamiento anterior intacto, sin la clave epic', async () => {
@@ -336,7 +336,7 @@ describe('StartBattle — epica equipada congelada en el snapshot (HU-31, contra
     const epicoA = golpeDeDefensaEpic
     const epicoB = {
       ...golpeDeDefensaEpic,
-      applied: { baseApplied: golpeDeDefensaEpic.baseEffect, additionalApplied: null },
+      applied: { baseApplied: golpeDeDefensaEpic.baseEffect, additionalApplied: [] },
     }
     const heroes = heroesPort(
       {
@@ -366,10 +366,10 @@ describe('StartBattle — epica equipada congelada en el snapshot (HU-31, contra
     const b1Profile = room?.battle?.combatantFor({ teamLabel: 'B', seat: 0 })?.profile
     const b2Profile = room?.battle?.combatantFor({ teamLabel: 'B', seat: 1 })?.profile
 
-    expect(a1Profile?.epic?.applied.additionalApplied).not.toBeNull()
+    expect(a1Profile?.epic?.applied.additionalApplied.length).toBeGreaterThan(0)
     expect('epic' in (a2Profile ?? {})).toBe(false)
-    expect(b1Profile?.epic?.applied.additionalApplied).toBeNull()
-    expect(b2Profile?.epic?.applied.additionalApplied).not.toBeNull()
+    expect(b1Profile?.epic?.applied.additionalApplied).toEqual([])
+    expect(b2Profile?.epic?.applied.additionalApplied.length).toBeGreaterThan(0)
     // Misma definicion de epica (A1 y B2), estados independientes por participante.
     expect(a1Profile?.epic).not.toBe(b2Profile?.epic)
     expect(a1Profile?.epic).toEqual(b2Profile?.epic)

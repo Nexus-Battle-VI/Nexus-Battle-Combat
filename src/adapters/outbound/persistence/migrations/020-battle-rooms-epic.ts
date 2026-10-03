@@ -1,19 +1,25 @@
 import type { Db } from 'mongodb'
 
 /**
- * Anade `epic` (HU-31, contrato `hu-31-equipped-epic-v1` §8) al perfil de combate
- * congelado dentro de `battle-rooms` (`battle.combatants[].profile`).
+ * Anade `epic` (HU-31, contrato `hu-31-equipped-epic-v1` §8; correccion HU-19/HU-31
+ * tras GAP-HU31-CATALOG-MULTI-EFFECT) al perfil de combate congelado dentro de
+ * `battle-rooms` (`battle.combatants[].profile`).
  *
  * ADITIVA Y RETROCOMPATIBLE, NO DESTRUCTIVA -- MISMO CRITERIO que `003`..`019`: `epic` es
  * OPCIONAL (no entra en `required`) y ningun documento existente necesita backfill: un perfil
  * sin `epic` se restaura como "sin epica equipada" (misma clave ausente que el contrato de
  * Player-Inventory). Los documentos ya persistidos sin el campo siguen siendo validos: MongoDB
- * no revalida en reposo lo ya almacenado.
+ * no revalida en reposo lo ya almacenado. Esta HU-31 todavia no se ha desplegado (PR sin
+ * mergear): el esquema se EDITA en el mismo archivo en vez de apilar una migracion `021`
+ * solo para la correccion, ya que ningun dato real con la forma anterior existe todavia.
  *
- * `baseEffect`/`specificEffect`/`applied.*` son objetos OPACOS para Combat (ver `CombatProfile.ts`,
- * `validateEpic`): el esquema solo exige "objeto, o null donde el contrato lo permite", sin
- * enumerar sus propiedades internas -- interpretarlas es de una Task/HU futura, no de este
- * congelamiento.
+ * `baseEffect`/`specificEffects`/`applied.*` son objetos OPACOS para Combat (ver
+ * `CombatProfile.ts`, `validateEpic`): el esquema solo exige "objeto, lista de objetos, o
+ * null donde el contrato lo permite", sin enumerar sus propiedades internas.
+ * `executableEffects` SI es la lista que Combat ejecuta (`EpicSkillPolicy`), pero su forma
+ * interna (kind/target/statistic/...) tampoco se duplica aqui -- la valida
+ * `validateAbilityEffect` en la capa de aplicacion, mismo criterio que `abilities[].effects`
+ * (que tampoco tiene esquema Mongo propio).
  *
  * NO REPITE EL VALIDADOR ENTERO (mismo patron que `017`/`018`): lee el validador VIGENTE de la
  * coleccion y anade la propiedad unicamente en los esquemas que son "el perfil de combate" (los
@@ -25,7 +31,7 @@ const EPIC_APPLIED_SCHEMA = {
   additionalProperties: false,
   properties: {
     baseApplied: { bsonType: ['object', 'null'] },
-    additionalApplied: { bsonType: ['object', 'null'] },
+    additionalApplied: { bsonType: 'array', items: { bsonType: 'object' } },
   },
 } as const
 
@@ -36,9 +42,12 @@ const EPIC_SCHEMA = {
     'epicReference',
     'name',
     'compatibleHeroSubtype',
+    'powerCost',
+    'cooldownTurns',
     'baseEffect',
-    'specificEffect',
+    'specificEffects',
     'applied',
+    'executableEffects',
   ],
   additionalProperties: false,
   properties: {
@@ -46,9 +55,12 @@ const EPIC_SCHEMA = {
     epicReference: { bsonType: 'string', minLength: 1 },
     name: { bsonType: 'string', minLength: 1 },
     compatibleHeroSubtype: { bsonType: 'string', minLength: 1 },
+    powerCost: { bsonType: 'int', minimum: 0 },
+    cooldownTurns: { bsonType: 'int', minimum: 1 },
     baseEffect: { bsonType: ['object', 'null'] },
-    specificEffect: { bsonType: 'object' },
+    specificEffects: { bsonType: 'array', minItems: 1, items: { bsonType: 'object' } },
     applied: EPIC_APPLIED_SCHEMA,
+    executableEffects: { bsonType: 'array', items: { bsonType: 'object' } },
   },
 } as const
 

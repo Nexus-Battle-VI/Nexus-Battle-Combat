@@ -120,6 +120,7 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
   it.each([
     ['application/use-cases/ExecuteBasicAttack.ts', 1],
     ['application/use-cases/UseSkill.ts', 1],
+    ['application/use-cases/UseEpic.ts', 1],
     ['application/services/BattleDeadlineSettler.ts', 1],
     ['application/use-cases/ProcessBattleDeadlines.ts', 0],
     ['application/services/BattleFinalizer.ts', 0],
@@ -146,6 +147,7 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
 
     expect(callers).toEqual([
       'adapters/inbound/ws/BasicAttackRealtimeHandler.ts',
+      'adapters/inbound/ws/EpicRealtimeHandler.ts',
       'adapters/inbound/ws/SkillRealtimeHandler.ts',
       'application/services/BattleDeadlineSettler.ts',
     ])
@@ -164,6 +166,7 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
     for (const path of [
       'application/use-cases/ExecuteBasicAttack.ts',
       'application/use-cases/UseSkill.ts',
+      'application/use-cases/UseEpic.ts',
     ]) {
       expect(code(file(path))).not.toMatch(/afterFinished\(/)
     }
@@ -174,6 +177,7 @@ describe('HU-21 — el cliente no aporta el resultado y los adaptadores no acred
   it.each([
     'adapters/inbound/ws/BasicAttackRealtimeHandler.ts',
     'adapters/inbound/ws/SkillRealtimeHandler.ts',
+    'adapters/inbound/ws/EpicRealtimeHandler.ts',
   ])('%s no lee ganador, causa ni tiempos del mensaje', (path) => {
     const handler = code(file(path))
 
@@ -184,6 +188,7 @@ describe('HU-21 — el cliente no aporta el resultado y los adaptadores no acred
     for (const path of [
       'application/use-cases/ExecuteBasicAttack.ts',
       'application/use-cases/UseSkill.ts',
+      'application/use-cases/UseEpic.ts',
     ]) {
       const useCase = code(file(path))
 

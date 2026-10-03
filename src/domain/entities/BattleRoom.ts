@@ -3,10 +3,13 @@ import {
   ActorUnavailableError,
   BattleNotInProgressError,
   InvalidBattleRosterError,
+  EpicOnCooldownError,
+  EpicTargetRequiredError,
   InsufficientPowerForHealError,
   InvalidCommandIdError,
   InvalidHealTargetError,
   InvalidTargetError,
+  NoEpicEquippedError,
   NotYourTurnError,
   RoomNotStartableError,
   SameTeamTargetError,
@@ -15,6 +18,7 @@ import {
   TargetUnavailableError,
   UnknownSkillError,
   UnsupportedCombatProfileError,
+  UnsupportedEpicEffectError,
   UnsupportedSkillEffectError,
 } from '../errors/BattleErrors'
 import {
@@ -31,6 +35,7 @@ import {
   type TemporalEffectAudience,
   type TemporalEffectTemplate,
 } from '../policies/SkillEffectPolicy'
+import { evaluateEpicEffects, type EpicEffectPlan } from '../policies/EpicSkillPolicy'
 import {
   DuplicateDisplayNameError,
   InvalidModeCompositionError,
@@ -92,7 +97,7 @@ import {
 } from './BattleEvent'
 import { BattleState, type BattleStateSnapshot, type BattleView } from './BattleState'
 import type { ActiveSkillEffect, Combatant, CombatantKey } from './Combatant'
-import type { CombatAbility, CombatMagnitude, CombatProfile } from './CombatProfile'
+import type { CombatAbility, CombatEpic, CombatMagnitude, CombatProfile } from './CombatProfile'
 import { memberKey, type TeamRoster, type TurnOrderEntry } from './TurnOrder'
 
 /**
@@ -258,6 +263,43 @@ export type SkillPlan =
   | SkillHealingReadyPlan
   | SkillDegradedPlan
   | BasicAttackReplay
+
+/**
+ * La epica equipada ya VALIDADA (correccion HU-19/HU-31, `EpicSkillPolicy`): 0 sorteos hasta
+ * aqui. `target`/`targetEntry` son `null` cuando ningun efecto necesito un objetivo unico
+ * (todos SELF/ALLIED_GROUP); `recipients` solo trae algo con audiencia `ALLIED_GROUP`.
+ */
+export interface EpicReadyPlan {
+  readonly kind: 'epic'
+  readonly attackerEntry: TurnOrderEntry
+  readonly attacker: Combatant
+  readonly epic: CombatEpic
+  readonly effectPlan: EpicEffectPlan
+  readonly targetEntry: TurnOrderEntry | null
+  readonly target: Combatant | null
+  readonly recipients: readonly HealingRecipient[]
+  readonly powerBefore: number
+  readonly powerAfter: number
+}
+
+export type EpicPlan = EpicReadyPlan | BasicAttackReplay
+
+/** Un efecto de estadistica o inmunidad de la epica, ya resuelto (dados tirados) y dirigido. */
+export interface ResolvedEpicEffect {
+  readonly targetKey: CombatantKey
+  readonly effect: ActiveSkillEffect
+}
+
+/** Lo que `UseEpic` resuelve (sorteos) antes de aplicar (correccion HU-19/HU-31). */
+export interface EpicOutcome {
+  readonly resolvedEffects: readonly ResolvedEpicEffect[]
+  /** Suma de todos los `instantHeals`, ya con sus dados tirados; `null` si ninguno. */
+  readonly healAmount: number | null
+  /** Suma de todos los `directDamage`, ya con sus dados tirados; `null` si ninguno. */
+  readonly damageAmount: number | null
+  /** Suma de `calculateHeal(maximoDelObjetivo, basisPoints)` de cada `revive`; `null` si ninguno. */
+  readonly reviveAmount: number | null
+}
 
 /** Lo que HU-20, HU-25 y el sorteo de dano produjeron para una habilidad. */
 export interface SkillOutcome extends BasicAttackOutcome {
@@ -1815,6 +1857,107 @@ export class BattleRoom {
   }
 
   /**
+   * Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): VALIDA el uso de la epica
+   * equipada como accion de turno, SIN sortear nada todavia. A diferencia de `planSkill`, no
+   * hay `abilityId` que el cliente elija: la UNICA epica ejecutable es la que esta congelada
+   * en `attackerProfile.epic` (nadie puede pedir ejecutar una distinta, nunca existio esa
+   * entrada). El costo de Poder de una epica es SIEMPRE 0 (Catalog): el pago nunca falla, pero
+   * se invoca igual (`spendPower`) por el mismo motivo que una habilidad -- un solo camino de
+   * pago, sin un segundo "no pagar nada" para la epica.
+   *
+   * `target` es OPCIONAL: solo se exige cuando `EpicSkillPolicy` determina que algun efecto
+   * necesita una audiencia distinta de `SELF` (`EpicEffectPlan.requiredAudience`).
+   */
+  planEpic(actorPlayerId: string, commandId: string, target?: CombatantKey): EpicPlan {
+    BattleRoom.assertValidCommandId(commandId)
+
+    const replay = this.replayOf(commandId)
+
+    if (replay !== null) {
+      return replay
+    }
+
+    const { attackerEntry, attacker, attackerProfile } = this.requireAttackerTurn(actorPlayerId)
+    const epic = attackerProfile.epic
+
+    if (epic === undefined) {
+      throw new NoEpicEquippedError()
+    }
+
+    const maxPower = attackerProfile.maxPower
+
+    if (maxPower === undefined || attacker.currentPower === null || !attacker.hasSkillState) {
+      throw new SkillsNotAvailableError()
+    }
+
+    if (attacker.cooldownOf(epic.epicProductId) > 0) {
+      throw new EpicOnCooldownError()
+    }
+
+    const support = evaluateEpicEffects(epic.executableEffects, epic.cooldownTurns)
+
+    if (!support.supported) {
+      throw new UnsupportedEpicEffectError(support.reason)
+    }
+
+    const effectPlan = support.plan
+    const currentPower = attacker.currentPower
+    // Se paga con el MISMO `spendPower` de siempre. `epic.powerCost` es siempre 0 (Catalog,
+    // `CombatProfile.validateEpic`) -> modo `NONE` (un costo `FIXED` no admite 0,
+    // `HeroPowerPolicy` lo valida explicitamente); si algun dia Catalog publicara un costo
+    // real, este codigo lo cobraria igual que una habilidad, sin un segundo camino.
+    const payment = spendPower(
+      { heroId: memberKey(attackerEntry), current: currentPower, max: maxPower },
+      epic.powerCost === 0 ? { mode: 'NONE' } : { mode: 'FIXED', amount: epic.powerCost },
+    )
+
+    if (!payment.ok) {
+      // Inalcanzable mientras `epic.powerCost` sea 0 (`NONE` siempre es `payable: true`).
+      throw new DomainError('El Poder no alcanza para usar la epica equipada.')
+    }
+
+    let targetEntry: TurnOrderEntry | null = null
+    let targetCombatant: Combatant | null = null
+    let recipients: readonly HealingRecipient[] = []
+
+    if (effectPlan.requiredAudience === 'OPPONENT' || effectPlan.requiredAudience === 'ALLY') {
+      if (target === undefined) {
+        throw new EpicTargetRequiredError()
+      }
+
+      const targetContext = this.requireTargetCombatant(
+        attackerEntry,
+        target,
+        effectPlan.requiredAudience,
+      )
+      targetEntry = targetContext.targetEntry
+      targetCombatant = targetContext.target
+    } else if (effectPlan.requiredAudience === 'ALLIED_GROUP') {
+      // El `target` del comando NO es la fuente del alcance (mismo criterio que una sanacion de
+      // grupo, `resolveHealingRecipients`): sin uno explicito, se usa el propio actor -- siempre
+      // "existe en la batalla" (ya se comprobo en `requireAttackerTurn`).
+      recipients = this.resolveHealingRecipients(
+        attackerEntry,
+        target ?? attackerEntry,
+        'ALLIED_GROUP',
+      )
+    }
+
+    return {
+      kind: 'epic',
+      attackerEntry,
+      attacker,
+      epic,
+      effectPlan,
+      targetEntry,
+      target: targetCombatant,
+      recipients,
+      powerBefore: currentPower,
+      powerAfter: payment.state.current,
+    }
+  }
+
+  /**
    * HU-19 v2 (contrato §4): resuelve a QUIEN afecta una sanacion. `ALLY` reutiliza
    * `requireTargetCombatant` (sin reescribirla): un unico companero distinto del actor. Para
    * `ALLIED_GROUP` (Canto del Bosque) el `target` del comando NO es la fuente del alcance --
@@ -2319,6 +2462,149 @@ export class BattleRoom {
 
     // Curar nunca reduce la Vida de nadie: no puede eliminar a un equipo (mismo criterio que
     // `applyHealSkill`).
+    return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
+  }
+
+  /**
+   * Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): aplica la epica ya resuelta
+   * como UNA sola transicion del agregado -- Poder del actor + recarga (`cooldownTurns + 1`,
+   * mismo patron que una habilidad) + TODOS los efectos correspondientes (temporales,
+   * inmunidad, dano directo, sanacion instantanea, reanimacion) + evento + `commandId`
+   * procesado + turno avanzado, en una unica version nueva.
+   *
+   * Por construccion (`EpicSkillPolicy.evaluateEpicEffects`: una sola audiencia por epica), a
+   * lo sumo UNA de estas tres cosas muta la Vida de alguien en esta llamada: dano directo
+   * (OPPONENT), sanacion/reanimacion de un unico aliado (ALLY, las dos se suman si coinciden),
+   * o sanacion de grupo (ALLIED_GROUP). Los efectos temporales (bonos, inmunidad) se adjuntan
+   * DESPUES de `completeTurn`, mismo criterio que `applySkill`/`applyHealingSkill`.
+   */
+  applyEpic(plan: EpicReadyPlan, outcome: EpicOutcome, commandId: string, at: Date): BattleRoom {
+    BattleRoom.assertValidCommandId(commandId)
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const completedPosition = this.battle.currentPosition
+    const actor = plan.attacker
+      .withPower(plan.powerAfter)
+      .withCooldown(plan.epic.epicProductId, plan.epic.cooldownTurns + 1)
+
+    let battle = this.battle.withCombatant(actor)
+    let targetHealth: { readonly before: number; readonly after: number } | undefined
+    let damagePayload:
+      { readonly calculatedDamage: number; readonly appliedDamage: number } | undefined
+    let healPayload: { readonly amount: number } | undefined
+    let affected: readonly CombatantKey[] | undefined
+
+    if (plan.recipients.length > 0 && outcome.healAmount !== null) {
+      const healed: {
+        readonly key: CombatantKey
+        readonly before: number
+        readonly after: number
+      }[] = []
+
+      for (const recipient of plan.recipients) {
+        const maxHealth = recipient.combatant.profile?.maxHealth ?? 0
+        const currentHealth = recipient.combatant.currentHealth ?? 0
+        const applied = applyHeal(currentHealth, maxHealth, outcome.healAmount)
+
+        battle = battle.withCombatant(recipient.combatant.withHealth(applied.healthAfter))
+        healed.push({
+          key: recipient.entry,
+          before: applied.healthBefore,
+          after: applied.healthAfter,
+        })
+      }
+
+      const primary = healed[0] as { readonly before: number; readonly after: number }
+      targetHealth = { before: primary.before, after: primary.after }
+      healPayload = { amount: outcome.healAmount }
+
+      if (healed.length > 1) {
+        affected = healed.map((entry) => entry.key)
+      }
+    } else if (plan.target !== null && plan.targetEntry !== null) {
+      const combinedHeal = (outcome.healAmount ?? 0) + (outcome.reviveAmount ?? 0)
+
+      if (outcome.damageAmount !== null) {
+        const applied = applyDamage(plan.target.currentHealth ?? 0, outcome.damageAmount)
+        const targetCombatant = plan.target
+          .withHealth(applied.healthAfter)
+          .withDamageTaken(applied.appliedDamage)
+
+        battle = battle.withCombatant(targetCombatant)
+        targetHealth = { before: applied.healthBefore, after: applied.healthAfter }
+        damagePayload = {
+          calculatedDamage: outcome.damageAmount,
+          appliedDamage: applied.appliedDamage,
+        }
+      } else if (combinedHeal > 0) {
+        const maxHealth = plan.target.profile?.maxHealth ?? 0
+        const currentHealth = plan.target.currentHealth ?? 0
+        const applied = applyHeal(currentHealth, maxHealth, combinedHeal)
+
+        battle = battle.withCombatant(plan.target.withHealth(applied.healthAfter))
+        targetHealth = { before: applied.healthBefore, after: applied.healthAfter }
+        healPayload = { amount: combinedHeal }
+      }
+    }
+
+    battle = battle.completeTurn(at)
+    // Los efectos temporales NUEVOS (bonos, inmunidad) se adjuntan DESPUES de `completeTurn`
+    // (mismo criterio que `applySkill`/`applyHealingSkill`): ninguno tira su primer
+    // decremento en esta misma transaccion.
+    const keys = [
+      plan.attackerEntry,
+      ...(plan.targetEntry === null ? [] : [plan.targetEntry]),
+      ...plan.recipients.map((recipient) => recipient.entry),
+    ]
+    battle = BattleRoom.withActiveEffectsAttached(battle, outcome.resolvedEffects, keys)
+
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.EpicUsed,
+      occurredAt: at,
+      payload: {
+        commandId,
+        completedPosition,
+        actor: { teamLabel: plan.attackerEntry.teamLabel, seat: plan.attackerEntry.seat },
+        ...(plan.targetEntry === null
+          ? {}
+          : { target: { teamLabel: plan.targetEntry.teamLabel, seat: plan.targetEntry.seat } }),
+        epic: { epicProductId: plan.epic.epicProductId, name: plan.epic.name },
+        power: { before: plan.powerBefore, after: plan.powerAfter },
+        cooldown: {
+          remainingTurns:
+            battle.combatantFor(plan.attackerEntry)?.cooldownOf(plan.epic.epicProductId) ?? 0,
+        },
+        appliedEffects: plan.epic.executableEffects.length,
+        ...(damagePayload === undefined ? {} : { damage: damagePayload }),
+        ...(healPayload === undefined ? {} : { heal: healPayload }),
+        ...(targetHealth === undefined ? {} : { targetHealth }),
+        ...(affected === undefined ? {} : { affected }),
+        battle: battle.toView(this.id),
+      },
+    }
+
+    const next = new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
+      },
+    )
+
     return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
   }
 

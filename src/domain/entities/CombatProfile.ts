@@ -81,33 +81,39 @@ export interface CombatAbility {
 }
 
 /**
- * Epica equipada CONGELADA (HU-31, contrato `hu-31-equipped-epic-v1` §8).
+ * Epica equipada CONGELADA (HU-31, contrato `hu-31-equipped-epic-v1` §8; correccion
+ * HU-19/HU-31 tras GAP-HU31-CATALOG-MULTI-EFFECT).
  *
- * Espejo local de `EquippedHeroEpic` (`PlayerInventoryEquippedHeroPort.ts`),
- * ya resuelta por Player-Inventory (`applyEpicEffects`, sin reimplementar el
- * resolver aqui). Combat solo la transporta: `baseEffect`/`specificEffect`
- * son objetos OPACOS, igual criterio que `CombatAbilityEffect`, y
- * `applied.*` es lo que de verdad importa para el snapshot -- el resultado ya
- * resuelto segun el subtipo real del heroe en el momento del inicio de la
- * batalla, que no cambia aunque la epica equipada cambie despues (HU-29/HU-31
- * §9: cambios posteriores a este congelamiento no afectan la batalla ya
- * iniciada).
+ * Espejo local de `EquippedHeroEpic` (`PlayerInventoryEquippedHeroPort.ts`), ya
+ * resuelta por Player-Inventory (`applyEpicEffects`, sin reimplementar el resolver
+ * aqui). `baseEffect`/`specificEffects`/`applied.*` son objetos OPACOS (igual
+ * criterio que antes de la correccion: solo para presentacion/trazabilidad, nunca
+ * interpretados) -- el resultado ya resuelto segun el subtipo real del heroe en el
+ * momento del inicio de la batalla, que no cambia aunque la epica equipada cambie
+ * despues (HU-29/HU-31 §9: cambios posteriores a este congelamiento no afectan la
+ * batalla ya iniciada).
  *
- * NO es una habilidad ejecutable: no tiene `powerCost` ni `chargeTurns`, y
- * `UseSkill`/`SkillEffectPolicy`/`SkillRealtimeHandler` no la leen (eso sigue
- * bloqueado, ver `docs/hu-19-skills.md` §"Epica").
+ * `executableEffects` SI esta tipado/validado (`CombatAbilityEffect`, reutilizando
+ * `validateAbilityEffect`): es `applied.baseApplied` (si no es `null`) + todos los
+ * `applied.additionalApplied`, en ese orden -- lo que `UseEpic`/`EpicSkillPolicy`
+ * ejecutan de verdad. `powerCost`/`cooldownTurns` son los mismos valores que Catalog
+ * deriva para TODA EPICA (0 y 2): viajan para que Combat los use sin inventar una
+ * constante propia, mismo criterio que `powerCost`/`chargeTurns` en `CombatAbility`.
  */
 export interface CombatEpic {
   readonly epicProductId: string
   readonly epicReference: string
   readonly name: string
   readonly compatibleHeroSubtype: string
+  readonly powerCost: number
+  readonly cooldownTurns: number
   readonly baseEffect: Readonly<Record<string, unknown>> | null
-  readonly specificEffect: Readonly<Record<string, unknown>>
+  readonly specificEffects: readonly Readonly<Record<string, unknown>>[]
   readonly applied: {
     readonly baseApplied: Readonly<Record<string, unknown>> | null
-    readonly additionalApplied: Readonly<Record<string, unknown>> | null
+    readonly additionalApplied: readonly Readonly<Record<string, unknown>>[]
   }
+  readonly executableEffects: readonly CombatAbilityEffect[]
 }
 
 export interface CombatProfile {
@@ -297,25 +303,70 @@ const requireNullableOpaqueRecord = (
 ): Readonly<Record<string, unknown>> | null =>
   value === null ? null : requireOpaqueRecord(value, field)
 
+const requireOpaqueRecordList = (
+  value: unknown,
+  field: string,
+  minimum: number,
+): readonly Readonly<Record<string, unknown>>[] => {
+  if (!Array.isArray(value)) {
+    throw new InvalidCombatProfileError(`"${field}" debe ser una lista.`)
+  }
+
+  if (value.length < minimum) {
+    throw new InvalidCombatProfileError(
+      `"${field}" debe tener al menos ${String(minimum)} elemento(s).`,
+    )
+  }
+
+  return value.map((item, index) => requireOpaqueRecord(item, `${field}[${String(index)}]`))
+}
+
 /**
- * Valida y congela la epica equipada (HU-31). `baseEffect`/`specificEffect`/
- * `applied.*` son objetos OPACOS: solo se comprueba su forma minima (objeto,
- * o `null` donde el contrato lo permite), nunca su contenido -- interpretarlo
- * es responsabilidad de una Task/HU futura, no de este congelamiento.
+ * Valida y congela la epica equipada (HU-31; correccion HU-19/HU-31 tras
+ * GAP-HU31-CATALOG-MULTI-EFFECT). `baseEffect`/`specificEffects`/`applied.*`
+ * son objetos OPACOS: solo se comprueba su forma minima (objeto, lista, o
+ * `null` donde el contrato lo permite), nunca su contenido.
+ *
+ * `executableEffects` SI se valida con `validateAbilityEffect` (reutilizada
+ * tal cual): es la lista que `UseEpic`/`EpicSkillPolicy` ejecutan de verdad,
+ * mismo vocabulario kind/target/statistic/operation/magnitude que una
+ * habilidad.
  */
 const validateEpic = (epic: CombatEpic): CombatEpic => {
   requireNonEmptyText(epic.epicProductId, 'epic.epicProductId')
   requireNonEmptyText(epic.epicReference, 'epic.epicReference')
   requireNonEmptyText(epic.name, 'epic.name')
   requireNonEmptyText(epic.compatibleHeroSubtype, 'epic.compatibleHeroSubtype')
+  requireNonNegativeInteger(epic.powerCost, 'epic.powerCost')
+
+  if (
+    !Number.isInteger(epic.cooldownTurns) ||
+    epic.cooldownTurns < 1 ||
+    epic.cooldownTurns > MAX_CHARGE_TURNS
+  ) {
+    throw new InvalidCombatProfileError(
+      `"epic.cooldownTurns" debe ser un entero entre 1 y ${String(MAX_CHARGE_TURNS)}.`,
+    )
+  }
 
   const baseEffect = requireNullableOpaqueRecord(epic.baseEffect, 'epic.baseEffect')
-  const specificEffect = requireOpaqueRecord(epic.specificEffect, 'epic.specificEffect')
+  const specificEffects = requireOpaqueRecordList(epic.specificEffects, 'epic.specificEffects', 1)
   const applied = requireOpaqueRecord(epic.applied, 'epic.applied')
   const baseApplied = requireNullableOpaqueRecord(applied.baseApplied, 'epic.applied.baseApplied')
-  const additionalApplied = requireNullableOpaqueRecord(
+  const additionalApplied = requireOpaqueRecordList(
     applied.additionalApplied,
     'epic.applied.additionalApplied',
+    0,
+  )
+
+  const rawExecutableEffects: unknown = epic.executableEffects
+
+  if (!Array.isArray(rawExecutableEffects)) {
+    throw new InvalidCombatProfileError('"epic.executableEffects" debe ser una lista.')
+  }
+
+  const executableEffects = (rawExecutableEffects as readonly CombatAbilityEffect[]).map(
+    (effect, index) => validateAbilityEffect(effect, `epic.executableEffects[${String(index)}]`),
   )
 
   return Object.freeze({
@@ -323,13 +374,17 @@ const validateEpic = (epic: CombatEpic): CombatEpic => {
     epicReference: epic.epicReference,
     name: epic.name,
     compatibleHeroSubtype: epic.compatibleHeroSubtype,
+    powerCost: epic.powerCost,
+    cooldownTurns: epic.cooldownTurns,
     baseEffect: baseEffect === null ? null : Object.freeze({ ...baseEffect }),
-    specificEffect: Object.freeze({ ...specificEffect }),
+    specificEffects: Object.freeze(specificEffects.map((effect) => Object.freeze({ ...effect }))),
     applied: Object.freeze({
       baseApplied: baseApplied === null ? null : Object.freeze({ ...baseApplied }),
-      additionalApplied:
-        additionalApplied === null ? null : Object.freeze({ ...additionalApplied }),
+      additionalApplied: Object.freeze(
+        additionalApplied.map((effect) => Object.freeze({ ...effect })),
+      ),
     }),
+    executableEffects: Object.freeze(executableEffects),
   })
 }
 

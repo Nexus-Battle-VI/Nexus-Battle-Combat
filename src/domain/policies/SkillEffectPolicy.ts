@@ -125,8 +125,12 @@ export type SkillSupport =
 
 const unsupported = (reason: string): SkillSupport => ({ supported: false, reason })
 
-/** Una magnitud usable: entero >= 1, o dados con `count >= 1` y `sides >= 2`. */
-const isUsableMagnitude = (effect: CombatAbilityEffect): boolean => {
+/**
+ * Una magnitud usable: entero >= 1, o dados con `count >= 1` y `sides >= 2`.
+ * Exportada para `EpicSkillPolicy` (correccion HU-19/HU-31): mismo criterio de
+ * magnitud usable que una habilidad, sin duplicarlo.
+ */
+export const isUsableMagnitude = (effect: CombatAbilityEffect): boolean => {
   const magnitude = effect.magnitude
 
   if (magnitude?.mode === 'FIXED') {
@@ -146,7 +150,7 @@ const isUsableMagnitude = (effect: CombatAbilityEffect): boolean => {
 }
 
 /** `magnitude` ya comprobada usable (`isUsableMagnitude`) a un `SkillBonus` de un solo efecto. */
-const bonusOf = (magnitude: CombatMagnitude): SkillBonus =>
+export const bonusOf = (magnitude: CombatMagnitude): SkillBonus =>
   magnitude.mode === 'FIXED'
     ? { fixed: magnitude.amount, dice: [] }
     : magnitude.mode === 'DICE'

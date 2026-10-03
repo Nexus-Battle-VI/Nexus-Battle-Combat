@@ -2,6 +2,7 @@ import { BattleRoom } from '../../domain/entities/BattleRoom'
 import type {
   BasicAttackResolvedPayload,
   DirectDamageSkillUsedPayload,
+  EpicUsedPayload,
   SkillUsedPayload,
 } from '../../domain/entities/BattleEvent'
 import type { CombatantKey } from '../../domain/entities/Combatant'
@@ -11,7 +12,14 @@ import type { BattleDropInventoryPort } from '../ports/BattleDropInventoryPort'
 import type { RandomSequencePort } from '../ports/RandomSequencePort'
 import { resolveVersusDrop } from './ResolveVersusDrop'
 
-type DamagingPayload = BasicAttackResolvedPayload | SkillUsedPayload | DirectDamageSkillUsedPayload
+/**
+ * `EpicUsedPayload` (correccion HU-19/HU-31) se incluye: una epica con un efecto `DAMAGE` puede
+ * eliminar a un rival en PvP igual que un ataque basico o una habilidad, y el drop de HU-30 no
+ * debe depender de QUE accion causo la derrota. `target`/`targetHealth` son OPCIONALES en ese
+ * payload (la mayoria de las epicas no dañan a nadie): se comprueban antes de leerlos.
+ */
+type DamagingPayload =
+  BasicAttackResolvedPayload | SkillUsedPayload | DirectDamageSkillUsedPayload | EpicUsedPayload
 
 /**
  * Adhiere el sorteo al MISMO documento/version que el evento de derrota.
@@ -29,11 +37,15 @@ export class PersistVersusDropDecision {
     const action = next.events.find((event) => event.seq === actionSeq)
     if (
       action === undefined ||
-      !['basicAttackResolved', 'skillUsed', 'directDamageSkillUsed'].includes(action.type)
+      !['basicAttackResolved', 'skillUsed', 'directDamageSkillUsed', 'epicUsed'].includes(
+        action.type,
+      )
     )
       return next
 
     const payload = action.payload as DamagingPayload
+    // `epicUsed` sin dano (la mayoria): sin `targetHealth`/`target`, nada que evaluar.
+    if (payload.targetHealth === undefined || payload.target === undefined) return next
     if (payload.targetHealth.before < 1 || payload.targetHealth.after !== 0) return next
     const actor = 'attacker' in payload ? payload.attacker : payload.actor
     const killer = this.participant(previous, actor)

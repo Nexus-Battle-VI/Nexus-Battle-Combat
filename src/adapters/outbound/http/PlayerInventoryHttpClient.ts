@@ -326,37 +326,59 @@ const parseOptionalLevel = (value: unknown): { readonly level?: number } => {
 }
 
 /**
- * Un efecto de epica es un objeto OPACO (HU-31): Combat no interpreta su
- * contenido, solo lo transporta dentro del snapshot congelado. Mismo criterio
- * de forma minima que `asRecord`, sin exigir ningun campo concreto.
+ * Un efecto de epica es un objeto OPACO para presentacion/trazabilidad (HU-31):
+ * mismo criterio de forma minima que `asRecord`, sin exigir ningun campo
+ * concreto. `executableEffects` (correccion HU-19/HU-31) es la UNICA lista que
+ * SI se parsea con rigor, reutilizando `parseAbilityEffect`.
  */
 const parseOpaqueEffect = (value: unknown): Readonly<Record<string, unknown>> => asRecord(value)
 
 const parseNullableOpaqueEffect = (value: unknown): Readonly<Record<string, unknown>> | null =>
   value === null ? null : parseOpaqueEffect(value)
 
+const parseOpaqueEffectList = (
+  value: unknown,
+  minimum: number,
+): readonly Readonly<Record<string, unknown>>[] => {
+  if (!Array.isArray(value) || value.length < minimum) {
+    throw invalidResponse()
+  }
+
+  return value.map(parseOpaqueEffect)
+}
+
 /**
- * Epica equipada (HU-31, contrato `hu-31-equipped-epic-v1` §5), YA RESUELTA
- * por Player-Inventory. `applied.baseApplied`/`applied.additionalApplied` son
- * el resultado de `applyEpicEffects`: lo unico que este cliente necesita
- * congelar en el snapshot. `baseEffect`/`specificEffect` viajan tal cual la
- * definicion de Catalog, solo para trazabilidad.
+ * Epica equipada (HU-31, contrato `hu-31-equipped-epic-v1` §5; correccion
+ * HU-19/HU-31 tras GAP-HU31-CATALOG-MULTI-EFFECT), YA RESUELTA por
+ * Player-Inventory. `applied.baseApplied`/`applied.additionalApplied` son el
+ * resultado de `applyEpicEffects`: lo que este cliente congela en el
+ * snapshot. `baseEffect`/`specificEffects` viajan tal cual la definicion de
+ * Catalog, solo para trazabilidad. `executableEffects` se construye AQUI,
+ * parseando `applied.baseApplied` (si no es `null`) + cada
+ * `applied.additionalApplied` con el MISMO `parseAbilityEffect` que ya
+ * valida los efectos de habilidades -- es lo que `UseEpic` ejecuta.
  */
 const parseEpic = (value: unknown): EquippedHeroEpic => {
   const record = asRecord(value)
   const applied = asRecord(record.applied)
+  const specificEffects = parseOpaqueEffectList(record.specificEffects, 1)
+  const baseApplied = parseNullableOpaqueEffect(applied.baseApplied)
+  const additionalApplied = parseOpaqueEffectList(applied.additionalApplied, 0)
 
   return {
     epicProductId: nonEmptyString(record.epicProductId),
     epicReference: nonEmptyString(record.epicReference),
     name: nonEmptyString(record.name),
     compatibleHeroSubtype: nonEmptyString(record.compatibleHeroSubtype),
+    powerCost: nonNegativeInteger(record.powerCost),
+    cooldownTurns: positiveInteger(record.cooldownTurns),
     baseEffect: parseNullableOpaqueEffect(record.baseEffect),
-    specificEffect: parseOpaqueEffect(record.specificEffect),
-    applied: {
-      baseApplied: parseNullableOpaqueEffect(applied.baseApplied),
-      additionalApplied: parseNullableOpaqueEffect(applied.additionalApplied),
-    },
+    specificEffects,
+    applied: { baseApplied, additionalApplied },
+    executableEffects: [
+      ...(baseApplied === null ? [] : [parseAbilityEffect(baseApplied)]),
+      ...additionalApplied.map(parseAbilityEffect),
+    ],
   }
 }
 
