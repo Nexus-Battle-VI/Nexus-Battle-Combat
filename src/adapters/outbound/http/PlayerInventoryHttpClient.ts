@@ -333,6 +333,24 @@ const parseOptionalLevel = (value: unknown): { readonly level?: number } => {
  */
 const parseOpaqueEffect = (value: unknown): Readonly<Record<string, unknown>> => asRecord(value)
 
+/**
+ * `applied.baseApplied`/`applied.additionalApplied` de una epica son el efecto de Catalog
+ * (`generalEffect`/`specificEffects`) TAL CUAL: ese sobre nunca declara
+ * `hasActivationCondition` (es un concepto de HABILIDAD, Tabla 7 -- una epica no tiene
+ * condiciones de activacion, GAP-HU31-CATALOG-MULTI-EFFECT no lo introduce). Se asume
+ * `false` cuando esta ausente, antes de validar con el mismo `parseAbilityEffect` que ya
+ * exige el resto de la forma -- evitar esto (en vez de exigirlo) haria que CUALQUIER
+ * epica equipada tirara la sala con un 503 al iniciar batalla.
+ */
+const parseEpicExecutableEffect = (value: unknown): EquippedHeroAbilityEffect => {
+  const record = asRecord(value)
+
+  return parseAbilityEffect({
+    ...record,
+    hasActivationCondition: record.hasActivationCondition ?? false,
+  })
+}
+
 const parseNullableOpaqueEffect = (value: unknown): Readonly<Record<string, unknown>> | null =>
   value === null ? null : parseOpaqueEffect(value)
 
@@ -376,8 +394,8 @@ const parseEpic = (value: unknown): EquippedHeroEpic => {
     specificEffects,
     applied: { baseApplied, additionalApplied },
     executableEffects: [
-      ...(baseApplied === null ? [] : [parseAbilityEffect(baseApplied)]),
-      ...additionalApplied.map(parseAbilityEffect),
+      ...(baseApplied === null ? [] : [parseEpicExecutableEffect(baseApplied)]),
+      ...additionalApplied.map(parseEpicExecutableEffect),
     ],
   }
 }

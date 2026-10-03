@@ -24,6 +24,24 @@ import type { RoomCommandLockPort } from '../ports/RoomCommandLockPort'
 import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
 import type { PersistVersusDropDecision } from '../services/PersistVersusDropDecision'
 
+/**
+ * `plan.attackerEntry`/`plan.targetEntry`/`recipient.entry` son `TurnOrderEntry` (HU-17):
+ * llevan `kind`/`playerId`/`displayName`/`heroId`/`heroSubtype` ademas de
+ * `teamLabel`/`seat`. `ActiveSkillEffect.sourceCombatant` y `ResolvedEpicEffect.targetKey`
+ * son `CombatantKey` (solo `teamLabel`/`seat`): TypeScript permite la asignacion directa
+ * (estructuralmente compatible), pero el documento persistido conserva los campos de mas,
+ * y el validador `$jsonSchema` de `activeSkillEffects[].sourceCombatant` los rechaza
+ * (`additionalProperties: false`, mismo esquema que ya usa `UseSkill`). Se reduce aqui,
+ * nunca se persiste el `TurnOrderEntry` completo.
+ */
+const toCombatantKey = (entry: {
+  readonly teamLabel: string
+  readonly seat: number
+}): CombatantKey => ({
+  teamLabel: entry.teamLabel,
+  seat: entry.seat,
+})
+
 export interface UseEpicInput {
   readonly roomId: string
   /** El `sub` autenticado de la conexion: el actor NUNCA lo aporta el cliente. */
@@ -108,6 +126,7 @@ export class UseEpic {
   /** Tira los dados de cada efecto UNA sola vez; nunca vuelve a sortear tras un conflicto. */
   private resolve(plan: EpicReadyPlan): EpicOutcome {
     const resolvedEffects: ResolvedEpicEffect[] = []
+    const attackerKey = toCombatantKey(plan.attackerEntry)
 
     for (const stat of plan.effectPlan.temporalStats) {
       const amount = stat.bonus.fixed + this.roll(stat.bonus.dice)
@@ -117,7 +136,7 @@ export class UseEpic {
           targetKey,
           effect: {
             sourceAbilityId: plan.epic.epicProductId,
-            sourceCombatant: plan.attackerEntry,
+            sourceCombatant: attackerKey,
             statistic: stat.statistic,
             operation: stat.operation,
             amount,
@@ -129,10 +148,10 @@ export class UseEpic {
 
     for (const immunity of plan.effectPlan.immunities) {
       resolvedEffects.push({
-        targetKey: plan.attackerEntry,
+        targetKey: attackerKey,
         effect: {
           sourceAbilityId: plan.epic.epicProductId,
-          sourceCombatant: plan.attackerEntry,
+          sourceCombatant: attackerKey,
           immunityCode: immunity.immunityCode,
           remainingOwnTurns: immunity.durationTurns,
         },
@@ -173,15 +192,15 @@ export class UseEpic {
     audience: TemporalEffectAudience,
   ): readonly CombatantKey[] {
     if (audience === 'SELF') {
-      return [plan.attackerEntry]
+      return [toCombatantKey(plan.attackerEntry)]
     }
 
     if (audience === 'ALLIED_GROUP') {
-      return plan.recipients.map((recipient) => recipient.entry)
+      return plan.recipients.map((recipient) => toCombatantKey(recipient.entry))
     }
 
     // OPPONENT o ALLY: `planEpic` ya exigio y resolvio un unico `targetEntry` para esta audiencia.
-    return plan.targetEntry === null ? [] : [plan.targetEntry]
+    return plan.targetEntry === null ? [] : [toCombatantKey(plan.targetEntry)]
   }
 
   /** La cara de un dado es `dieFaceFromIndex`, igual que el resto de HU-19; el indice sale de HU-24. */
