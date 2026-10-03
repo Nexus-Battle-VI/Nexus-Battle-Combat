@@ -42,6 +42,7 @@ import { CONSUME_REALTIME_TICKET, RESUME_BATTLE } from '../http/tokens'
 import { BASIC_ATTACK_COMMAND, BasicAttackRealtimeHandler } from './BasicAttackRealtimeHandler'
 import { CHAT_MESSAGE_TYPES, ChatRealtimeHandler } from './ChatRealtimeHandler'
 import { SkillRealtimeHandler, USE_SKILL_COMMAND } from './SkillRealtimeHandler'
+import { EpicRealtimeHandler, USE_EPIC_COMMAND } from './EpicRealtimeHandler'
 import type { RealtimeSocket, RealtimeSocketData } from './RealtimeSocket'
 import { SerialQueue } from './SerialQueue'
 
@@ -186,6 +187,8 @@ export class BattleRoomRealtimeGateway
     private readonly basicAttack: BasicAttackRealtimeHandler,
     @Inject(forwardRef(() => SkillRealtimeHandler))
     private readonly skill: SkillRealtimeHandler,
+    @Inject(forwardRef(() => EpicRealtimeHandler))
+    private readonly epic: EpicRealtimeHandler,
     @Inject(BATTLE_PRESENCE) private readonly presence: BattlePresencePort,
     @Inject(BATTLE_DEADLINE_BOOK) private readonly book: BattleDeadlineBookPort,
     @Inject(CLOCK) private readonly clock: ClockPort,
@@ -447,6 +450,11 @@ export class BattleRoomRealtimeGateway
       return
     }
 
+    if (message.type === USE_EPIC_COMMAND) {
+      this.handleEpic(client, state, message)
+      return
+    }
+
     // Tipo de mensaje no reconocido en este protocolo.
     client.close(CLOSE_BAD_MESSAGE, 'tipo_no_reconocido')
   }
@@ -501,6 +509,36 @@ export class BattleRoomRealtimeGateway
 
     const accepted = state.commandQueue.push(() =>
       this.skill.handle(client, subject, message, (roomId, events) => {
+        this.publish(roomId, events)
+      }),
+    )
+
+    if (!accepted) {
+      client.close(CLOSE_POLICY_VIOLATION, 'demasiados_mensajes')
+    }
+  }
+
+  /**
+   * Epica equipada (correccion HU-19/HU-31). Comparte la cola de comandos de combate con
+   * `attack`/`useSkill`: se atienden de uno en uno y en el orden en que llegaron. El actor es
+   * el `sub` de la conexion y el turno vigente; el cliente no elige QUE epica usar (la unica
+   * ejecutable es la congelada en su perfil), solo aporta el objetivo cuando algun efecto lo
+   * necesita.
+   */
+  private handleEpic(
+    client: RealtimeSocket,
+    state: ConnectionState,
+    message: Record<string, unknown>,
+  ): void {
+    const subject = state.subject
+
+    if (subject === null) {
+      client.close(CLOSE_UNAUTHENTICATED, 'no_autenticado')
+      return
+    }
+
+    const accepted = state.commandQueue.push(() =>
+      this.epic.handle(client, subject, message, (roomId, events) => {
         this.publish(roomId, events)
       }),
     )

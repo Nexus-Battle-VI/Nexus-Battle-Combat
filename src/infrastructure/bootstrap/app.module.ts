@@ -24,6 +24,7 @@ import {
   CREATE_REWARD_WORKFLOWS,
   EXECUTE_BASIC_ATTACK,
   USE_SKILL,
+  USE_EPIC,
   GET_BATTLE_ROOM,
   GET_REWARD_STATUS,
   ISSUE_REALTIME_TICKET,
@@ -62,6 +63,7 @@ import { JwtAuthGuard } from '../../adapters/inbound/http/auth/jwt-auth.guard'
 import { RolesGuard } from '../../adapters/inbound/http/auth/roles.guard'
 import { BasicAttackRealtimeHandler } from '../../adapters/inbound/ws/BasicAttackRealtimeHandler'
 import { SkillRealtimeHandler } from '../../adapters/inbound/ws/SkillRealtimeHandler'
+import { EpicRealtimeHandler } from '../../adapters/inbound/ws/EpicRealtimeHandler'
 import { BattleRoomRealtimeGateway } from '../../adapters/inbound/ws/BattleRoomRealtimeGateway'
 import { ChannelLock } from '../../adapters/inbound/ws/ChannelLock'
 import { ChatRealtimeHandler } from '../../adapters/inbound/ws/ChatRealtimeHandler'
@@ -218,6 +220,7 @@ import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattl
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
 import { RecoverBattleDeadlines } from '../../application/use-cases/RecoverBattleDeadlines'
 import { UseSkill } from '../../application/use-cases/UseSkill'
+import { UseEpic } from '../../application/use-cases/UseEpic'
 import { GetBattleRoom } from '../../application/use-cases/GetBattleRoom'
 import { ResumeBattle } from '../../application/use-cases/ResumeBattle'
 import { StartBattle } from '../../application/use-cases/StartBattle'
@@ -1412,6 +1415,38 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         finalizer: BattleFinalizer,
       ): SkillRealtimeHandler => new SkillRealtimeHandler(skill, logger, finalizer),
       inject: [USE_SKILL, LOGGER, BATTLE_FINALIZER],
+    },
+    // Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): la epica equipada, por el
+    // mismo WebSocket (`useEpic`). Comparte el bloqueo de sala y la secuencia HU-24 con el
+    // ataque basico/`useSkill`; a diferencia de ambos, no reutiliza `ExecuteBasicAttack` (usar
+    // la epica nunca degrada a ataque basico: su costo de Poder es siempre 0).
+    {
+      provide: USE_EPIC,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        clock: ClockPort,
+        sequence: RandomSequencePort,
+        lock: RoomCommandLockPort,
+        settler: BattleDeadlineSettler,
+        versusDrop: PersistVersusDropDecision,
+      ): UseEpic => new UseEpic(rooms, clock, sequence, lock, settler, versusDrop),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        CLOCK,
+        BATTLE_RANDOM_SEQUENCE,
+        ROOM_COMMAND_LOCK,
+        BATTLE_DEADLINE_SETTLER,
+        PersistVersusDropDecision,
+      ],
+    },
+    {
+      provide: EpicRealtimeHandler,
+      useFactory: (
+        epic: UseEpic,
+        logger: Logger,
+        finalizer: BattleFinalizer,
+      ): EpicRealtimeHandler => new EpicRealtimeHandler(epic, logger, finalizer),
+      inject: [USE_EPIC, LOGGER, BATTLE_FINALIZER],
     },
     {
       provide: READINESS_CHECKS,

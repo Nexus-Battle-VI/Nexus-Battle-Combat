@@ -1,6 +1,7 @@
 import type {
   CombatAbility,
   CombatAbilityEffect,
+  CombatEpic,
   CombatMagnitude,
   CombatProfile,
 } from '../../domain/entities/CombatProfile'
@@ -8,8 +9,38 @@ import type {
   EquippedHero,
   EquippedHeroAbility,
   EquippedHeroAbilityEffect,
+  EquippedHeroEpic,
   EquippedHeroMagnitude,
 } from '../ports/PlayerInventoryEquippedHeroPort'
+
+/**
+ * Copia superficial de un objeto de efecto OPACO (HU-31): ni Combat ni este
+ * factory interpretan su contenido, solo lo transportan al perfil congelado.
+ */
+const copyOpaqueEffect = (
+  effect: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> => ({ ...effect })
+
+const copyNullableOpaqueEffect = (
+  effect: Readonly<Record<string, unknown>> | null,
+): Readonly<Record<string, unknown>> | null => (effect === null ? null : copyOpaqueEffect(effect))
+
+/** La epica equipada llega YA RESUELTA (`applyEpicEffects`); aqui solo se copia. */
+const copyEpic = (epic: EquippedHeroEpic): CombatEpic => ({
+  epicProductId: epic.epicProductId,
+  epicReference: epic.epicReference,
+  name: epic.name,
+  compatibleHeroSubtype: epic.compatibleHeroSubtype,
+  powerCost: epic.powerCost,
+  cooldownTurns: epic.cooldownTurns,
+  baseEffect: copyNullableOpaqueEffect(epic.baseEffect),
+  specificEffects: epic.specificEffects.map(copyOpaqueEffect),
+  applied: {
+    baseApplied: copyNullableOpaqueEffect(epic.applied.baseApplied),
+    additionalApplied: epic.applied.additionalApplied.map(copyOpaqueEffect),
+  },
+  executableEffects: epic.executableEffects.map(copyAbilityEffect),
+})
 
 const copyMagnitude = (magnitude: EquippedHeroMagnitude): CombatMagnitude => ({ ...magnitude })
 
@@ -44,6 +75,11 @@ const copyAbility = (ability: EquippedHeroAbility): CombatAbility => ({
  *
  * No valida ni corrige: los enteros y la forma de las habilidades los comprueba
  * `createCombatProfile` al congelarlo.
+ *
+ * AMPLIACION ADITIVA (HU-31, contrato `hu-31-equipped-epic-v1` §8): copia
+ * ademas `hero.epic` SI esta presente -- ya resuelta por `applyEpicEffects`
+ * en Player-Inventory, nunca recalculada aqui. Ausente cuando el heroe no
+ * tiene epica equipada.
  */
 export const combatProfileFrom = (hero: EquippedHero): CombatProfile => ({
   heroId: hero.heroId,
@@ -67,4 +103,5 @@ export const combatProfileFrom = (hero: EquippedHero): CombatProfile => ({
   maxPower: hero.maxPower,
   ...(hero.level === undefined ? {} : { level: hero.level }),
   abilities: hero.abilities.map(copyAbility),
+  ...(hero.epic === undefined ? {} : { epic: copyEpic(hero.epic) }),
 })

@@ -6,8 +6,13 @@
 > y la validación 1 contra 1 ([#416](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/416)) son Tasks aparte. Este documento
 > distingue en cada punto qué es requisito explícito, aclaración formal, decisión confirmada por el PO, decisión técnica o pendiente.
 >
-> **La habilidad ÉPICA NO está implementada.** Depende de HU-31 (#78): no existe una fuente de «épica activa/equipada» y el Catalog v1 admite un solo
-> efecto específico por épica. Combat no crea `activeEpic` ni `epicSlot` (una guarda estática lo comprueba). Ver [Épica](#épica-bloqueada-hu-31).
+> **La EJECUCIÓN de la habilidad ÉPICA como acción de turno sigue sin implementar.** HU-31 (#78, contrato
+> [`hu-31-equipped-epic-v1`](https://github.com/Nexus-Battle-VI/Nexus-Battle-Infrastructure/blob/develop/docs/contracts/hu-31-equipped-epic-v1.md))
+> ya resolvió la parte que faltaba aquí: existe una fuente autoritativa de «épica equipada» (Player-Inventory, `HeroEpicSelection`), publicada de forma
+> aditiva en `equipped-hero.epic` y congelada en `CombatProfile.epic` al iniciar la batalla. Lo que SIGUE bloqueado es ejecutarla como acción de turno
+> (comando, costo 0, recarga 2): depende además de que Catalog resuelva su brecha de un solo `specificEffect` por épica
+> (`P-HU31-CATALOG-MULTI-EFFECT`). `UseSkill`/`SkillEffectPolicy`/`SkillRealtimeHandler` siguen sin leer `CombatProfile.epic` (una guarda estática lo
+> comprueba). Ver [Épica](#épica-ejecución-bloqueada-hu-31).
 
 ## Trazabilidad
 
@@ -104,11 +109,11 @@ Igual que HU-18 y con las mismas garantías: un `commandId` repetido devuelve el
 
 El cliente no aporta costo, Poder, recarga, efectos, Ataque, Defensa, Daño, Vida, semilla ni turno; el actor es el `sub` de la conexión y el turno vigente. Cualquier clave de más hace el comando mal formado. Nunca viajan semilla, índices, `raw`, efectos ni el motivo de un efecto no soportado. Los logs registran `roomId`, `commandId` y códigos, no perfiles ni JWT.
 
-## Épica (bloqueada, HU-31)
+## Épica (ejecución bloqueada, HU-31)
 
-- No existe una fuente de «épica activa/equipada» (auditoría de `josemora090525` en #78, 2026-09-21).
-- El Catalog v1 (`EPICA`) admite **un solo** `specificEffect`; al menos 5 de las 8 épicas de la Tabla 20 combinan varios efectos.
-- Por eso Combat **no** implementa la épica, no crea `activeEpic` ni `epicSlot`, y `abilities` solo lleva `HABILIDAD`. Una guarda estática lo comprueba. Cuando HU-31 defina la fuente, la épica se añade sin cambiar el contrato de `useSkill` salvo un identificador nuevo.
+- **Resuelto por HU-31** (contrato [`hu-31-equipped-epic-v1`](https://github.com/Nexus-Battle-VI/Nexus-Battle-Infrastructure/blob/develop/docs/contracts/hu-31-equipped-epic-v1.md)): existe fuente autoritativa de «épica equipada» (`HeroEpicSelection`, Player-Inventory), publicada aditivamente en `equipped-hero.epic` (ya resuelta vía `applyEpicEffects`, sin reimplementar el resolver) y congelada en `CombatProfile.epic`/`Combatant` al iniciar la batalla, igual patrón que `activeEffects`/`abilities`. `StartTournamentRoom` la hereda gratis vía `StartBattle.startRoom()`, sin lógica propia.
+- **Sigue bloqueado:** ejecutarla como acción de turno (comando, costo 0, recarga 2). El Catalog v1 (`EPICA`) sigue admitiendo **un solo** `specificEffect`; al menos 5 de las 8 épicas de la Tabla 20 combinan varios efectos (`P-HU31-CATALOG-MULTI-EFFECT`, pendiente de un proceso de contrato/ADR aparte con Catalog).
+- Por eso `UseSkill`/`SkillEffectPolicy`/`SkillRealtimeHandler` **no** leen `CombatProfile.epic`, no crean `activeEpic` ni `epicSlot`, y `abilities` solo lleva `HABILIDAD`. Una guarda estática (acotada a esos 3 ficheros de ejecución) lo comprueba. Cuando `P-HU31-CATALOG-MULTI-EFFECT` se resuelva, la ejecución se añade como `hu-19-skills-v2`, sin cambiar el contrato de `useSkill` salvo un identificador nuevo.
 
 ## Relación con otras historias
 
@@ -117,14 +122,14 @@ El cliente no aporta costo, Poder, recarga, efectos, Ataque, Defensa, Daño, Vid
 - **HU-20 / HU-24 / HU-25:** se reutilizan sin reescribirlos.
 - **HU-12 (abierta):** la habilidad **rechaza** objetivos del mismo equipo (`SAME_TEAM_TARGET`); no implementa curación ni habilidades sobre aliados.
 - **HU-21 (implementada):** una Vida en 0 finaliza la batalla si deja a un equipo sin héroes (la habilidad letal arrastra `battleFinished` en su misma escritura); un participante sin Vida no puede ser objetivo ni actuar (igual que HU-18).
-- **HU-31 (abierta):** la épica queda fuera.
+- **HU-31 (abierta):** la fuente de «épica equipada» y su congelamiento en el snapshot ya están resueltos (ver [Épica](#épica-ejecución-bloqueada-hu-31)); su ejecución como acción de turno sigue fuera de esta HU.
 
 ## Pruebas
 
 - **Dominio:** `evaluateSkill` (incluida una tabla con las **24** habilidades reales del Catalog), `Combatant` (Poder, recarga, invariantes, `restore`), `BattleState.completeTurn` (recarga y regeneración por participante), `BattleRoom.planSkill`/`applySkill`.
 - **Aplicación:** `UseSkill` con la secuencia HU-24 **guionizada** (orden y conteo de sorteos, bonos con dados, degradación, efecto 0 %, golpe no efectivo, rechazos con 0 sorteos, idempotencia, concurrencia, conflicto sin re-sorteo).
 - **Adaptador y gateway:** forma exacta del comando (`SkillRealtimeHandler`), difusión a los participantes, rechazo solo al remitente.
-- **Guardas estáticas** (`hu-19-skills-guards.spec.ts`): toda la aleatoriedad sale de `RandomSequencePort.nextIndex()` (sin `Math.random`/`crypto`/`Date.now`) y con el orden de dados del contrato; el Poder solo se maneja con `spendPower`/`regenPower` de HU-11; la política de efectos es pura; sin llamadas cruzadas por acción; una sola escritura y una sola transición (`applySkill`); la ruta no resta el Ataque de la Vida; el cliente no aporta resultados; el Poder insuficiente no tiene código de error propio; el motivo de un efecto no soportado no viaja; ningún archivo declara `activeEpic` ni `epicSlot`.
+- **Guardas estáticas** (`hu-19-skills-guards.spec.ts`): toda la aleatoriedad sale de `RandomSequencePort.nextIndex()` (sin `Math.random`/`crypto`/`Date.now`) y con el orden de dados del contrato; el Poder solo se maneja con `spendPower`/`regenPower` de HU-11; la política de efectos es pura; sin llamadas cruzadas por acción; una sola escritura y una sola transición (`applySkill`); la ruta no resta el Ataque de la Vida; el cliente no aporta resultados; el Poder insuficiente no tiene código de error propio; el motivo de un efecto no soportado no viaja; ninguno de los 3 ficheros de ejecución de habilidades declara `activeEpic`, `epicSlot` ni lee `CombatProfile.epic`.
 - **Extremo a extremo de protocolo** (`test/db/skills.e2e.spec.ts`): **MongoDB real** (Testcontainers), servidor Nest real y **dos clientes `ws` reales** con la secuencia guionizada: habilidad, recarga y regeneración a lo largo de los turnos, Poder insuficiente, rechazos, idempotencia y concurrencia, reconexión, recarga de página, reinicio de Combat, batallas anteriores a HU-19 y la migración `008`.
 - **No verificado:** contra Player-Inventory y Catalog **reales desplegados** ni en navegadores reales (Task #416 pendiente).
 

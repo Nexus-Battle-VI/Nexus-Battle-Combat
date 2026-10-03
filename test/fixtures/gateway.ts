@@ -2,6 +2,7 @@ import { BattleRoomRealtimeGateway } from '../../src/adapters/inbound/ws/BattleR
 import type { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicAttackRealtimeHandler'
 import type { ChatRealtimeHandler } from '../../src/adapters/inbound/ws/ChatRealtimeHandler'
 import type { SkillRealtimeHandler } from '../../src/adapters/inbound/ws/SkillRealtimeHandler'
+import type { EpicRealtimeHandler } from '../../src/adapters/inbound/ws/EpicRealtimeHandler'
 import { InMemoryBattleDeadlineBook } from '../../src/adapters/outbound/system/InMemoryBattleDeadlineBook'
 import { InMemoryBattlePresenceRegistry } from '../../src/adapters/outbound/system/InMemoryBattlePresenceRegistry'
 import type { RealtimeGatewayOptions } from '../../src/adapters/inbound/ws/BattleRoomRealtimeGateway'
@@ -33,6 +34,9 @@ export const noopAttack = (): BasicAttackRealtimeHandler =>
 export const noopSkill = (): SkillRealtimeHandler =>
   ({ handle: jest.fn() }) as unknown as SkillRealtimeHandler
 
+export const noopEpic = (): EpicRealtimeHandler =>
+  ({ handle: jest.fn() }) as unknown as EpicRealtimeHandler
+
 export interface BuildGatewayOptions {
   readonly consumeTicket: ConsumeRealtimeTicket
   readonly rooms: BattleRoomRepositoryPort
@@ -41,6 +45,7 @@ export interface BuildGatewayOptions {
   readonly chat?: ChatRealtimeHandler
   readonly attack?: BasicAttackRealtimeHandler
   readonly skill?: SkillRealtimeHandler
+  readonly epic?: EpicRealtimeHandler
   readonly presence?: BattlePresencePort
   readonly book?: BattleDeadlineBookPort
   readonly clock?: ClockPort
@@ -56,6 +61,7 @@ export const buildGateway = (options: BuildGatewayOptions): BattleRoomRealtimeGa
     options.chat ?? noopChat(),
     options.attack ?? noopAttack(),
     options.skill ?? noopSkill(),
+    options.epic ?? noopEpic(),
     options.presence ?? new InMemoryBattlePresenceRegistry(),
     options.book ?? new InMemoryBattleDeadlineBook(),
     options.clock ?? fixedClock,

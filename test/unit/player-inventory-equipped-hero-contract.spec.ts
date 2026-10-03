@@ -12,6 +12,7 @@ import {
   criticalChancePercentageEffect,
   equippedHeroContractBody,
   equippedHeroFixture,
+  golpeDeDefensaEpic,
   opponentDamageDiceEffect,
   shieldStrikeAbility,
   stoneHandAbility,
@@ -683,5 +684,129 @@ describe('PlayerInventoryHttpClient — 404 y errores de transporte (comportamie
     })
 
     await expect(client.getEquippedHero('jugador-1')).rejects.toBeInstanceOf(UpstreamServiceError)
+  })
+})
+
+describe('PlayerInventoryHttpClient — epic (HU-31, contrato hu-31-equipped-epic-v1; correccion HU-19/HU-31)', () => {
+  const bodyWithEpic = (epic: unknown): Record<string, unknown> =>
+    equippedHeroContractBody({ epic })
+
+  /** Una epica valida con un campo cambiado (o retirado si el valor es `undefined`). */
+  const epicWith = (change: Record<string, unknown>): Record<string, unknown> => ({
+    epicProductId: golpeDeDefensaEpic.epicProductId,
+    epicReference: golpeDeDefensaEpic.epicReference,
+    name: golpeDeDefensaEpic.name,
+    compatibleHeroSubtype: golpeDeDefensaEpic.compatibleHeroSubtype,
+    powerCost: golpeDeDefensaEpic.powerCost,
+    cooldownTurns: golpeDeDefensaEpic.cooldownTurns,
+    baseEffect: golpeDeDefensaEpic.baseEffect,
+    specificEffects: golpeDeDefensaEpic.specificEffects,
+    applied: golpeDeDefensaEpic.applied,
+    ...change,
+  })
+
+  it('epic es OPCIONAL: ausente (sin la clave) no rechaza la respuesta ni se inventa', async () => {
+    const hero = await fetchHero(equippedHeroContractBody())
+
+    expect('epic' in (hero ?? {})).toBe(false)
+  })
+
+  it('una epica presente llega al puerto tal cual, con base y especifico(s) ya resueltos', async () => {
+    const hero = await fetchHero(bodyWithEpic(golpeDeDefensaEpic))
+
+    expect(hero?.epic).toEqual(golpeDeDefensaEpic)
+  })
+
+  it('baseEffect en null ("No aplica") se conserva sin inventar un objeto', async () => {
+    const hero = await fetchHero(
+      bodyWithEpic(
+        epicWith({
+          baseEffect: null,
+          applied: { baseApplied: null, additionalApplied: golpeDeDefensaEpic.specificEffects },
+        }),
+      ),
+    )
+
+    expect(hero?.epic?.baseEffect).toBeNull()
+    expect(hero?.epic?.applied.baseApplied).toBeNull()
+  })
+
+  it('additionalApplied vacio (subtipo no coincidente) se conserva sin inventar efectos', async () => {
+    const hero = await fetchHero(
+      bodyWithEpic(
+        epicWith({
+          applied: { baseApplied: golpeDeDefensaEpic.baseEffect, additionalApplied: [] },
+        }),
+      ),
+    )
+
+    expect(hero?.epic?.applied.additionalApplied).toEqual([])
+    // Sin especifico, executableEffects solo trae el general.
+    expect(hero?.epic?.executableEffects).toEqual([golpeDeDefensaEpic.baseEffect])
+  })
+
+  it('executableEffects combina baseApplied + additionalApplied, parseados como efecto de habilidad', async () => {
+    const hero = await fetchHero(bodyWithEpic(golpeDeDefensaEpic))
+
+    expect(hero?.epic?.executableEffects).toEqual([
+      golpeDeDefensaEpic.applied.baseApplied,
+      ...golpeDeDefensaEpic.applied.additionalApplied,
+    ])
+  })
+
+  it('la lista blanca: campos extra de la epica NO llegan al puerto', async () => {
+    const hero = await fetchHero(
+      bodyWithEpic(epicWith({ raw: { secreto: true }, sku: 'no-debe-pasar' })),
+    )
+
+    expect(JSON.stringify(hero?.epic)).not.toMatch(/raw|secreto|no-debe-pasar/)
+    expect(Object.keys(hero?.epic ?? {}).sort()).toEqual([
+      'applied',
+      'baseEffect',
+      'compatibleHeroSubtype',
+      'cooldownTurns',
+      'epicProductId',
+      'epicReference',
+      'executableEffects',
+      'name',
+      'powerCost',
+      'specificEffects',
+    ])
+  })
+
+  it.each([
+    ['null', null],
+    ['una lista', []],
+    ['una cadena', 'golpe-de-defensa'],
+  ])('epic que es %s es 503, nunca un valor inventado', async (_label, value) => {
+    await expectRejected(bodyWithEpic(value))
+  })
+
+  it.each([
+    ['sin epicProductId', epicWith({ epicProductId: undefined })],
+    ['epicProductId vacio', epicWith({ epicProductId: '' })],
+    ['sin epicReference', epicWith({ epicReference: undefined })],
+    ['sin name', epicWith({ name: undefined })],
+    ['sin compatibleHeroSubtype', epicWith({ compatibleHeroSubtype: undefined })],
+    ['sin powerCost', epicWith({ powerCost: undefined })],
+    ['powerCost negativo', epicWith({ powerCost: -1 })],
+    ['sin cooldownTurns', epicWith({ cooldownTurns: undefined })],
+    ['cooldownTurns en 0', epicWith({ cooldownTurns: 0 })],
+    ['sin specificEffects', epicWith({ specificEffects: undefined })],
+    ['specificEffects vacio', epicWith({ specificEffects: [] })],
+    ['specificEffects que no es una lista', epicWith({ specificEffects: 'golpe' })],
+    ['baseEffect que no es un objeto ni null', epicWith({ baseEffect: 'golpe' })],
+    ['sin applied', epicWith({ applied: undefined })],
+    ['applied que no es un objeto', epicWith({ applied: 'golpe' })],
+    [
+      'applied.additionalApplied que no es una lista',
+      epicWith({ applied: { baseApplied: null, additionalApplied: 'golpe' } }),
+    ],
+    [
+      'applied.baseApplied con un kind desconocido (no parsea como efecto de habilidad)',
+      epicWith({ applied: { baseApplied: { kind: 42 }, additionalApplied: [] } }),
+    ],
+  ])('una epica %s es 503, nunca un valor inventado', async (_label, epic) => {
+    await expectRejected(bodyWithEpic(epic))
   })
 })

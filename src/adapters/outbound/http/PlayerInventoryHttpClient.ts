@@ -5,6 +5,7 @@ import type {
   EquippedHeroAbilityEffect,
   EquippedHeroBlocker,
   EquippedHeroEffect,
+  EquippedHeroEpic,
   EquippedHeroMagnitude,
   EquippedHeroPowerCost,
   EquippedHeroStats,
@@ -324,6 +325,72 @@ const parseOptionalLevel = (value: unknown): { readonly level?: number } => {
   return { level: value }
 }
 
+/**
+ * Un efecto de epica es un objeto OPACO para presentacion/trazabilidad (HU-31):
+ * mismo criterio de forma minima que `asRecord`, sin exigir ningun campo
+ * concreto. `executableEffects` (correccion HU-19/HU-31) es la UNICA lista que
+ * SI se parsea con rigor, reutilizando `parseAbilityEffect`.
+ */
+const parseOpaqueEffect = (value: unknown): Readonly<Record<string, unknown>> => asRecord(value)
+
+const parseNullableOpaqueEffect = (value: unknown): Readonly<Record<string, unknown>> | null =>
+  value === null ? null : parseOpaqueEffect(value)
+
+const parseOpaqueEffectList = (
+  value: unknown,
+  minimum: number,
+): readonly Readonly<Record<string, unknown>>[] => {
+  if (!Array.isArray(value) || value.length < minimum) {
+    throw invalidResponse()
+  }
+
+  return value.map(parseOpaqueEffect)
+}
+
+/**
+ * Epica equipada (HU-31, contrato `hu-31-equipped-epic-v1` §5; correccion
+ * HU-19/HU-31 tras GAP-HU31-CATALOG-MULTI-EFFECT), YA RESUELTA por
+ * Player-Inventory. `applied.baseApplied`/`applied.additionalApplied` son el
+ * resultado de `applyEpicEffects`: lo que este cliente congela en el
+ * snapshot. `baseEffect`/`specificEffects` viajan tal cual la definicion de
+ * Catalog, solo para trazabilidad. `executableEffects` se construye AQUI,
+ * parseando `applied.baseApplied` (si no es `null`) + cada
+ * `applied.additionalApplied` con el MISMO `parseAbilityEffect` que ya
+ * valida los efectos de habilidades -- es lo que `UseEpic` ejecuta.
+ */
+const parseEpic = (value: unknown): EquippedHeroEpic => {
+  const record = asRecord(value)
+  const applied = asRecord(record.applied)
+  const specificEffects = parseOpaqueEffectList(record.specificEffects, 1)
+  const baseApplied = parseNullableOpaqueEffect(applied.baseApplied)
+  const additionalApplied = parseOpaqueEffectList(applied.additionalApplied, 0)
+
+  return {
+    epicProductId: nonEmptyString(record.epicProductId),
+    epicReference: nonEmptyString(record.epicReference),
+    name: nonEmptyString(record.name),
+    compatibleHeroSubtype: nonEmptyString(record.compatibleHeroSubtype),
+    powerCost: nonNegativeInteger(record.powerCost),
+    cooldownTurns: positiveInteger(record.cooldownTurns),
+    baseEffect: parseNullableOpaqueEffect(record.baseEffect),
+    specificEffects,
+    applied: { baseApplied, additionalApplied },
+    executableEffects: [
+      ...(baseApplied === null ? [] : [parseAbilityEffect(baseApplied)]),
+      ...additionalApplied.map(parseAbilityEffect),
+    ],
+  }
+}
+
+/**
+ * `epic` es OPCIONAL (HU-31): ausente significa que el heroe no tiene
+ * ninguna epica equipada. A diferencia de `activeEffects`/`abilities`, una
+ * ausencia aqui NO es un contrato mal desplegado: es el estado normal de la
+ * mayoria de los heroes mientras HU-31 se adopta.
+ */
+const parseOptionalEpic = (value: unknown): { readonly epic?: EquippedHeroEpic } =>
+  value === undefined ? {} : { epic: parseEpic(value) }
+
 const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHero => {
   const record = asRecord(body)
 
@@ -351,5 +418,6 @@ const parseEquippedHero = (body: unknown, expectedPlayerId: string): EquippedHer
     blockers: parseBlockers(record.blockers),
     loadoutVersion: nonNegativeInteger(record.loadoutVersion),
     selectedAt: isoInstant(record.selectedAt),
+    ...parseOptionalEpic(record.epic),
   }
 }
