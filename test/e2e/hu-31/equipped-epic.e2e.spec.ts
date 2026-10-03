@@ -27,8 +27,10 @@ import {
   BATTLE_DEADLINE_SCHEDULER_OPTIONS,
   PROCESS_BATTLE_DEADLINES,
   REWARD_WORKFLOW_SCHEDULER_OPTIONS,
+  USE_EPIC,
 } from '../../../src/adapters/inbound/http/tokens'
 import type { ProcessBattleDeadlines } from '../../../src/application/use-cases/ProcessBattleDeadlines'
+import type { UseEpic } from '../../../src/application/use-cases/UseEpic'
 import {
   Role,
   TOKEN_VERIFIER,
@@ -42,6 +44,7 @@ import {
   BATTLE_ROOM_REPOSITORY,
   type BattleRoomRepositoryPort,
 } from '../../../src/application/ports/BattleRoomRepositoryPort'
+import { ParticipantKind } from '../../../src/domain/entities/Participant'
 import {
   BATTLE_DROP_INVENTORY,
   type BattleDropInventoryPort,
@@ -168,7 +171,7 @@ const catalogProducts: Record<string, unknown> = {
     sku: 'golpe-de-defensa-e2e-hu31',
     name: 'Golpe de defensa (E2E HU-31)',
     imageUrl: 'https://assets.example.test/golpe-de-defensa.png',
-    description: 'Epica de subtipo coincidente.',
+    description: 'Epica de subtipo coincidente, con DOS efectos especificos simultaneos.',
     type: 'EPICA',
     lifecycleStatus: 'ACTIVE',
     creditsPrice: 0,
@@ -186,13 +189,26 @@ const catalogProducts: Record<string, unknown> = {
           operation: 'INCREASE',
           magnitude: { mode: 'FIXED', amount: 4 },
         },
-        specificEffect: {
-          kind: 'STAT_MODIFIER',
-          target: 'SELF',
-          statistic: 'ATTACK',
-          operation: 'INCREASE',
-          magnitude: { mode: 'FIXED', amount: 2 },
-        },
+        // GAP-HU31-CATALOG-MULTI-EFFECT: forma canonica specificEffects[], DOS
+        // efectos simultaneos (igual que Golpe de defensa real, Tabla 20).
+        specificEffects: [
+          {
+            kind: 'STAT_MODIFIER',
+            target: 'SELF',
+            statistic: 'DAMAGE',
+            operation: 'INCREASE',
+            magnitude: { mode: 'FIXED', amount: 4 },
+          },
+          {
+            kind: 'STAT_MODIFIER',
+            target: 'SELF',
+            statistic: 'CRITICAL_CHANCE',
+            operation: 'INCREASE',
+            magnitude: { mode: 'FIXED', amount: 2 },
+          },
+        ],
+        powerCost: 0,
+        cooldownTurns: 2,
       },
     },
   },
@@ -219,6 +235,9 @@ const catalogProducts: Record<string, unknown> = {
           operation: 'INCREASE',
           magnitude: { mode: 'FIXED', amount: 1 },
         },
+        // Forma LEGADA (specificEffect, un unico objeto), deliberada: prueba la
+        // compatibilidad retroactiva real de la correccion GAP-HU31-CATALOG-MULTI-EFFECT
+        // en el mismo E2E que ejercita la forma canonica (specificEffects[]) arriba.
         specificEffect: {
           kind: 'STAT_MODIFIER',
           target: 'SELF',
@@ -226,6 +245,8 @@ const catalogProducts: Record<string, unknown> = {
           operation: 'INCREASE',
           magnitude: { mode: 'FIXED', amount: 5 },
         },
+        powerCost: 0,
+        cooldownTurns: 2,
       },
     },
   },
@@ -252,6 +273,8 @@ const catalogProducts: Record<string, unknown> = {
           operation: 'INCREASE',
           magnitude: { mode: 'FIXED', amount: 9 },
         },
+        powerCost: 0,
+        cooldownTurns: 2,
       },
     },
   },
@@ -467,6 +490,34 @@ const dropNotifier: BattleDropNotificationPort = {
   notify: () => Promise.resolve(),
 }
 
+/**
+ * El doble de `equipped-hero` (ver cabecera, "SUSTITUIDO") implementa el
+ * PUERTO de Combat, no el contrato HTTP de Player-Inventory: debe incluir
+ * `executableEffects`, que Player-Inventory NUNCA publica (lo construye
+ * `PlayerInventoryHttpClient.parseEpic` en el lado de Combat). Se replica
+ * aqui esa misma construccion -- baseApplied (si no null) + TODOS los
+ * additionalApplied -- para que el doble sea fiel al puerto real, no solo
+ * al JSON crudo que acaba de persistir Player-Inventory.
+ */
+const toPortEpic = (raw: Record<string, unknown>): EquippedHeroEpic => {
+  const applied = raw.applied as { baseApplied: unknown; additionalApplied: readonly unknown[] }
+  // `applied.baseApplied`/`additionalApplied` son el efecto de Catalog tal cual (sin
+  // `hasActivationCondition`: ese campo es de HABILIDAD, no de epica) -- mismo criterio
+  // que `parseEpicExecutableEffect` en `PlayerInventoryHttpClient.ts`, que este doble
+  // replica a mano porque el puerto se sustituye directamente en esta prueba.
+  const withDefaults = (effect: unknown): unknown => ({
+    hasActivationCondition: false,
+    ...(effect as Record<string, unknown>),
+  })
+  return {
+    ...raw,
+    executableEffects: [
+      ...(applied.baseApplied === null ? [] : [withDefaults(applied.baseApplied)]),
+      ...applied.additionalApplied.map(withDefaults),
+    ],
+  } as unknown as EquippedHeroEpic
+}
+
 // Mutable: el PUT real a Player-Inventory actualiza esta variable justo
 // despues de confirmarse, para que el doble de equipped-hero proyecte el
 // MISMO estado que de verdad se persistio (ver cabecera, "SUSTITUIDO").
@@ -482,6 +533,10 @@ const heroes: PlayerInventoryEquippedHeroPort = {
         ready: true,
         blockers: [],
         loadoutVersion: 0,
+        // Sin habilidades: este heroe solo tiene la epica, para que la
+        // recarga/los efectos que verifica este E2E no dependan de HU-19
+        // (habilidades), que es un contrato ajeno a HU-31.
+        abilities: [],
         ...(currentEpic === undefined ? {} : { epic: currentEpic }),
       }),
     ),
@@ -667,7 +722,7 @@ describe('HU-31 de extremo a extremo REAL: epica equipada, bloqueada en batalla 
     expect(put.status).toBe(200)
     expect(put.body.epic.epicReference).toBe('golpe-de-defensa-e2e-hu31')
     expect(put.body.epic.applied.baseApplied).not.toBeNull()
-    expect(put.body.epic.applied.additionalApplied).not.toBeNull()
+    expect(put.body.epic.applied.additionalApplied).toHaveLength(2)
     expect(put.body.locked).toBe(false)
 
     // Nueva peticion independiente: la seleccion sigue siendo la misma.
@@ -678,44 +733,113 @@ describe('HU-31 de extremo a extremo REAL: epica equipada, bloqueada en batalla 
 
     // El doble de equipped-hero (ver cabecera) proyecta este MISMO estado
     // real, para que StartBattle lo congele fielmente.
-    currentEpic = read.body.epic as EquippedHeroEpic
+    currentEpic = toPortEpic(read.body.epic as Record<string, unknown>)
   })
 
   it('E2E-07(PVE)/T-C-01 — inicio real: StartBattle compromete contra Player-Inventory real; el snapshot congela base+especifico', async () => {
-    const created = await http()
-      .post('/api/v1/combat/rooms')
-      .set('Authorization', auth())
-      .send({
-        mode: 'PVE',
-        teamConfigs: [
-          { capacity: 1 },
-          { capacity: 1, initialParticipants: [{ kind: 'AI', heroId: 'ai-0' }] },
-        ],
-        reward: { amount: 0 },
-      })
-    expect(created.status).toBe(201)
-    roomId = created.body.id as string
+    const rooms = app.get<BattleRoomRepositoryPort>(BATTLE_ROOM_REPOSITORY)
 
-    const joined = await http()
-      .post(`/api/v1/combat/rooms/${roomId}/join`)
-      .set('Authorization', auth())
-      .send({})
-    expect(joined.status).toBe(200)
+    // HU-17: el orden de turnos se sortea de verdad (motor HU-24 real, sin
+    // doblar -- ver cabecera). El escenario de ejecucion real necesita que el
+    // HUMANO actue primero (no hay IA que juegue su propio turno en esta
+    // prueba); crear una sala nueva hasta que el sorteo lo de es legitimo
+    // (ninguna composicion/semilla esta ratificada) y no oculta ningun fallo:
+    // cada sala descartada es un sorteo real distinto, no un reintento de la
+    // MISMA operacion.
+    let humanGoesFirst = false
+    const deadlines = app.get<ProcessBattleDeadlines>(PROCESS_BATTLE_DEADLINES)
 
-    const started = await http()
-      .post(`/api/v1/combat/rooms/${roomId}/start`)
-      .set('Authorization', auth())
-    expect(started.status).toBe(200)
-    expect(started.body.status).toBe('IN_BATTLE')
+    for (let attempt = 0; attempt < 20 && !humanGoesFirst; attempt += 1) {
+      const created = await http()
+        .post('/api/v1/combat/rooms')
+        .set('Authorization', auth())
+        .send({
+          mode: 'PVE',
+          teamConfigs: [
+            { capacity: 1 },
+            { capacity: 1, initialParticipants: [{ kind: 'AI', heroId: 'ai-0' }] },
+          ],
+          reward: { amount: 0 },
+        })
+      expect(created.status).toBe(201)
+      roomId = created.body.id as string
+
+      const joined = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/join`)
+        .set('Authorization', auth())
+        .send({})
+      expect(joined.status).toBe(200)
+
+      const started = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth())
+      expect(started.status).toBe(200)
+      expect(started.body.status).toBe('IN_BATTLE')
+
+      const freshRoom = await rooms.findById(roomId)
+      humanGoesFirst = freshRoom?.battle?.currentEntry.kind === ParticipantKind.Human
+
+      if (!humanGoesFirst) {
+        // El compromiso de batalla (HU-29) del heroe sigue ACTIVO en la sala
+        // descartada -- un heroe solo puede tener UN compromiso vigente a la
+        // vez (indice parcial de Player-Inventory). Hay que liberarlo antes
+        // del siguiente sorteo, o el commit del proximo intento se rechaza
+        // (HERO_COMMITTED), nunca por una causa nueva: mismo mecanismo real
+        // de vencimiento/liberacion que E2E-05 (cont.) mas abajo.
+        clock.advance(6 * 60_000 + 1)
+        await deadlines.execute(roomId)
+      }
+    }
+
+    expect(humanGoesFirst).toBe(true)
 
     // Snapshot REAL, leido directamente del repositorio real de Combat
     // (mismo Mongo real que acaba de persistir `started`).
-    const rooms = app.get<BattleRoomRepositoryPort>(BATTLE_ROOM_REPOSITORY)
     const room = await rooms.findById(roomId)
     const profile = room?.battle?.combatantFor({ teamLabel: 'A', seat: 0 })?.profile
     expect(profile?.epic?.epicReference).toBe('golpe-de-defensa-e2e-hu31')
     expect(profile?.epic?.applied.baseApplied).not.toBeNull()
-    expect(profile?.epic?.applied.additionalApplied).not.toBeNull()
+    expect(profile?.epic?.applied.additionalApplied).toHaveLength(2)
+    // GAP-HU31-CATALOG-MULTI-EFFECT: executableEffects trae los 3 (general + 2
+    // especificos), ya validados como efecto de habilidad real -- lo que
+    // `UseEpic` ejecutara de verdad en el siguiente escenario.
+    expect(profile?.epic?.executableEffects).toHaveLength(3)
+  })
+
+  it('correccion HU-19/HU-31 — usar la epica REAL: Poder sin cambios, recarga 2, los 3 efectos simultaneos aplicados y persistidos', async () => {
+    const useEpic = app.get<UseEpic>(USE_EPIC)
+    const result = await useEpic.execute({
+      roomId,
+      requesterId: PLAYER_ID,
+      commandId: randomUUID(),
+    })
+
+    expect(result.replayed).toBe(false)
+    expect(result.event.type).toBe('epicUsed')
+
+    const payload = result.event.payload as {
+      readonly power: { readonly before: number; readonly after: number }
+      readonly cooldown: { readonly remainingTurns: number }
+      readonly appliedEffects: number
+    }
+    // El costo de la epica es SIEMPRE 0 (Catalog, confirmado arriba): el
+    // Poder del heroe no cambia, sea cual sea su valor real (base x nivel,
+    // HU-08 CA-06 -- no se fija aqui un numero de memoria).
+    expect(payload.power.after).toBe(payload.power.before)
+    expect(payload.power.before).toBeGreaterThan(0)
+    expect(payload.cooldown).toEqual({ remainingTurns: 2 })
+    expect(payload.appliedEffects).toBe(3)
+
+    // Persistido de verdad: se relee el mismo Mongo real de Combat, en una
+    // peticion/consulta INDEPENDIENTE de la que acabo de escribir.
+    const rooms = app.get<BattleRoomRepositoryPort>(BATTLE_ROOM_REPOSITORY)
+    const reread = await rooms.findById(roomId)
+    const actor = reread?.battle?.combatantFor({ teamLabel: 'A', seat: 0 })
+    expect(actor?.activeSkillEffects).toHaveLength(3)
+    expect(actor?.cooldownOf(EPIC_MATCH_PRODUCT_ID)).toBe(2)
+    // La recarga/los efectos de la epica NO dependen de ninguna habilidad:
+    // este heroe no tiene ninguna congelada (abilities: [] en el fixture).
+    expect(reread?.battle?.combatantFor({ teamLabel: 'A', seat: 0 })?.abilities).toHaveLength(0)
   })
 
   it('E2E-05 — con batalla activa, cambiar la epica se rechaza (409 battle_lock), real', async () => {
@@ -765,8 +889,8 @@ describe('HU-31 de extremo a extremo REAL: epica equipada, bloqueada en batalla 
     // aplica con esta epica (subtipo MEDICO != GUERRERO_TANQUE del heroe).
     const read = await getEpic()
     expect(read.body.epic.applied.baseApplied).not.toBeNull()
-    expect(read.body.epic.applied.additionalApplied).toBeNull()
-    currentEpic = read.body.epic as EquippedHeroEpic
+    expect(read.body.epic.applied.additionalApplied).toEqual([])
+    currentEpic = toPortEpic(read.body.epic as Record<string, unknown>)
 
     const created = await http()
       .post('/api/v1/combat/rooms')
@@ -795,6 +919,6 @@ describe('HU-31 de extremo a extremo REAL: epica equipada, bloqueada en batalla 
     const profile = room?.battle?.combatantFor({ teamLabel: 'A', seat: 0 })?.profile
     expect(profile?.epic?.epicReference).toBe('luz-cegadora-e2e-hu31')
     expect(profile?.epic?.applied.baseApplied).not.toBeNull()
-    expect(profile?.epic?.applied.additionalApplied).toBeNull()
+    expect(profile?.epic?.applied.additionalApplied).toEqual([])
   })
 })

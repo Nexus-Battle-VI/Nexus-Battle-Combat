@@ -2511,7 +2511,7 @@ export class BattleRoom {
 
         battle = battle.withCombatant(recipient.combatant.withHealth(applied.healthAfter))
         healed.push({
-          key: recipient.entry,
+          key: { teamLabel: recipient.entry.teamLabel, seat: recipient.entry.seat },
           before: applied.healthBefore,
           after: applied.healthAfter,
         })

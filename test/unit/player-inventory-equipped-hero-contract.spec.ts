@@ -742,16 +742,22 @@ describe('PlayerInventoryHttpClient — epic (HU-31, contrato hu-31-equipped-epi
 
     expect(hero?.epic?.applied.additionalApplied).toEqual([])
     // Sin especifico, executableEffects solo trae el general.
-    expect(hero?.epic?.executableEffects).toEqual([golpeDeDefensaEpic.baseEffect])
+    expect(hero?.epic?.executableEffects).toEqual([golpeDeDefensaEpic.executableEffects[0]])
   })
 
   it('executableEffects combina baseApplied + additionalApplied, parseados como efecto de habilidad', async () => {
     const hero = await fetchHero(bodyWithEpic(golpeDeDefensaEpic))
 
-    expect(hero?.epic?.executableEffects).toEqual([
-      golpeDeDefensaEpic.applied.baseApplied,
-      ...golpeDeDefensaEpic.applied.additionalApplied,
-    ])
+    expect(hero?.epic?.executableEffects).toEqual(golpeDeDefensaEpic.executableEffects)
+  })
+
+  it('applied.baseApplied/additionalApplied de Catalog NUNCA declaran hasActivationCondition (es de HABILIDAD): executableEffects lo asume false, nunca rechaza la epica', async () => {
+    const hero = await fetchHero(bodyWithEpic(golpeDeDefensaEpic))
+
+    expect(golpeDeDefensaEpic.baseEffect).not.toHaveProperty('hasActivationCondition')
+    for (const effect of hero?.epic?.executableEffects ?? []) {
+      expect(effect.hasActivationCondition).toBe(false)
+    }
   })
 
   it('la lista blanca: campos extra de la epica NO llegan al puerto', async () => {
