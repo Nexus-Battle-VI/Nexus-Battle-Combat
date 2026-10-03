@@ -451,7 +451,13 @@ const accounts: AccountBattleProfilePort = {
 const dropInventory: BattleDropInventoryPort = {
   capture: (command) => Promise.resolve({ ...command, equipment: [] }),
   find: (battleId, playerId) =>
-    Promise.resolve({ battleId, playerId, heroId: HERO_PRODUCT_ID, loadoutVersion: 0, equipment: [] }),
+    Promise.resolve({
+      battleId,
+      playerId,
+      heroId: HERO_PRODUCT_ID,
+      loadoutVersion: 0,
+      equipment: [],
+    }),
   transfer: () =>
     Promise.reject(new Error('HU-31 E2E: BattleDropInventoryPort.transfer no deberia invocarse.')),
   closeBattle: () => Promise.resolve(),
