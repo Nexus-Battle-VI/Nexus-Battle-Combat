@@ -23,6 +23,8 @@ import type { RandomSequencePort } from '../ports/RandomSequencePort'
 import type { RoomCommandLockPort } from '../ports/RoomCommandLockPort'
 import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
 import type { PersistVersusDropDecision } from '../services/PersistVersusDropDecision'
+import type { CombatDecisionEvent } from '../../domain/decision/CombatDecisionEvent'
+import type { CombatDecisionRecorder } from '../services/CombatDecisionRecorder'
 
 /**
  * `plan.attackerEntry`/`plan.targetEntry`/`recipient.entry` son `TurnOrderEntry` (HU-17):
@@ -89,6 +91,7 @@ export class UseEpic {
     private readonly lock: RoomCommandLockPort,
     private readonly settler: BattleDeadlineSettler | null = null,
     private readonly versusDrop: PersistVersusDropDecision | null = null,
+    private readonly decisionRecorder: CombatDecisionRecorder | null = null,
   ) {}
 
   execute(input: UseEpicInput): Promise<UseEpicResult> {
@@ -116,11 +119,30 @@ export class UseEpic {
       return { event: plan.event, replayed: true, followUp: [], finished: null }
     }
 
+    const decision = this.decisionRecorder?.tryPrepareHumanDecision(room, input.commandId, {
+      kind: 'EPIC',
+      epicId: plan.epic.epicProductId,
+      target:
+        plan.effectPlan.requiredAudience === 'ALLIED_GROUP'
+          ? { scope: 'ALLIED_GROUP' }
+          : plan.effectPlan.requiredAudience === null
+            ? { scope: 'SELF' }
+            : plan.targetEntry === null
+              ? { scope: 'SELF' }
+              : {
+                  scope: 'COMBATANT',
+                  combatant: {
+                    teamLabel: plan.targetEntry.teamLabel,
+                    seat: plan.targetEntry.seat,
+                  },
+                },
+    })
+
     const outcome = this.resolve(plan)
     const actionSeq = room.lastSeq + 1
     const next = room.applyEpic(plan, outcome, input.commandId, this.clock.now())
 
-    return this.persist(room, next, actionSeq, input)
+    return this.persist(room, next, actionSeq, input, decision)
   }
 
   /** Tira los dados de cada efecto UNA sola vez; nunca vuelve a sortear tras un conflicto. */
@@ -221,6 +243,7 @@ export class UseEpic {
     next: BattleRoom,
     actionSeq: number,
     input: UseEpicInput,
+    decision: CombatDecisionEvent | null | undefined,
   ): Promise<UseEpicResult> {
     try {
       const resolved =
@@ -231,6 +254,8 @@ export class UseEpic {
       if (event === undefined) {
         throw new DomainError('La epica se guardo sin su evento.')
       }
+
+      if (decision !== undefined && decision !== null) await this.decisionRecorder?.record(decision)
 
       return {
         event,

@@ -23,6 +23,7 @@ import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
 import { prepareAttack, type AttackParticipant } from './PrepareAttack'
 import { ResolveAttack } from './ResolveAttack'
 import type { PersistVersusDropDecision } from '../services/PersistVersusDropDecision'
+import type { CombatDecisionRecorder } from '../services/CombatDecisionRecorder'
 
 export interface ExecuteBasicAttackInput {
   readonly roomId: string
@@ -116,6 +117,7 @@ export class ExecuteBasicAttack {
     private readonly settler: BattleDeadlineSettler | null = null,
     private readonly resolveAttack: ResolveAttack = new ResolveAttack(),
     private readonly versusDrop: PersistVersusDropDecision | null = null,
+    private readonly decisionRecorder: CombatDecisionRecorder | null = null,
   ) {}
 
   execute(input: ExecuteBasicAttackInput): Promise<ExecuteBasicAttackResult> {
@@ -154,6 +156,11 @@ export class ExecuteBasicAttack {
       return { event: plan.event, replayed: true, followUp: [], finished: null }
     }
 
+    const decision = this.decisionRecorder?.tryPrepareHumanDecision(room, input.commandId, {
+      kind: 'BASIC_ATTACK',
+      target: { scope: 'COMBATANT', combatant: input.target },
+    })
+
     // A partir de aqui se consume la secuencia: todo lo que puede fallar por el perfil
     // ya se comprobo (planBasicAttack) o se comprueba en `prepare`, que no sortea.
     const prepared = this.prepare(plan)
@@ -179,6 +186,8 @@ export class ExecuteBasicAttack {
       if (event === undefined) {
         throw new DomainError('El ataque se guardo sin su evento.')
       }
+
+      if (decision !== undefined && decision !== null) await this.decisionRecorder?.record(decision)
 
       return {
         event,

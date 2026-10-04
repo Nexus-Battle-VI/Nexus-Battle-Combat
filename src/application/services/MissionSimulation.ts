@@ -28,6 +28,8 @@ import type {
   BattleDecisionState,
   DecisionCombatant,
 } from '../../domain/decision/BattleDecisionState'
+import type { ActionIntent } from '../../domain/decision/ActionIntent'
+import type { LegalAction } from '../../domain/decision/LegalAction'
 
 export interface MissionFighter {
   readonly maxHealth: number
@@ -131,6 +133,16 @@ interface ChosenAction {
   readonly strategy: MissionRotationStrategyTrace
 }
 
+/** Observación interna; acumula hechos en memoria, nunca persiste durante el combate. */
+export interface MissionDecisionObservation {
+  readonly decisionSequence: number
+  readonly stateBefore: BattleDecisionState
+  readonly legalActions: readonly LegalAction[]
+  readonly selectedAction: ActionIntent
+}
+
+export type MissionDecisionObserver = (decision: MissionDecisionObservation) => void
+
 /** Un modificador de estadística con duración (mejora del héroe o penalización del enemigo). */
 interface TimedModifier {
   /** Habilidad que lo originó (revisión de PR #71): permite representar `activeEffects` con honestidad. */
@@ -175,6 +187,7 @@ export const simulateMission = async (
   seed: MissionSeed,
   sequences: RandomSequenceFactoryPort,
   decisionPolicy: AiDecisionPort,
+  observeDecision?: MissionDecisionObserver,
 ): Promise<MissionSimulationResult> => {
   const sequence = sequences.create(RandomSeed.create(seed.value))
   const random = createBoundedRandom(sequence)
@@ -302,6 +315,7 @@ export const simulateMission = async (
     enemyHealth: number,
     enemyModifiers: readonly TimedModifier[],
     roundTurns: number,
+    globalTurnsCompleted: number,
   ): BattleDecisionState => {
     const actor: DecisionCombatant = {
       identity: MISSION_HERO_KEY,
@@ -359,7 +373,7 @@ export const simulateMission = async (
         battleId: request.operationId,
         mode: BattleMode.Pve,
         round: roundTurns,
-        turnsCompleted: Math.max(0, roundTurns - 1),
+        turnsCompleted: globalTurnsCompleted,
       },
       actor,
       allies: [],
@@ -382,6 +396,7 @@ export const simulateMission = async (
     enemyHealth: number,
     enemyModifiers: readonly TimedModifier[],
     roundTurns: number,
+    decisionSequence: number,
   ): Promise<ChosenAction> => {
     const evaluation = rotationConstraint.evaluate({
       rotations: missionRotations,
@@ -393,9 +408,21 @@ export const simulateMission = async (
       maxHealth,
       enemyTarget: MISSION_ENEMY_TARGET,
     })
-    const state = buildDecisionState(enemy, enemyHealth, enemyModifiers, roundTurns)
+    const state = buildDecisionState(
+      enemy,
+      enemyHealth,
+      enemyModifiers,
+      roundTurns,
+      decisionSequence - 1,
+    )
     const intent = await decisionPolicy.decide(state, evaluation.legalActions)
     const resolved = resolveLegalAction(intent, evaluation.legalActions)
+    observeDecision?.({
+      decisionSequence,
+      stateBefore: state,
+      legalActions: evaluation.legalActions,
+      selectedAction: resolved,
+    })
     const strategy = evaluation.resolve(resolved)
 
     if (resolved.kind === 'EPIC') {
@@ -515,7 +542,7 @@ export const simulateMission = async (
         event('heroHealed', { amount, heroHealth: health })
       }
       dropSpent(pendingHeals)
-      const action = await chooseAction(enemy, enemyHealth, enemyModifiers, turns)
+      const action = await chooseAction(enemy, enemyHealth, enemyModifiers, turns, totalTurns)
       let attackBonus = 0
       let damageBonus = 0
       let attacks = true

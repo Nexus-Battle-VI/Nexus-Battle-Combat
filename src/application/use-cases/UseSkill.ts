@@ -30,6 +30,8 @@ import type { ExecuteBasicAttack } from './ExecuteBasicAttack'
 import { prepareAttack, type AttackParticipant } from './PrepareAttack'
 import { ResolveAttack } from './ResolveAttack'
 import type { PersistVersusDropDecision } from '../services/PersistVersusDropDecision'
+import type { CombatDecisionEvent } from '../../domain/decision/CombatDecisionEvent'
+import type { CombatDecisionRecorder } from '../services/CombatDecisionRecorder'
 
 export interface UseSkillInput {
   readonly roomId: string
@@ -107,6 +109,7 @@ export class UseSkill {
     private readonly settler: BattleDeadlineSettler | null = null,
     private readonly resolveAttack: ResolveAttack = new ResolveAttack(),
     private readonly versusDrop: PersistVersusDropDecision | null = null,
+    private readonly decisionRecorder: CombatDecisionRecorder | null = null,
   ) {}
 
   execute(input: UseSkillInput): Promise<UseSkillResult> {
@@ -151,6 +154,15 @@ export class UseSkill {
       })
     }
 
+    const decision = this.decisionRecorder?.tryPrepareHumanDecision(room, input.commandId, {
+      kind: 'ABILITY',
+      abilityId: input.abilityId,
+      target:
+        plan.kind === 'healingSkill' && plan.audience === 'ALLIED_GROUP'
+          ? { scope: 'ALLIED_GROUP' }
+          : { scope: 'COMBATANT', combatant: input.target },
+    })
+
     if (plan.kind === 'healSkill') {
       // Curar es DETERMINISTA (excepcion de HU-12, `HealApplicationPolicy`): no hay
       // `prepare`/`resolve` ni se consume la secuencia HU-24, a diferencia de una
@@ -158,7 +170,7 @@ export class UseSkill {
       const actionSeq = room.lastSeq + 1
       const next = room.applyHealSkill(plan, input.commandId, this.clock.now())
 
-      return this.persist(room, next, actionSeq, input)
+      return this.persist(room, next, actionSeq, input, decision)
     }
 
     if (plan.kind === 'healingSkill') {
@@ -169,7 +181,7 @@ export class UseSkill {
       const actionSeq = room.lastSeq + 1
       const next = room.applyHealingSkill(plan, outcome, input.commandId, this.clock.now())
 
-      return this.persist(room, next, actionSeq, input)
+      return this.persist(room, next, actionSeq, input, decision)
     }
 
     if (plan.kind === 'directDamageSkill') {
@@ -179,7 +191,7 @@ export class UseSkill {
       const actionSeq = room.lastSeq + 1
       const next = room.applyDirectDamageSkill(plan, outcome, input.commandId, this.clock.now())
 
-      return this.persist(room, next, actionSeq, input)
+      return this.persist(room, next, actionSeq, input, decision)
     }
 
     // A partir de aqui se consume la secuencia: todo lo que puede fallar por el perfil ya se
@@ -191,7 +203,7 @@ export class UseSkill {
     const actionSeq = room.lastSeq + 1
     const next = room.applySkill(plan, outcome, input.commandId, this.clock.now())
 
-    return this.persist(room, next, actionSeq, input)
+    return this.persist(room, next, actionSeq, input, decision)
   }
 
   /** HU-19 v2 (contrato §3): magnitud del dano directo, con su dado si lo trae. */
@@ -247,6 +259,7 @@ export class UseSkill {
     next: BattleRoom,
     actionSeq: number,
     input: UseSkillInput,
+    decision: CombatDecisionEvent | null | undefined,
   ): Promise<UseSkillResult> {
     try {
       const resolved =
@@ -257,6 +270,8 @@ export class UseSkill {
       if (event === undefined) {
         throw new DomainError('La habilidad se guardo sin su evento.')
       }
+
+      if (decision !== undefined && decision !== null) await this.decisionRecorder?.record(decision)
 
       return {
         event,

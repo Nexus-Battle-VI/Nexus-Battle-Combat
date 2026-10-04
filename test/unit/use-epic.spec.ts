@@ -1,7 +1,10 @@
 import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
+import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
+import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import type { BattleRoomRepositoryPort } from '../../src/application/ports/BattleRoomRepositoryPort'
 import { UseEpic, type UseEpicInput } from '../../src/application/use-cases/UseEpic'
+import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
 import { BattleEventType } from '../../src/domain/entities/BattleEvent'
 import {
   EpicOnCooldownError,
@@ -59,17 +62,41 @@ const setup = async (
     },
   }
   const lock = new ChannelLock()
-  const useCase = new UseEpic(counting, clock, sequence, lock)
+  const telemetry = new InMemoryCombatDecisionTelemetryRepository()
+  const recorder = new CombatDecisionRecorder(
+    telemetry,
+    clock,
+    { error: jest.fn() },
+    new Sha256CommandIdFingerprint(),
+  )
+  const useCase = new UseEpic(counting, clock, sequence, lock, null, null, recorder)
   const room = async () => {
     const found = await inner.findById(ROOM_ID)
     if (found === null) throw new Error('la sala desaparecio')
     return found
   }
 
-  return { inner, useCase, room, saves: () => saves }
+  return { inner, useCase, room, telemetry, saves: () => saves }
 }
 
 describe('UseEpic — mecanica principal (correccion HU-19/HU-31)', () => {
+  it('persists the canonical EPIC intent with its real strategic scope', async () => {
+    const { useCase, telemetry } = await setup()
+
+    await useCase.execute(command({ commandId: 'cmd-epic-telemetry' }))
+
+    await expect(telemetry.listDecisionsByBattle('ONLINE', ROOM_ID)).resolves.toMatchObject([
+      {
+        decisionSource: 'HUMAN',
+        selectedAction: {
+          kind: 'EPIC',
+          epicId: GOLPE_DE_DEFENSA_ID,
+          target: { scope: 'SELF' },
+        },
+      },
+    ])
+  })
+
   it('CMB-02: subtipo coincidente -> aplica el general y TODOS los especificos simultaneos', async () => {
     const { useCase, room } = await setup()
 

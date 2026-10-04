@@ -1,5 +1,7 @@
 import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
+import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
+import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import {
   RoomAccessForbiddenError,
   RoomConflictError,
@@ -8,6 +10,7 @@ import {
 import type { BattleRoomRepositoryPort } from '../../src/application/ports/BattleRoomRepositoryPort'
 import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasicAttack'
 import { UseSkill, type UseSkillInput } from '../../src/application/use-cases/UseSkill'
+import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
 import { BattleEventType } from '../../src/domain/entities/BattleEvent'
 import {
   InvalidTargetError,
@@ -93,8 +96,34 @@ const setup = async (
   }
   const repo = wrap(counting)
   const lock = new ChannelLock()
-  const basicAttack = new ExecuteBasicAttack(repo, clock, sequence, lock)
-  const useCase = new UseSkill(repo, clock, sequence, lock, basicAttack)
+  const telemetry = new InMemoryCombatDecisionTelemetryRepository()
+  const recorder = new CombatDecisionRecorder(
+    telemetry,
+    clock,
+    { error: jest.fn() },
+    new Sha256CommandIdFingerprint(),
+  )
+  const basicAttack = new ExecuteBasicAttack(
+    repo,
+    clock,
+    sequence,
+    lock,
+    null,
+    undefined,
+    null,
+    recorder,
+  )
+  const useCase = new UseSkill(
+    repo,
+    clock,
+    sequence,
+    lock,
+    basicAttack,
+    null,
+    undefined,
+    null,
+    recorder,
+  )
   const room = async () => {
     const found = await inner.findById(ROOM_ID)
 
@@ -105,7 +134,7 @@ const setup = async (
     return found
   }
 
-  return { inner, useCase, basicAttack, sequence, room, saves: () => saves }
+  return { inner, useCase, basicAttack, sequence, room, telemetry, saves: () => saves }
 }
 
 const viewOf = async (
@@ -122,6 +151,27 @@ const viewOf = async (
 }
 
 describe('UseSkill — flujo principal (CA-01, CA-05, CA-09)', () => {
+  it('persists the canonical ABILITY intent only after the skill succeeds', async () => {
+    const { useCase, telemetry } = await setup({}, [
+      attackDie(5),
+      effect(RandomEffectType.Damage),
+      heroDamageDie(4),
+    ])
+
+    await useCase.execute(command({ commandId: 'cmd-skill-telemetry' }))
+
+    await expect(telemetry.listDecisionsByBattle('ONLINE', ROOM_ID)).resolves.toMatchObject([
+      {
+        decisionSource: 'HUMAN',
+        selectedAction: {
+          kind: 'ABILITY',
+          abilityId: SHIELD_STRIKE_ID,
+          target: { scope: 'COMBATANT', combatant: TARGET },
+        },
+      },
+    ])
+  })
+
   it('habilidad -> resolucion -> Vida, Poder y recarga -> fin de turno, en UNA ejecucion y UNA escritura', async () => {
     // Golpe con escudo (+2 al Ataque): dado de Ataque 5 -> 10 + 2 + 5 = 17 > 11; dano; dado de Dano 4.
     const { useCase, sequence, room, saves } = await setup({}, [
@@ -351,7 +401,7 @@ describe('UseSkill — Poder insuficiente: se degrada a ataque basico (HU-11)', 
 
   it('el evento es un ataque basico con degradedFrom; NO se aplica el bono; Poder y recarga intactos; el turno avanza', async () => {
     // Ataque basico: 10 + 5 = 15 (SIN el +2 de la habilidad); dano; dado de Dano 4.
-    const { useCase, sequence, room, saves } = await setup(lowPower, [
+    const { useCase, sequence, room, telemetry, saves } = await setup(lowPower, [
       attackDie(5),
       effect(RandomEffectType.Damage),
       heroDamageDie(4),
@@ -378,6 +428,13 @@ describe('UseSkill — Poder insuficiente: se degrada a ataque basico (HU-11)', 
       status: 'READY',
     })
     expect((await room()).battle?.turnsCompleted).toBe(1)
+    const decisions = await telemetry.listDecisionsByBattle('ONLINE', ROOM_ID)
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]?.selectedAction).toEqual({
+      kind: 'BASIC_ATTACK',
+      target: { scope: 'COMBATANT', combatant: TARGET },
+    })
+    expect(decisions[0]?.selectedAction.kind).not.toBe('ABILITY')
   })
 
   it('un punto menos que el costo degrada; con el costo exacto NO', async () => {

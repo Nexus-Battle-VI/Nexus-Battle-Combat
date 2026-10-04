@@ -10,6 +10,7 @@ import type {
 import type { BattleRoomReleasePort } from '../ports/BattleRoomReleasePort'
 import type { RealtimeNotifierPort } from '../ports/RealtimeNotifierPort'
 import { hasPendingVersusDrop } from './BattleDropState'
+import type { CombatDecisionRecorder } from './CombatDecisionRecorder'
 
 /** Lo unico que el finalizador necesita de un registro estructurado. */
 export interface BattleFinalizerLogger {
@@ -44,6 +45,7 @@ export class BattleFinalizer {
     private readonly results: BattleResultPublisherPort,
     private readonly commitments: BattleHeroCommitmentPort,
     private readonly logger: BattleFinalizerLogger,
+    private readonly decisionRecorder: CombatDecisionRecorder | null = null,
   ) {}
 
   afterFinished(room: BattleRoom): void {
@@ -77,6 +79,24 @@ export class BattleFinalizer {
       if (notification !== null) {
         this.results.publish(notification)
       }
+    })
+    this.step('decision_outcome', () => {
+      if (this.decisionRecorder === null || room.result === null) return
+
+      const origin = room.tournament === null ? 'ONLINE' : 'TOURNAMENT'
+      const event = this.decisionRecorder.tryPrepareOutcome({
+        origin,
+        battleId: room.id,
+        mode: room.mode,
+        outcome: {
+          kind: 'BATTLE',
+          reason: room.result.reason,
+          outcome: room.result.outcome,
+          winnerTeamLabel: room.result.winnerTeamLabel,
+        },
+      })
+
+      if (event !== null) void this.decisionRecorder.record(event)
     })
   }
 
