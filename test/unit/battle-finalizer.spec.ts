@@ -2,6 +2,9 @@ import { BattleRoomStatus } from '../../src/domain/value-objects/BattleRoomStatu
 import { NOW } from '../fixtures/battle'
 import { battleWithCombat } from '../fixtures/basic-attack'
 import { finalizationHarness } from '../fixtures/finalization'
+import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
+import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
+import { BattleFinalizer } from '../../src/application/services/BattleFinalizer'
 
 const AT = new Date('2026-09-21T10:05:00.000Z')
 
@@ -16,6 +19,39 @@ const finishedRoom = () =>
  * orden fijo y sin poder reventar la operacion.
  */
 describe('BattleFinalizer — orden, resiliencia y notificacion', () => {
+  it('appends one PII-free terminal outcome without mutating prior decisions', async () => {
+    const h = finalizationHarness()
+    const telemetry = new InMemoryCombatDecisionTelemetryRepository()
+    const recorder = new CombatDecisionRecorder(telemetry, { now: () => AT }, { error: jest.fn() })
+    const finalizer = new BattleFinalizer(
+      h.book,
+      h.presence,
+      h.notifier,
+      h.release,
+      h.results,
+      h.commitments,
+      { error: jest.fn() },
+      recorder,
+    )
+    const room = finishedRoom()
+
+    finalizer.afterFinished(room)
+    await Promise.resolve()
+
+    const outcome = await telemetry.findOutcome('ONLINE', room.id)
+    expect(outcome).toMatchObject({
+      eventType: 'COMBAT_DECISION_OUTCOME',
+      battleId: room.id,
+      outcome: {
+        kind: 'BATTLE',
+        reason: 'ELIMINATION',
+        outcome: 'WIN',
+        winnerTeamLabel: 'A',
+      },
+    })
+    expect(JSON.stringify(outcome)).not.toMatch(/playerId|displayName|heroId|a1|b1/iu)
+  })
+
   it('ejecuta los cinco pasos en orden: vencimientos, presencia, lobby, liberacion y notificacion', () => {
     const h = finalizationHarness()
     const room = finishedRoom()

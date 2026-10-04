@@ -96,11 +96,13 @@ import { InMemoryChatMessageRepository } from '../../adapters/outbound/persisten
 import { InMemoryRewardWorkflowRepository } from '../../adapters/outbound/persistence/InMemoryRewardWorkflowRepository'
 import { InMemoryExperienceRollRepository } from '../../adapters/outbound/persistence/InMemoryExperienceRollRepository'
 import { InMemoryMissionSimulationIntakeRepository } from '../../adapters/outbound/persistence/InMemoryMissionSimulationIntakeRepository'
+import { InMemoryCombatDecisionTelemetryRepository } from '../../adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
 import { MongoChatMessageRepository } from '../../adapters/outbound/persistence/MongoChatMessageRepository'
 import { MongoRewardWorkflowRepository } from '../../adapters/outbound/persistence/MongoRewardWorkflowRepository'
 import { MongoExperienceRollRepository } from '../../adapters/outbound/persistence/MongoExperienceRollRepository'
 import { MongoMissionSimulationIntakeRepository } from '../../adapters/outbound/persistence/MongoMissionSimulationIntakeRepository'
+import { MongoCombatDecisionTelemetryRepository } from '../../adapters/outbound/persistence/MongoCombatDecisionTelemetryRepository'
 import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
@@ -175,6 +177,10 @@ import {
   MISSION_SIMULATION_INTAKE_REPOSITORY,
   type MissionSimulationIntakeRepositoryPort,
 } from '../../application/ports/MissionSimulationIntakeRepositoryPort'
+import {
+  COMBAT_DECISION_TELEMETRY_REPOSITORY,
+  type CombatDecisionTelemetryRepositoryPort,
+} from '../../application/ports/CombatDecisionTelemetryRepositoryPort'
 import { WALLET_STAKE_PORT, type WalletStakePort } from '../../application/ports/WalletStakePort'
 import {
   RANDOM_SEQUENCE_FACTORY,
@@ -199,6 +205,7 @@ import {
 import { createBoundedRandom } from '../../application/services/BoundedRandom'
 import { BattleDeadlineSettler } from '../../application/services/BattleDeadlineSettler'
 import { BattleFinalizer } from '../../application/services/BattleFinalizer'
+import { CombatDecisionRecorder } from '../../application/services/CombatDecisionRecorder'
 import { PersistVersusDropDecision } from '../../application/services/PersistVersusDropDecision'
 import { StakeReleaser } from '../../application/services/StakeReleaser'
 import { StakeReserver } from '../../application/services/StakeReserver'
@@ -501,6 +508,23 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       inject: [DATABASE],
     },
     {
+      provide: COMBAT_DECISION_TELEMETRY_REPOSITORY,
+      useFactory: (db: Db | null): CombatDecisionTelemetryRepositoryPort =>
+        db === null
+          ? new InMemoryCombatDecisionTelemetryRepository()
+          : new MongoCombatDecisionTelemetryRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: CombatDecisionRecorder,
+      useFactory: (
+        repository: CombatDecisionTelemetryRepositoryPort,
+        clock: ClockPort,
+        logger: Logger,
+      ): CombatDecisionRecorder => new CombatDecisionRecorder(repository, clock, logger),
+      inject: [COMBAT_DECISION_TELEMETRY_REPOSITORY, CLOCK, LOGGER],
+    },
+    {
       provide: CREATE_BATTLE_ROOM,
       useFactory: (
         rooms: BattleRoomRepositoryPort,
@@ -768,8 +792,18 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         results: BattleResultPublisherPort,
         commitments: BattleHeroCommitmentPort,
         logger: Logger,
+        decisions: CombatDecisionRecorder,
       ): BattleFinalizer =>
-        new BattleFinalizer(book, presence, notifier, release, results, commitments, logger),
+        new BattleFinalizer(
+          book,
+          presence,
+          notifier,
+          release,
+          results,
+          commitments,
+          logger,
+          decisions,
+        ),
       inject: [
         BATTLE_DEADLINE_BOOK,
         BATTLE_PRESENCE,
@@ -778,6 +812,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_RESULT_PUBLISHER,
         BATTLE_HERO_COMMITMENTS,
         LOGGER,
+        CombatDecisionRecorder,
       ],
     },
     {
@@ -1039,6 +1074,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         repository: MissionSimulationIntakeRepositoryPort,
         sequences: RandomSequenceFactoryPort,
         config: AppConfig,
+        decisions: CombatDecisionRecorder,
       ): RunMissionSimulation =>
         new RunMissionSimulation(
           repository,
@@ -1047,8 +1083,15 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           // EN-035.3: política productiva actual. RandomPolicy es solo para
           // pruebas/evaluación futura, nunca el default aquí (ADR-023).
           new RuleBasedPolicy(),
+          decisions,
+          'RULE_BASED',
         ),
-      inject: [MISSION_SIMULATION_INTAKE_REPOSITORY, RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
+      inject: [
+        MISSION_SIMULATION_INTAKE_REPOSITORY,
+        RANDOM_SEQUENCE_FACTORY,
+        APP_CONFIG,
+        CombatDecisionRecorder,
+      ],
     },
     {
       // Diseno «misiones jugables», P-J7: la misma simulacion con semillas
@@ -1367,8 +1410,18 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         lock: RoomCommandLockPort,
         settler: BattleDeadlineSettler,
         versusDrop: PersistVersusDropDecision,
+        decisions: CombatDecisionRecorder,
       ): ExecuteBasicAttack =>
-        new ExecuteBasicAttack(rooms, clock, sequence, lock, settler, undefined, versusDrop),
+        new ExecuteBasicAttack(
+          rooms,
+          clock,
+          sequence,
+          lock,
+          settler,
+          undefined,
+          versusDrop,
+          decisions,
+        ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
@@ -1376,6 +1429,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         ROOM_COMMAND_LOCK,
         BATTLE_DEADLINE_SETTLER,
         PersistVersusDropDecision,
+        CombatDecisionRecorder,
       ],
     },
     {
@@ -1400,8 +1454,19 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         basicAttack: ExecuteBasicAttack,
         settler: BattleDeadlineSettler,
         versusDrop: PersistVersusDropDecision,
+        decisions: CombatDecisionRecorder,
       ): UseSkill =>
-        new UseSkill(rooms, clock, sequence, lock, basicAttack, settler, undefined, versusDrop),
+        new UseSkill(
+          rooms,
+          clock,
+          sequence,
+          lock,
+          basicAttack,
+          settler,
+          undefined,
+          versusDrop,
+          decisions,
+        ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
@@ -1410,6 +1475,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         EXECUTE_BASIC_ATTACK,
         BATTLE_DEADLINE_SETTLER,
         PersistVersusDropDecision,
+        CombatDecisionRecorder,
       ],
     },
     {
@@ -1434,7 +1500,8 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         lock: RoomCommandLockPort,
         settler: BattleDeadlineSettler,
         versusDrop: PersistVersusDropDecision,
-      ): UseEpic => new UseEpic(rooms, clock, sequence, lock, settler, versusDrop),
+        decisions: CombatDecisionRecorder,
+      ): UseEpic => new UseEpic(rooms, clock, sequence, lock, settler, versusDrop, decisions),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
@@ -1442,6 +1509,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         ROOM_COMMAND_LOCK,
         BATTLE_DEADLINE_SETTLER,
         PersistVersusDropDecision,
+        CombatDecisionRecorder,
       ],
     },
     {
