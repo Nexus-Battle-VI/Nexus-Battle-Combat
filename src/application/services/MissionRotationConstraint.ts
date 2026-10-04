@@ -1,5 +1,6 @@
 import type { CombatAbility } from '../../domain/entities/CombatProfile'
 import type { DecisionActionTarget, LegalAction } from '../../domain/decision/LegalAction'
+import { legalActionIdentity } from '../../domain/decision/ActionIdentity'
 import { evaluateMissionAbility } from '../../domain/policies/MissionAbilityPolicy'
 
 export type RotationPriority = 'HIGH' | 'MEDIUM' | 'LOW'
@@ -42,19 +43,20 @@ export interface MissionRotationStrategyTrace {
 
 export interface MissionRotationEvaluation {
   /**
-   * Candidatas ofrecidas a la politica de decision. En v1 tiene como mucho 1
-   * elemento (ver nota de diseño de la clase): el algoritmo se detiene en la
-   * PRIMERA rotacion viable, igual que el `chooseAction()` que reemplaza.
+   * TODAS las candidatas viables este turno (revision de PR #71): el paso
+   * actual de CADA rotacion HIGH/MEDIUM/LOW que sea viable, en ese orden de
+   * prioridad -- no solo la primera. Si ninguna rotacion tiene un paso
+   * viable, contiene unicamente el ataque basico de respaldo.
    */
   readonly legalActions: readonly LegalAction[]
-  readonly strategy: MissionRotationStrategyTrace
   /**
-   * Avanza el cursor de la rotacion ganadora. Debe llamarse UNICAMENTE
-   * despues de que la politica decida, nunca mientras solo se construyen
-   * candidatos -- evita que explorar candidatas (p. ej. una futura
-   * `NeuralPolicy` evaluando varias) adelante un cursor por error.
+   * Dada la accion ya resuelta (debe pertenecer a `legalActions`), arma el
+   * `StrategyTrace` que le corresponde y avanza UNICAMENTE el cursor de la
+   * rotacion que la ofrecio -- nunca el de una candidata que la politica no
+   * eligio. Debe llamarse una sola vez, despues de que la politica decida,
+   * nunca mientras solo se construyen candidatos.
    */
-  readonly commit: () => void
+  readonly resolve: (selected: LegalAction) => MissionRotationStrategyTrace
 }
 
 export interface MissionRotationInput {
@@ -67,23 +69,31 @@ export interface MissionRotationInput {
   readonly health: number
   readonly maxHealth: number
   /**
-   * Unico objetivo estrategico real en una mision (duelo 1v1): tanto el
-   * ataque basico como cualquier habilidad se ofrecen contra el enemigo
-   * actual. Las habilidades que en realidad son mejoras propias aplican su
-   * efecto sobre el heroe igualmente (`applyEffect` ya lo resuelve por el
-   * `target` del EFECTO, no por el de la accion); el "objetivo" de la accion
-   * aqui es la convencion honesta de Mision, no una eleccion de la politica.
+   * Unico combatiente enemigo real en una mision (duelo 1v1): la convencion
+   * honesta de Mision para `COMBATANT`, inyectada por quien conoce la
+   * identidad (`MissionSimulation`). `SELF`/`ALLIED_GROUP` no llevan payload
+   * propio y se construyen aqui mismo.
    */
-  readonly target: DecisionActionTarget
+  readonly enemyTarget: DecisionActionTarget
 }
 
 const PRIORITY_ORDER: Readonly<Record<RotationPriority, number>> = { HIGH: 0, MEDIUM: 1, LOW: 2 }
 
-/** Si el efecto principal de la habilidad es curacion (ADR-023), via la unica fuente autoritativa. */
-const isHealingAbility = (ability: CombatAbility): boolean => {
+const SELF_TARGET: DecisionActionTarget = Object.freeze({ scope: 'SELF' })
+const ALLIED_GROUP_TARGET: DecisionActionTarget = Object.freeze({ scope: 'ALLIED_GROUP' })
+
+/**
+ * Si el efecto principal de la habilidad es curacion/soporte (ADR-023,
+ * revision de PR #71): solo cuando la habilidad NO ataca este turno
+ * (`support.attacks === false`) Y declara HEAL/HEAL_PERCENT. Una habilidad
+ * hibrida (dano + curacion secundaria, `attacks: true`) sigue siendo
+ * candidata a salud alta -- su efecto principal es ofensivo, no curativo.
+ */
+const isHealingFocusedAbility = (ability: CombatAbility): boolean => {
   const support = evaluateMissionAbility(ability)
   return (
     support.supported &&
+    !support.attacks &&
     support.effects.some((effect) => effect.kind === 'HEAL' || effect.kind === 'HEAL_PERCENT')
   )
 }
@@ -93,22 +103,57 @@ const isHealthEligibleForHealing = (health: number, maxHealth: number): boolean 
   health * 100 < maxHealth * 90
 
 /**
- * Restriccion/contexto de Mision (HU-71): filtra que accion puede OFRECERSE a
- * una politica de decision (`AiDecisionPort`), sin decidir por ella.
- * Reproduce exactamente el algoritmo de prioridad HIGH -> MEDIUM -> LOW y el
- * fallback de ataque basico que usaba `MissionSimulation.chooseAction` antes
- * de EN-035.3, mas la elegibilidad de salud nueva.
+ * Objetivo estrategico real de la habilidad (revision de PR #71), derivado
+ * UNICAMENTE de datos reales -- nunca `ENEMY` por defecto:
  *
- * DECISION DE DISEÑO v1 (EN-035.3, ver tambien ADR-023 "Rotaciones como
- * restriccion"): igual que el algoritmo original, la evaluacion se detiene en
- * la PRIMERA rotacion viable -- nunca evalua las de menor prioridad una vez
- * encontro una candidata, para no alterar ni el `skipped` ni el resultado que
- * ya aprobaron los tests de HU-71 (regresion dorada). Por eso `legalActions`
- * tiene como mucho 1 elemento hoy. Una politica mas rica que necesite elegir
- * SIMULTANEAMENTE entre varias rotaciones viables (p. ej. una futura
- * `NeuralPolicy`) requerira evaluar TODAS las rotaciones sin detenerse, lo
- * cual es un cambio de comportamiento deliberadamente fuera de alcance aqui:
- * esta Task preserva el resultado aprobado, no lo mejora.
+ * - si el efecto crudo declara un `target` `OPPONENT`/`ENEMY` (dano directo,
+ *   debuff, reflejo), o si la habilidad realiza una tirada de ataque este
+ *   turno (`support.attacks`, p. ej. un autobuff de Ataque/Daño): `COMBATANT`
+ *   contra el enemigo actual;
+ * - si no ataca pero algun efecto crudo declara `ALLIED_GROUP`: ese alcance;
+ * - en cualquier otro caso (curacion/mejora propia, inmunidad, etc.): `SELF`.
+ *
+ * No distingue `SELF` de `ALLY` a nivel de efecto crudo: en un duelo de
+ * Mision 1v1 no existe un aliado distinto del propio heroe.
+ */
+const strategicTargetOf = (
+  ability: CombatAbility,
+  enemyTarget: DecisionActionTarget,
+): DecisionActionTarget => {
+  const support = evaluateMissionAbility(ability)
+  const attacks = support.supported && support.attacks
+  const targetsEnemy =
+    attacks ||
+    ability.effects.some((effect) => effect.target === 'OPPONENT' || effect.target === 'ENEMY')
+
+  if (targetsEnemy) return enemyTarget
+
+  const targetsGroup = ability.effects.some((effect) => effect.target === 'ALLIED_GROUP')
+
+  return targetsGroup ? ALLIED_GROUP_TARGET : SELF_TARGET
+}
+
+interface InternalCandidate {
+  readonly action: LegalAction
+  readonly rotation: RotationPriority
+  readonly step: number
+  readonly cursorIndex: number
+  readonly cursorValue: number
+}
+
+/**
+ * Restriccion/contexto de Mision (HU-71): filtra que acciones pueden
+ * OFRECERSE a una politica de decision (`AiDecisionPort`), sin decidir por
+ * ella. Reproduce el algoritmo de prioridad HIGH -> MEDIUM -> LOW y el
+ * fallback de ataque basico que usaba `MissionSimulation.chooseAction` antes
+ * de EN-035.3, mas la elegibilidad de salud (ADR-023).
+ *
+ * DISEÑO (revision de PR #71): evalua TODAS las rotaciones, no solo hasta
+ * encontrar la primera viable -- `legalActions` ofrece el paso actual de
+ * cada rotacion viable, en orden de prioridad. `RuleBasedPolicy` sigue
+ * escogiendo la primera (misma regresion de HU-71); una politica mas rica
+ * (MCTS/Neural) podra elegir estrategicamente entre varias sin que esta
+ * restriccion deba cambiar.
  */
 export class MissionRotationConstraint {
   evaluate(input: MissionRotationInput): MissionRotationEvaluation {
@@ -116,6 +161,7 @@ export class MissionRotationConstraint {
       (a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority],
     )
     const skipped: MissionRotationStrategyTrace['skipped'][number][] = []
+    const candidates: InternalCandidate[] = []
 
     const skipReasonOf = (ability: CombatAbility | undefined): RotationSkipReason | null => {
       if (ability === undefined) return 'UNKNOWN_ABILITY'
@@ -131,7 +177,10 @@ export class MissionRotationConstraint {
           : ability.powerCost.amount <= input.power
 
       if (!affordable) return 'NOT_ENOUGH_POWER'
-      if (isHealingAbility(ability) && !isHealthEligibleForHealing(input.health, input.maxHealth)) {
+      if (
+        isHealingFocusedAbility(ability) &&
+        !isHealthEligibleForHealing(input.health, input.maxHealth)
+      ) {
         return 'HEALTH_NOT_ELIGIBLE'
       }
 
@@ -146,43 +195,64 @@ export class MissionRotationConstraint {
 
       if (step === undefined) continue
 
-      const position = { rotation: rotation.priority, step: cursor + 1 }
+      const stepNumber = cursor + 1
 
       if (step.kind === 'BASIC_ATTACK') {
-        return {
-          legalActions: [Object.freeze({ kind: 'BASIC_ATTACK' as const, target: input.target })],
-          strategy: Object.freeze({ ...position, fallback: false, skipped }),
-          commit: () => input.cursors.set(index, cursor + 1),
-        }
+        candidates.push({
+          action: Object.freeze({ kind: 'BASIC_ATTACK' as const, target: input.enemyTarget }),
+          rotation: rotation.priority,
+          step: stepNumber,
+          cursorIndex: index,
+          cursorValue: cursor,
+        })
+        continue
       }
 
       const ability = step.abilityId === undefined ? undefined : input.abilities.get(step.abilityId)
       const reason = skipReasonOf(ability)
 
       if (reason !== null || ability === undefined) {
-        skipped.push({ ...position, reason: reason ?? 'UNKNOWN_ABILITY' })
+        skipped.push({
+          rotation: rotation.priority,
+          step: stepNumber,
+          reason: reason ?? 'UNKNOWN_ABILITY',
+        })
         continue
       }
 
-      return {
-        legalActions: [
-          Object.freeze({
-            kind: 'ABILITY' as const,
-            abilityId: ability.abilityId,
-            target: input.target,
-          }),
-        ],
-        strategy: Object.freeze({ ...position, fallback: false, skipped }),
-        commit: () => input.cursors.set(index, cursor + 1),
-      }
+      candidates.push({
+        action: Object.freeze({
+          kind: 'ABILITY' as const,
+          abilityId: ability.abilityId,
+          target: strategicTargetOf(ability, input.enemyTarget),
+        }),
+        rotation: rotation.priority,
+        step: stepNumber,
+        cursorIndex: index,
+        cursorValue: cursor,
+      })
     }
 
-    return {
-      legalActions: [Object.freeze({ kind: 'BASIC_ATTACK' as const, target: input.target })],
-      strategy: Object.freeze({ rotation: null, step: null, fallback: true, skipped }),
-      // El fallback no pertenece a ninguna rotación: no hay cursor que avanzar.
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
-      commit: () => {},
+    const legalActions: readonly LegalAction[] =
+      candidates.length > 0
+        ? candidates.map((candidate) => candidate.action)
+        : [Object.freeze({ kind: 'BASIC_ATTACK' as const, target: input.enemyTarget })]
+
+    const resolve = (selected: LegalAction): MissionRotationStrategyTrace => {
+      const identity = legalActionIdentity(selected)
+      const match = candidates.find(
+        (candidate) => legalActionIdentity(candidate.action) === identity,
+      )
+
+      if (match === undefined) {
+        return Object.freeze({ rotation: null, step: null, fallback: true, skipped })
+      }
+
+      input.cursors.set(match.cursorIndex, match.cursorValue + 1)
+
+      return Object.freeze({ rotation: match.rotation, step: match.step, fallback: false, skipped })
     }
+
+    return { legalActions, resolve }
   }
 }

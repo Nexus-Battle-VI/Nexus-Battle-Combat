@@ -335,7 +335,15 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
       strategy: {
         rotation: 'MEDIUM',
         step: 1,
-        skipped: [{ rotation: 'HIGH', step: 1, reason: 'ON_COOLDOWN' }],
+        // Revisión de PR #71: MissionRotationConstraint evalúa TODAS las
+        // rotaciones (no se detiene en la primera viable), así que LOW
+        // también se reporta -- su propio paso ('embate-sangriento') sigue
+        // en recarga en este turno. La acción elegida no cambia: sigue
+        // siendo la de MEDIUM (RuleBasedPolicy toma la primera candidata).
+        skipped: [
+          { rotation: 'HIGH', step: 1, reason: 'ON_COOLDOWN' },
+          { rotation: 'LOW', step: 1, reason: 'ON_COOLDOWN' },
+        ],
       },
     })
   })

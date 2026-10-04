@@ -133,6 +133,8 @@ interface ChosenAction {
 
 /** Un modificador de estadística con duración (mejora del héroe o penalización del enemigo). */
 interface TimedModifier {
+  /** Habilidad que lo originó (revisión de PR #71): permite representar `activeEffects` con honestidad. */
+  readonly sourceAbilityId: string
   readonly statistic: MissionStatistic
   readonly amount: number
   /** Rondas que le quedan, contando la actual. */
@@ -253,17 +255,52 @@ export const simulateMission = async (
   const rotationConstraint = new MissionRotationConstraint()
   const missionRotations: readonly MissionRotation[] = request.strategy.rotations
   /**
-   * Vista honesta del heroe para `AiDecisionPort` (EN-035.3, ADR-023): solo
-   * los campos que la restricción de rotación y las políticas v1 realmente
-   * consultan. `activeEffects` queda vacío a propósito -- `heroModifiers`/
-   * `enemyModifiers` no registran qué habilidad los originó
-   * (`sourceAbilityId`, obligatorio en `DecisionActiveEffect`), así que
-   * traducirlos aquí exigiría inventar ese dato. Es un hueco real, no una
-   * omisión silenciosa: ninguna política de esta Task los necesita todavía.
+   * Traduce `heroModifiers`/`enemyModifiers` (buffs/debuffs con duración ya
+   * existentes) a `DecisionActiveEffect` con honestidad (revisión de PR #71):
+   * `sourceAbilityId` ahora sí se registra en `TimedModifier`, así que no
+   * hace falta inventarlo. `heroModifiers` siempre sube una estadística
+   * propia (INCREASE); `enemyModifiers` siempre baja una del enemigo
+   * (DECREASE) -- implícito por la lista en la que `applyEffect` los empuja
+   * (`MissionAbilityPolicy.effectOf`), nunca un dato fabricado aquí.
+   *
+   * Pendiente real, declarado y no resuelto en esta Task: `IMMUNITY`
+   * (`immunityRounds`) y el reflejo de daño no se representan -- Misiones
+   * los trackea como contadores sueltos sin `sourceAbilityId` ni
+   * `sourceCombatant`, y `REFLECT` ni siquiera es una variante de
+   * `DecisionActiveEffect` en el contrato de #562. Ampliarlos queda para
+   * cuando una política lo necesite.
+   */
+  const activeEffectsOf = (
+    modifiers: readonly TimedModifier[],
+    sourceCombatant: typeof MISSION_HERO_KEY | typeof MISSION_ENEMY_KEY,
+    operation: 'INCREASE' | 'DECREASE',
+  ): readonly DecisionCombatant['activeEffects'][number][] =>
+    modifiers.map((modifier) => ({
+      kind: 'STAT' as const,
+      sourceAbilityId: modifier.sourceAbilityId,
+      sourceCombatant,
+      statistic: modifier.statistic,
+      operation,
+      amount: modifier.amount,
+      remainingOwnTurns: modifier.remaining,
+    }))
+  /**
+   * Vista honesta del heroe/enemigo para `AiDecisionPort` (EN-035.3, ADR-023,
+   * revisión de PR #71): el enemigo ya trae sus stats reales de combate
+   * (`attack`/`defense`/`damage`), tomadas del mismo objeto `enemy` que usa
+   * `fight()` para resolver la pelea -- nunca `null` por pereza. `power`
+   * sigue `null` porque los enemigos de Misión genuinamente no usan Poder
+   * (EN-036 #555).
    */
   const buildDecisionState = (
+    enemy: {
+      readonly maxHealth: number
+      readonly attack: number
+      readonly defense: number
+      readonly damage: CombatMagnitude
+    },
     enemyHealth: number,
-    enemyMax: number,
+    enemyModifiers: readonly TimedModifier[],
     roundTurns: number,
   ): BattleDecisionState => {
     const actor: DecisionCombatant = {
@@ -296,23 +333,23 @@ export const simulateMission = async (
         })),
       })),
       epic: null,
-      activeEffects: [],
+      activeEffects: activeEffectsOf(heroModifiers, MISSION_HERO_KEY, 'INCREASE'),
       damageMemory: null,
     }
-    const enemy: DecisionCombatant = {
+    const enemyCombatant: DecisionCombatant = {
       identity: MISSION_ENEMY_KEY,
       kind: ParticipantKind.Ai,
       heroSubtype: null,
-      health: { current: enemyHealth, max: enemyMax },
+      health: { current: enemyHealth, max: enemy.maxHealth },
       power: null,
-      attack: null,
-      defense: null,
-      damage: null,
+      attack: enemy.attack,
+      defense: enemy.defense,
+      damage: enemy.damage,
       level: null,
       cooldowns: [],
       abilities: [],
       epic: null,
-      activeEffects: [],
+      activeEffects: activeEffectsOf(enemyModifiers, MISSION_ENEMY_KEY, 'DECREASE'),
       damageMemory: null,
     }
 
@@ -326,7 +363,7 @@ export const simulateMission = async (
       },
       actor,
       allies: [],
-      enemies: [enemy],
+      enemies: [enemyCombatant],
     }
   }
   /**
@@ -336,8 +373,14 @@ export const simulateMission = async (
    * entre lo ofrecido, Combat (aquí, `MissionSimulation`) ejecuta.
    */
   const chooseAction = async (
+    enemy: {
+      readonly maxHealth: number
+      readonly attack: number
+      readonly defense: number
+      readonly damage: CombatMagnitude
+    },
     enemyHealth: number,
-    enemyMax: number,
+    enemyModifiers: readonly TimedModifier[],
     roundTurns: number,
   ): Promise<ChosenAction> => {
     const evaluation = rotationConstraint.evaluate({
@@ -348,13 +391,12 @@ export const simulateMission = async (
       power,
       health,
       maxHealth,
-      target: MISSION_ENEMY_TARGET,
+      enemyTarget: MISSION_ENEMY_TARGET,
     })
-    const state = buildDecisionState(enemyHealth, enemyMax, roundTurns)
+    const state = buildDecisionState(enemy, enemyHealth, enemyModifiers, roundTurns)
     const intent = await decisionPolicy.decide(state, evaluation.legalActions)
     const resolved = resolveLegalAction(intent, evaluation.legalActions)
-
-    evaluation.commit()
+    const strategy = evaluation.resolve(resolved)
 
     if (resolved.kind === 'EPIC') {
       // Misiones nunca ofrece candidatas EPIC (no hay épica en este modo);
@@ -362,7 +404,7 @@ export const simulateMission = async (
       throw new NoLegalDecisionActionsError()
     }
     if (resolved.kind === 'BASIC_ATTACK') {
-      return { kind: 'BASIC_ATTACK', strategy: evaluation.strategy }
+      return { kind: 'BASIC_ATTACK', strategy }
     }
 
     const ability = abilities.get(resolved.abilityId)
@@ -371,7 +413,7 @@ export const simulateMission = async (
       throw new NoLegalDecisionActionsError()
     }
 
-    return { kind: 'ABILITY', ability, strategy: evaluation.strategy }
+    return { kind: 'ABILITY', ability, strategy }
   }
   const fight = async (
     enemyRef: string,
@@ -406,12 +448,20 @@ export const simulateMission = async (
         reflect = reflect.remaining > 1 ? { ...reflect, remaining: reflect.remaining - 1 } : null
     }
     /** Aplica un efecto de habilidad (P-J4) y devuelve lo que queda en la bitácora. */
-    const applyEffect = (effect: MissionEffect): Readonly<Record<string, unknown>> => {
+    const applyEffect = (
+      effect: MissionEffect,
+      sourceAbilityId: string,
+    ): Readonly<Record<string, unknown>> => {
       switch (effect.kind) {
         case 'MODIFIER': {
           const amount = bonus(effect.amount)
           const list = effect.target === 'SELF' ? heroModifiers : enemyModifiers
-          list.push({ statistic: effect.statistic, amount, remaining: effect.turns })
+          list.push({
+            sourceAbilityId,
+            statistic: effect.statistic,
+            amount,
+            remaining: effect.turns,
+          })
           return {
             kind: effect.target === 'SELF' ? 'BUFF' : 'DEBUFF',
             statistic: effect.statistic,
@@ -465,7 +515,7 @@ export const simulateMission = async (
         event('heroHealed', { amount, heroHealth: health })
       }
       dropSpent(pendingHeals)
-      const action = await chooseAction(enemyHealth, enemy.maxHealth, turns)
+      const action = await chooseAction(enemy, enemyHealth, enemyModifiers, turns)
       let attackBonus = 0
       let damageBonus = 0
       let attacks = true
@@ -488,7 +538,9 @@ export const simulateMission = async (
             (skillsUsed.get(action.ability.abilityId) ?? 0) + 1,
           )
           attacks = support.attacks
-          for (const effect of support.effects) effects.push(applyEffect(effect))
+          for (const effect of support.effects) {
+            effects.push(applyEffect(effect, action.ability.abilityId))
+          }
         }
       }
       let hit = false
