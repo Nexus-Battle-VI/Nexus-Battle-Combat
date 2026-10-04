@@ -58,12 +58,15 @@ export type CombatDecisionTelemetryEvent = CombatDecisionEvent | CombatDecisionO
 
 const component = (value: string): string => `${String(value.length)}:${value}`
 
-/** `commandId` queda encapsulado en la identidad técnica; no se expone como feature. */
+/**
+ * Recibe una huella opaca ya derivada en el borde del sistema; el dominio nunca
+ * incorpora el identificador arbitrario del cliente a la identidad persistida.
+ */
 export const onlineDecisionEventId = (
   origin: Extract<CombatDecisionOrigin, 'ONLINE' | 'TOURNAMENT'>,
   battleId: string,
-  commandId: string,
-): string => `decision:${origin}:${component(battleId)}:${component(commandId)}`
+  commandFingerprint: string,
+): string => `decision:${origin}:${component(battleId)}:${commandFingerprint}`
 
 export const missionDecisionEventId = (battleId: string, decisionSequence: number): string =>
   `decision:MISSION:${component(battleId)}:${String(decisionSequence)}`

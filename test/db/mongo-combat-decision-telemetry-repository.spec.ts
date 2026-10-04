@@ -5,6 +5,8 @@ import {
   COMBAT_DECISION_EVENTS_COLLECTION,
   MongoCombatDecisionTelemetryRepository,
 } from '../../src/adapters/outbound/persistence/MongoCombatDecisionTelemetryRepository'
+import { toCombatDecisionTelemetryDocument } from '../../src/adapters/outbound/persistence/combat-decision-event-mapping'
+import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import { CombatDecisionTelemetryConflictError } from '../../src/application/ports/CombatDecisionTelemetryRepositoryPort'
 import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
 import { battleWithCombat } from '../fixtures/basic-attack'
@@ -15,6 +17,8 @@ import {
   migrateToLatest,
   MIGRATIONS,
 } from '../../src/infrastructure/persistence/database'
+
+type RawTelemetryDocument = Record<string, unknown> & { readonly _id: string }
 
 describe('MongoCombatDecisionTelemetryRepository', () => {
   let container: StartedMongoDBContainer | undefined
@@ -48,6 +52,7 @@ describe('MongoCombatDecisionTelemetryRepository', () => {
       new MongoCombatDecisionTelemetryRepository(db!),
       { now: () => new Date('2026-10-04T12:00:00.000Z') },
       { error: jest.fn() },
+      new Sha256CommandIdFingerprint(),
     )
 
   const decision = (commandId = 'cmd-db') =>
@@ -60,12 +65,21 @@ describe('MongoCombatDecisionTelemetryRepository', () => {
     expect(MIGRATIONS.at(-1)?.name).toBe('023-combat-decision-events')
   })
 
-  it('creates the append-only indexes required for sequence and outcome uniqueness', async () => {
+  it('creates the append-only indexes required for identity and versioned dataset reads', async () => {
     const indexes = await db!.collection(COMBAT_DECISION_EVENTS_COLLECTION).indexes()
 
     expect(indexes.map((index) => index.name)).toEqual(
-      expect.arrayContaining(['_id_', 'decision_sequence_unique', 'outcome_unique', 'occurred_at']),
+      expect.arrayContaining([
+        '_id_',
+        'decision_sequence_unique',
+        'outcome_unique',
+        'schema_occurred_at',
+      ]),
     )
+    expect(indexes.find((index) => index.name === 'schema_occurred_at')?.key).toEqual({
+      schemaVersion: 1,
+      occurredAt: 1,
+    })
   })
 
   it('persists, orders and replays the same semantic event after a repository restart', async () => {
@@ -131,6 +145,56 @@ describe('MongoCombatDecisionTelemetryRepository', () => {
           eventType: 'COMBAT_DECISION',
           battleId: 'invalid-battle',
         }),
+    ).rejects.toMatchObject({ code: 121 })
+  })
+
+  it.each([
+    [
+      'unknown selected action discriminators',
+      (document: RawTelemetryDocument): RawTelemetryDocument => ({
+        ...document,
+        selectedAction: { kind: 'HACK', playerId: 'persona@example.com' },
+      }),
+    ],
+    [
+      'unexpected state properties',
+      (document: RawTelemetryDocument): RawTelemetryDocument => ({
+        ...document,
+        stateBefore: {
+          ...(document.stateBefore as Record<string, unknown>),
+          jwt: 'must-never-enter-the-dataset',
+        },
+      }),
+    ],
+  ])('rejects %s at the database boundary', async (_label, corrupt) => {
+    const valid = toCombatDecisionTelemetryDocument(decision(`cmd-invalid-${_label}`))
+
+    await expect(
+      db!
+        .collection<RawTelemetryDocument>(COMBAT_DECISION_EVENTS_COLLECTION)
+        .insertOne(corrupt(valid)),
+    ).rejects.toMatchObject({ code: 121 })
+  })
+
+  it('rejects unexpected outcome fields at the database boundary', async () => {
+    const outcome = recorder().prepareOutcome({
+      origin: 'ONLINE',
+      battleId: 'invalid-outcome-shape',
+      mode: 'PVP',
+      outcome: {
+        kind: 'BATTLE',
+        reason: 'ELIMINATION',
+        outcome: 'WIN',
+        winnerTeamLabel: 'A',
+      },
+    })
+    const valid = toCombatDecisionTelemetryDocument(outcome)
+
+    await expect(
+      db!.collection<RawTelemetryDocument>(COMBAT_DECISION_EVENTS_COLLECTION).insertOne({
+        ...valid,
+        outcome: { ...outcome.outcome, playerId: 'must-not-be-persisted' },
+      }),
     ).rejects.toMatchObject({ code: 121 })
   })
 })

@@ -3,6 +3,7 @@ import { HmacMissionSeedFactory } from '../../src/adapters/outbound/system/HmacM
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../src/adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
 import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
 import { InMemoryMissionSimulationIntakeRepository } from '../../src/adapters/outbound/persistence/InMemoryMissionSimulationIntakeRepository'
+import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import { RuleBasedPolicy } from '../../src/application/policies/RuleBasedPolicy'
 import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
 import type { MissionSimulationRequest } from '../../src/application/services/MissionSimulation'
@@ -74,16 +75,20 @@ describe('mission decision telemetry', () => {
   it('records real simulation decisions with one global sequence across encounters and one outcome', async () => {
     const intake = new InMemoryMissionSimulationIntakeRepository()
     const telemetry = new InMemoryCombatDecisionTelemetryRepository()
-    const recorder = new CombatDecisionRecorder(telemetry, clock, logger)
+    const recorder = new CombatDecisionRecorder(
+      telemetry,
+      clock,
+      logger,
+      new Sha256CommandIdFingerprint(),
+    )
     const requestHash = 'a'.repeat(64)
     await intake.insertIfAbsent(operationId, requestHash)
     const useCase = new RunMissionSimulation(
       intake,
       sequences,
       seeds,
-      new RuleBasedPolicy(),
+      { policy: new RuleBasedPolicy(), source: 'RULE_BASED' },
       recorder,
-      'RULE_BASED',
     )
 
     const result = await useCase.execute(request, requestHash)

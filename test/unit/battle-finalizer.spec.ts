@@ -3,6 +3,7 @@ import { NOW } from '../fixtures/battle'
 import { battleWithCombat } from '../fixtures/basic-attack'
 import { finalizationHarness } from '../fixtures/finalization'
 import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
+import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
 import { BattleFinalizer } from '../../src/application/services/BattleFinalizer'
 
@@ -22,7 +23,12 @@ describe('BattleFinalizer — orden, resiliencia y notificacion', () => {
   it('appends one PII-free terminal outcome without mutating prior decisions', async () => {
     const h = finalizationHarness()
     const telemetry = new InMemoryCombatDecisionTelemetryRepository()
-    const recorder = new CombatDecisionRecorder(telemetry, { now: () => AT }, { error: jest.fn() })
+    const recorder = new CombatDecisionRecorder(
+      telemetry,
+      { now: () => AT },
+      { error: jest.fn() },
+      new Sha256CommandIdFingerprint(),
+    )
     const finalizer = new BattleFinalizer(
       h.book,
       h.presence,

@@ -1,6 +1,7 @@
 import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
+import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import type { BattleRoomRepositoryPort } from '../../src/application/ports/BattleRoomRepositoryPort'
 import { UseEpic, type UseEpicInput } from '../../src/application/use-cases/UseEpic'
 import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
@@ -62,7 +63,12 @@ const setup = async (
   }
   const lock = new ChannelLock()
   const telemetry = new InMemoryCombatDecisionTelemetryRepository()
-  const recorder = new CombatDecisionRecorder(telemetry, clock, { error: jest.fn() })
+  const recorder = new CombatDecisionRecorder(
+    telemetry,
+    clock,
+    { error: jest.fn() },
+    new Sha256CommandIdFingerprint(),
+  )
   const useCase = new UseEpic(counting, clock, sequence, lock, null, null, recorder)
   const room = async () => {
     const found = await inner.findById(ROOM_ID)

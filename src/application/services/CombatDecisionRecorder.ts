@@ -18,6 +18,7 @@ import type { CombatantKey } from '../../domain/entities/Combatant'
 import type { BattleRoom } from '../../domain/entities/BattleRoom'
 import type { BattleMode } from '../../domain/value-objects/BattleMode'
 import type { ClockPort } from '../ports/ClockPort'
+import type { CommandIdFingerprintPort } from '../ports/CommandIdFingerprintPort'
 import type { CombatDecisionTelemetryRepositoryPort } from '../ports/CombatDecisionTelemetryRepositoryPort'
 import { BattleDecisionStateAssembler } from './BattleDecisionStateAssembler'
 import { LegalActionGenerator } from './LegalActionGenerator'
@@ -53,6 +54,7 @@ export class CombatDecisionRecorder {
     private readonly repository: CombatDecisionTelemetryRepositoryPort,
     private readonly clock: ClockPort,
     private readonly logger: CombatDecisionRecorderLogger,
+    private readonly commandIds: CommandIdFingerprintPort,
     private readonly states: BattleDecisionStateAssembler = new BattleDecisionStateAssembler(),
     private readonly actions: LegalActionGenerator = new LegalActionGenerator(),
   ) {}
@@ -101,7 +103,11 @@ export class CombatDecisionRecorder {
     return this.prepare({
       ...input,
       origin,
-      eventId: onlineDecisionEventId(origin, input.battleId, input.commandId),
+      eventId: onlineDecisionEventId(
+        origin,
+        input.battleId,
+        this.commandIds.fingerprint(input.commandId),
+      ),
     })
   }
 
@@ -185,12 +191,9 @@ export class CombatDecisionRecorder {
   }
 
   async recordMany(events: readonly CombatDecisionTelemetryEvent[]): Promise<void> {
-    try {
-      await this.repository.appendMany(events)
-    } catch (error: unknown) {
-      const first = events[0]
-      if (first !== undefined) this.logFailure(first, error, events.length)
-    }
+    // Cada evento es fail-open de forma independiente: una escritura fallida no
+    // impide intentar las decisiones posteriores ni el outcome terminal.
+    for (const event of events) await this.record(event)
   }
 
   private logFailure(event: CombatDecisionTelemetryEvent, error: unknown, eventCount = 1): void {

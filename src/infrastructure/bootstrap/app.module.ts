@@ -221,6 +221,7 @@ import { GetRewardStatus } from '../../application/use-cases/GetRewardStatus'
 import { ResolveExperienceRolls } from '../../application/use-cases/ResolveExperienceRolls'
 import { AcceptMissionSimulationRequest } from '../../application/use-cases/AcceptMissionSimulationRequest'
 import { RunMissionSimulation } from '../../application/use-cases/RunMissionSimulation'
+import { Sha256CommandIdFingerprint } from '../../adapters/outbound/system/Sha256CommandIdFingerprint'
 import { EstimateMissionOutcome } from '../../application/use-cases/EstimateMissionOutcome'
 import { RuleBasedPolicy } from '../../application/policies/RuleBasedPolicy'
 import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
@@ -521,7 +522,8 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         repository: CombatDecisionTelemetryRepositoryPort,
         clock: ClockPort,
         logger: Logger,
-      ): CombatDecisionRecorder => new CombatDecisionRecorder(repository, clock, logger),
+      ): CombatDecisionRecorder =>
+        new CombatDecisionRecorder(repository, clock, logger, new Sha256CommandIdFingerprint()),
       inject: [COMBAT_DECISION_TELEMETRY_REPOSITORY, CLOCK, LOGGER],
     },
     {
@@ -1082,9 +1084,8 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           new HmacMissionSeedFactory(config.internalServiceAuthSecret),
           // EN-035.3: política productiva actual. RandomPolicy es solo para
           // pruebas/evaluación futura, nunca el default aquí (ADR-023).
-          new RuleBasedPolicy(),
+          { policy: new RuleBasedPolicy(), source: 'RULE_BASED' },
           decisions,
-          'RULE_BASED',
         ),
       inject: [
         MISSION_SIMULATION_INTAKE_REPOSITORY,

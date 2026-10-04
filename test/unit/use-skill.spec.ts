@@ -1,6 +1,7 @@
 import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
+import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import {
   RoomAccessForbiddenError,
   RoomConflictError,
@@ -96,7 +97,12 @@ const setup = async (
   const repo = wrap(counting)
   const lock = new ChannelLock()
   const telemetry = new InMemoryCombatDecisionTelemetryRepository()
-  const recorder = new CombatDecisionRecorder(telemetry, clock, { error: jest.fn() })
+  const recorder = new CombatDecisionRecorder(
+    telemetry,
+    clock,
+    { error: jest.fn() },
+    new Sha256CommandIdFingerprint(),
+  )
   const basicAttack = new ExecuteBasicAttack(
     repo,
     clock,
@@ -395,7 +401,7 @@ describe('UseSkill — Poder insuficiente: se degrada a ataque basico (HU-11)', 
 
   it('el evento es un ataque basico con degradedFrom; NO se aplica el bono; Poder y recarga intactos; el turno avanza', async () => {
     // Ataque basico: 10 + 5 = 15 (SIN el +2 de la habilidad); dano; dado de Dano 4.
-    const { useCase, sequence, room, saves } = await setup(lowPower, [
+    const { useCase, sequence, room, telemetry, saves } = await setup(lowPower, [
       attackDie(5),
       effect(RandomEffectType.Damage),
       heroDamageDie(4),
@@ -422,6 +428,13 @@ describe('UseSkill — Poder insuficiente: se degrada a ataque basico (HU-11)', 
       status: 'READY',
     })
     expect((await room()).battle?.turnsCompleted).toBe(1)
+    const decisions = await telemetry.listDecisionsByBattle('ONLINE', ROOM_ID)
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]?.selectedAction).toEqual({
+      kind: 'BASIC_ATTACK',
+      target: { scope: 'COMBATANT', combatant: TARGET },
+    })
+    expect(decisions[0]?.selectedAction.kind).not.toBe('ABILITY')
   })
 
   it('un punto menos que el costo degrada; con el costo exacto NO', async () => {

@@ -33,7 +33,12 @@ export class InMemoryCombatDecisionTelemetryRepository implements CombatDecision
   }
 
   async appendMany(events: readonly CombatDecisionTelemetryEvent[]): Promise<void> {
-    for (const event of events) await this.append(event)
+    const results = await Promise.allSettled(events.map((event) => this.append(event)))
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    )
+
+    if (failure !== undefined) throw failure.reason
   }
 
   listDecisionsByBattle(

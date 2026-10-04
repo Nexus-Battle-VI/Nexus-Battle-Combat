@@ -1,5 +1,6 @@
 import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
+import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
 import type { CombatDecisionTelemetryRepositoryPort } from '../../src/application/ports/CombatDecisionTelemetryRepositoryPort'
 import { CombatDecisionTelemetryConflictError } from '../../src/application/ports/CombatDecisionTelemetryRepositoryPort'
@@ -11,6 +12,7 @@ import { clock, NOW, ROOM_ID, scriptedSequence } from '../fixtures/battle'
 const logError = jest.fn()
 const silentLogger = { error: logError }
 const fixedClock = { now: (): Date => new Date(NOW) }
+const commandIds = new Sha256CommandIdFingerprint()
 const target = { teamLabel: 'B', seat: 0 } as const
 
 describe('CombatDecisionRecorder e in-memory telemetry', () => {
@@ -18,7 +20,7 @@ describe('CombatDecisionRecorder e in-memory telemetry', () => {
 
   it('captures the exact pre-action state and canonical candidates without PII or RNG state', async () => {
     const repository = new InMemoryCombatDecisionTelemetryRepository()
-    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger)
+    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger, commandIds)
     const event = recorder.prepareHumanDecision(battleWithCombat(), 'cmd-observe', {
       kind: 'BASIC_ATTACK',
       target: { scope: 'COMBATANT', combatant: target },
@@ -45,9 +47,25 @@ describe('CombatDecisionRecorder e in-memory telemetry', () => {
     await expect(repository.listDecisionsByBattle('ONLINE', ROOM_ID)).resolves.toEqual([event])
   })
 
+  it('hashes arbitrary client command ids before building the persisted event id', () => {
+    const repository = new InMemoryCombatDecisionTelemetryRepository()
+    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger, commandIds)
+    const commandId = 'persona@example.com'
+    const event = recorder.prepareHumanDecision(battleWithCombat(), commandId, {
+      kind: 'BASIC_ATTACK',
+      target: { scope: 'COMBATANT', combatant: target },
+    })
+
+    expect(event.eventId).toMatch(/^decision:ONLINE:\d+:[^:]+:[a-f0-9]{64}$/u)
+    expect(JSON.stringify(event)).not.toContain(commandId)
+    expect(
+      recorder.prepareHumanDecision(battleWithCombat(), commandId, event.selectedAction).eventId,
+    ).toBe(event.eventId)
+  })
+
   it('treats the same semantic event as a no-op even when retry time differs', async () => {
     const repository = new InMemoryCombatDecisionTelemetryRepository()
-    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger)
+    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger, commandIds)
     const event = recorder.prepareHumanDecision(battleWithCombat(), 'cmd-idempotent', {
       kind: 'BASIC_ATTACK',
       target: { scope: 'COMBATANT', combatant: target },
@@ -61,7 +79,7 @@ describe('CombatDecisionRecorder e in-memory telemetry', () => {
 
   it('rejects a reused event id with divergent semantic content', async () => {
     const repository = new InMemoryCombatDecisionTelemetryRepository()
-    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger)
+    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger, commandIds)
     const event = recorder.prepareHumanDecision(battleWithCombat(), 'cmd-conflict', {
       kind: 'BASIC_ATTACK',
       target: { scope: 'COMBATANT', combatant: target },
@@ -81,7 +99,7 @@ describe('CombatDecisionRecorder e in-memory telemetry', () => {
       listDecisionsByBattle: () => Promise.resolve([]),
       findOutcome: () => Promise.resolve(null),
     }
-    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger)
+    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger, commandIds)
     const event = recorder.prepareHumanDecision(battleWithCombat(), 'cmd-fail-open', {
       kind: 'BASIC_ATTACK',
       target: { scope: 'COMBATANT', combatant: target },
@@ -99,11 +117,45 @@ describe('CombatDecisionRecorder e in-memory telemetry', () => {
     expect(JSON.stringify(logError.mock.calls)).not.toMatch(/a1|displayName|hero/iu)
   })
 
+  it('attempts and logs every event independently when one batch item fails', async () => {
+    const attempted: string[] = []
+    const repository: CombatDecisionTelemetryRepositoryPort = {
+      append: (event) => {
+        attempted.push(event.eventId)
+
+        return event.eventId === 'decision-fails'
+          ? Promise.reject(new Error('isolated failure'))
+          : Promise.resolve()
+      },
+      appendMany: () => Promise.reject(new Error('recordMany must persist independently')),
+      listDecisionsByBattle: () => Promise.resolve([]),
+      findOutcome: () => Promise.resolve(null),
+    }
+    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger, commandIds)
+    const base = recorder.prepareHumanDecision(battleWithCombat(), 'cmd-batch-base', {
+      kind: 'BASIC_ATTACK',
+      target: { scope: 'COMBATANT', combatant: target },
+    })
+    const events = [
+      { ...base, eventId: 'decision-first' },
+      { ...base, eventId: 'decision-fails', decisionSequence: 1 },
+      { ...base, eventId: 'decision-last', decisionSequence: 2 },
+    ]
+
+    await expect(recorder.recordMany(events)).resolves.toBeUndefined()
+    expect(attempted).toEqual(['decision-first', 'decision-fails', 'decision-last'])
+    expect(logError).toHaveBeenCalledTimes(1)
+    expect(logError).toHaveBeenCalledWith(
+      'combat_decision_telemetry_append_failed',
+      expect.objectContaining({ eventId: 'decision-fails', eventCount: 1 }),
+    )
+  })
+
   it('appends only after a valid online command is persisted and never duplicates a replay', async () => {
     const rooms = new InMemoryBattleRoomRepository()
     await rooms.save(battleWithCombat(), 0)
     const telemetry = new InMemoryCombatDecisionTelemetryRepository()
-    const recorder = new CombatDecisionRecorder(telemetry, fixedClock, silentLogger)
+    const recorder = new CombatDecisionRecorder(telemetry, fixedClock, silentLogger, commandIds)
     const attack = new ExecuteBasicAttack(
       rooms,
       clock,
@@ -148,7 +200,7 @@ describe('CombatDecisionRecorder e in-memory telemetry', () => {
       listDecisionsByBattle: () => Promise.resolve([]),
       findOutcome: () => Promise.resolve(null),
     }
-    const recorder = new CombatDecisionRecorder(unavailable, fixedClock, silentLogger)
+    const recorder = new CombatDecisionRecorder(unavailable, fixedClock, silentLogger, commandIds)
     const attack = new ExecuteBasicAttack(
       rooms,
       clock,

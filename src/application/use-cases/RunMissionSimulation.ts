@@ -15,15 +15,19 @@ import type {
 import { BattleMode } from '../../domain/value-objects/BattleMode'
 import type { CombatDecisionRecorder } from '../services/CombatDecisionRecorder'
 
+export interface DecisionPolicyBinding {
+  readonly policy: AiDecisionPort
+  readonly source: CombatDecisionSource
+}
+
 /** All combat facts are calculated once and persisted before returning to Missions. */
 export class RunMissionSimulation {
   constructor(
     private readonly repository: MissionSimulationIntakeRepositoryPort,
     private readonly sequences: RandomSequenceFactoryPort,
     private readonly seeds: MissionSeedPort,
-    private readonly decisionPolicy: AiDecisionPort,
+    private readonly decisionPolicy: DecisionPolicyBinding,
     private readonly decisionRecorder: CombatDecisionRecorder | null = null,
-    private readonly decisionSource: CombatDecisionSource = 'RULE_BASED',
   ) {}
 
   async execute(
@@ -37,7 +41,7 @@ export class RunMissionSimulation {
       request,
       this.seeds.forOperation(request.operationId),
       this.sequences,
-      this.decisionPolicy,
+      this.decisionPolicy.policy,
       (decision) => decisions.push(decision),
     )
     const saved = await this.repository.saveResultIfAbsent(request.operationId, requestHash, result)
@@ -50,7 +54,7 @@ export class RunMissionSimulation {
           decisionSequence: decision.decisionSequence,
           mode: BattleMode.Pve,
           actor: decision.stateBefore.actor.identity,
-          decisionSource: this.decisionSource,
+          decisionSource: this.decisionPolicy.source,
           stateBefore: decision.stateBefore,
           legalActions: decision.legalActions,
           selectedAction: decision.selectedAction,
