@@ -215,6 +215,7 @@ import { ResolveExperienceRolls } from '../../application/use-cases/ResolveExper
 import { AcceptMissionSimulationRequest } from '../../application/use-cases/AcceptMissionSimulationRequest'
 import { RunMissionSimulation } from '../../application/use-cases/RunMissionSimulation'
 import { EstimateMissionOutcome } from '../../application/use-cases/EstimateMissionOutcome'
+import { RuleBasedPolicy } from '../../application/policies/RuleBasedPolicy'
 import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
@@ -1043,6 +1044,9 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           repository,
           sequences,
           new HmacMissionSeedFactory(config.internalServiceAuthSecret),
+          // EN-035.3: política productiva actual. RandomPolicy es solo para
+          // pruebas/evaluación futura, nunca el default aquí (ADR-023).
+          new RuleBasedPolicy(),
         ),
       inject: [MISSION_SIMULATION_INTAKE_REPOSITORY, RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
     },
@@ -1057,6 +1061,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         new EstimateMissionOutcome(
           sequences,
           new HmacMissionSeedFactory(config.internalServiceAuthSecret),
+          new RuleBasedPolicy(),
         ),
       inject: [RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
     },

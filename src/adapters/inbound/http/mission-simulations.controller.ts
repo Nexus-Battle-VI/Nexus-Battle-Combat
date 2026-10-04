@@ -120,7 +120,7 @@ export class MissionSimulationsController {
   @ApiOperation({
     summary: 'Estima la probabilidad de exito de una mision sin guardar nada',
   })
-  estimate(@Body() body: unknown): MissionEstimate {
+  async estimate(@Body() body: unknown): Promise<MissionEstimate> {
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {
       throw schemaInvalid('El cuerpo debe ser un objeto con "request".')
     }
@@ -138,7 +138,7 @@ export class MissionSimulationsController {
     }
     const parsed = parseRequest(request)
     try {
-      return this.estimateOutcome.execute(parsed, runs)
+      return await this.estimateOutcome.execute(parsed, runs)
     } catch {
       throw new ServiceUnavailableException({
         statusCode: 503,
