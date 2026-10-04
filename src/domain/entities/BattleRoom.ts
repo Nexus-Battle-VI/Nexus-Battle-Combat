@@ -218,6 +218,7 @@ export interface HealingRecipient {
  */
 export interface SkillHealingReadyPlan {
   readonly kind: 'healingSkill'
+  readonly audience: 'ALLY' | 'ALLIED_GROUP'
   readonly attackerEntry: TurnOrderEntry
   readonly attacker: Combatant
   readonly attackerProfile: CombatProfile
@@ -256,13 +257,14 @@ export interface SkillDegradedPlan {
   readonly abilityId: string
 }
 
-export type SkillPlan =
+export type SkillActionPlan =
   | SkillReadyPlan
   | SkillHealReadyPlan
   | SkillDirectDamageReadyPlan
   | SkillHealingReadyPlan
   | SkillDegradedPlan
-  | BasicAttackReplay
+
+export type SkillPlan = SkillActionPlan | BasicAttackReplay
 
 /**
  * La epica equipada ya VALIDADA (correccion HU-19/HU-31, `EpicSkillPolicy`): 0 sorteos hasta
@@ -1382,7 +1384,17 @@ export class BattleRoom {
       return replay
     }
 
-    const context = this.requireCombatContext(actorPlayerId, target)
+    const actor = this.requireHumanActorTurn(actorPlayerId)
+
+    return this.planBasicAttackForActor(actor, target)
+  }
+
+  /**
+   * Planificacion pura del ataque del actor vigente. La identidad humana se valida en
+   * `planBasicAttack`; las decisiones internas (HUMAN o AI) usan la misma autoridad por clave.
+   */
+  planBasicAttackForActor(actor: CombatantKey, target: CombatantKey): BasicAttackReadyPlan {
+    const context = this.requireCombatContext(actor, target)
 
     if (context.attackerProfile.attack === null) {
       throw new UnsupportedCombatProfileError('el heroe no tiene un valor de Ataque numerico.')
@@ -1421,7 +1433,21 @@ export class BattleRoom {
    * de curacion de HU-12 no se puede resolver sin esa informacion, y antes de
    * ella no hacia falta (todo objetivo era siempre un rival).
    */
-  private requireAttackerTurn(actorPlayerId: string): {
+  private requireHumanActorTurn(actorPlayerId: string): CombatantKey {
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const current = this.battle.currentEntry
+
+    if (current.kind !== ParticipantKind.Human || current.playerId !== actorPlayerId) {
+      throw new NotYourTurnError(this.id)
+    }
+
+    return { teamLabel: current.teamLabel, seat: current.seat }
+  }
+
+  private requireAttackerTurn(actorKey: CombatantKey): {
     readonly attackerEntry: TurnOrderEntry
     readonly attacker: Combatant
     readonly attackerProfile: CombatProfile
@@ -1432,7 +1458,7 @@ export class BattleRoom {
 
     const attackerEntry = this.battle.currentEntry
 
-    if (attackerEntry.kind !== ParticipantKind.Human || attackerEntry.playerId !== actorPlayerId) {
+    if (attackerEntry.teamLabel !== actorKey.teamLabel || attackerEntry.seat !== actorKey.seat) {
       throw new NotYourTurnError(this.id)
     }
 
@@ -1545,7 +1571,7 @@ export class BattleRoom {
    * poder variar la audiencia segun la habilidad (excepcion de curacion, HU-12).
    */
   private requireCombatContext(
-    actorPlayerId: string,
+    actor: CombatantKey,
     target: CombatantKey,
   ): {
     readonly attackerEntry: TurnOrderEntry
@@ -1556,7 +1582,7 @@ export class BattleRoom {
     readonly targetProfile: CombatProfile
     readonly targetHealth: number
   } {
-    const attackerContext = this.requireAttackerTurn(actorPlayerId)
+    const attackerContext = this.requireAttackerTurn(actor)
     const targetContext = this.requireTargetCombatant(
       attackerContext.attackerEntry,
       target,
@@ -1699,7 +1725,18 @@ export class BattleRoom {
       return replay
     }
 
-    const { attackerEntry, attacker, attackerProfile } = this.requireAttackerTurn(actorPlayerId)
+    const actor = this.requireHumanActorTurn(actorPlayerId)
+
+    return this.planSkillForActor(actor, abilityId, target)
+  }
+
+  /** Planificacion pura de habilidad para el actor vigente, independiente de autenticacion. */
+  planSkillForActor(
+    actor: CombatantKey,
+    abilityId: string,
+    target?: CombatantKey,
+  ): SkillActionPlan {
+    const { attackerEntry, attacker, attackerProfile } = this.requireAttackerTurn(actor)
     const maxPower = attackerProfile.maxPower
 
     if (maxPower === undefined || attacker.currentPower === null || !attacker.hasSkillState) {
@@ -1726,6 +1763,10 @@ export class BattleRoom {
     // HU-19 v2: `HEAL` (Reanimacion, v1 sin cambios) y `HEALING` (contrato §1) son sanadores --
     // no tienen Ataque numerico y NO degradan con Poder insuficiente (excepcion de HU-12).
     if (support.kind === 'HEAL') {
+      if (target === undefined) {
+        throw new InvalidTargetError(this.id)
+      }
+
       const targetContext = this.requireTargetCombatant(attackerEntry, target, 'ALLY')
       const payment = spendPower(
         { heroId: memberKey(attackerEntry), current: currentPower, max: maxPower },
@@ -1750,7 +1791,15 @@ export class BattleRoom {
     }
 
     if (support.kind === 'HEALING') {
-      const recipients = this.resolveHealingRecipients(attackerEntry, target, support.audience)
+      if (target === undefined && support.audience === 'ALLY') {
+        throw new InvalidTargetError(this.id)
+      }
+
+      const recipients = this.resolveHealingRecipients(
+        attackerEntry,
+        target ?? attackerEntry,
+        support.audience,
+      )
       const payment = spendPower(
         { heroId: memberKey(attackerEntry), current: currentPower, max: maxPower },
         ability.powerCost,
@@ -1774,6 +1823,7 @@ export class BattleRoom {
 
       return {
         kind: 'healingSkill',
+        audience: support.audience,
         attackerEntry,
         attacker,
         attackerProfile,
@@ -1790,6 +1840,10 @@ export class BattleRoom {
     // y el Poder insuficiente DEGRADA a ataque basico (HU-11) en vez de rechazar.
     if (attackerProfile.attack === null) {
       throw new UnsupportedCombatProfileError('el heroe no tiene un valor de Ataque numerico.')
+    }
+
+    if (target === undefined) {
+      throw new InvalidTargetError(this.id)
     }
 
     const targetContext = this.requireTargetCombatant(attackerEntry, target, 'OPPONENT')
@@ -1877,7 +1931,14 @@ export class BattleRoom {
       return replay
     }
 
-    const { attackerEntry, attacker, attackerProfile } = this.requireAttackerTurn(actorPlayerId)
+    const actor = this.requireHumanActorTurn(actorPlayerId)
+
+    return this.planEpicForActor(actor, target)
+  }
+
+  /** Planificacion pura de epica para el actor vigente, independiente de autenticacion. */
+  planEpicForActor(actor: CombatantKey, target?: CombatantKey): EpicReadyPlan {
+    const { attackerEntry, attacker, attackerProfile } = this.requireAttackerTurn(actor)
     const epic = attackerProfile.epic
 
     if (epic === undefined) {

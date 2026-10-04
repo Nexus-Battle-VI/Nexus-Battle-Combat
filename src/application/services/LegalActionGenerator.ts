@@ -1,26 +1,42 @@
 import type { BattleRoom } from '../../domain/entities/BattleRoom'
 import type { CombatantKey } from '../../domain/entities/Combatant'
-import { DomainError } from '../../domain/errors/DomainError'
 import {
   DecisionStateUnavailableError,
   NoLegalDecisionActionsError,
 } from '../../domain/errors/DecisionContractErrors'
-import { ParticipantKind } from '../../domain/entities/Participant'
-import type { LegalAction } from '../../domain/decision/LegalAction'
+import type { DecisionActionTarget, LegalAction } from '../../domain/decision/LegalAction'
 import { legalActionIdentity } from '../../domain/decision/ActionIdentity'
 import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
+import {
+  EpicOnCooldownError,
+  EpicTargetRequiredError,
+  InsufficientPowerForHealError,
+  InvalidHealTargetError,
+  InvalidTargetError,
+  SameTeamTargetError,
+  SkillOnCooldownError,
+  TargetUnavailableError,
+  UnsupportedEpicEffectError,
+  UnsupportedSkillEffectError,
+} from '../../domain/errors/BattleErrors'
 
 const compareText = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0
 const compareKey = (left: CombatantKey, right: CombatantKey): number =>
   compareText(left.teamLabel, right.teamLabel) || left.seat - right.seat
-const compareNullableKey = (left: CombatantKey | null, right: CombatantKey | null): number => {
-  if (left === null) return right === null ? 0 : -1
-  if (right === null) return 1
-  return compareKey(left, right)
-}
 const immutableKey = (key: CombatantKey): CombatantKey =>
   Object.freeze({ teamLabel: key.teamLabel, seat: key.seat })
+const combatantTarget = (key: CombatantKey): DecisionActionTarget =>
+  Object.freeze({ scope: 'COMBATANT' as const, combatant: immutableKey(key) })
+const selfTarget: DecisionActionTarget = Object.freeze({ scope: 'SELF' as const })
+const alliedGroupTarget: DecisionActionTarget = Object.freeze({ scope: 'ALLIED_GROUP' as const })
+const targetRank = { SELF: 0, ALLIED_GROUP: 1, COMBATANT: 2 } as const
+const compareTarget = (left: DecisionActionTarget, right: DecisionActionTarget): number => {
+  const byScope = targetRank[left.scope] - targetRank[right.scope]
+
+  if (byScope !== 0 || left.scope !== 'COMBATANT' || right.scope !== 'COMBATANT') return byScope
+  return compareKey(left.combatant, right.combatant)
+}
 const rank = { BASIC_ATTACK: 0, ABILITY: 1, EPIC: 2 } as const
 
 const compareAction = (left: LegalAction, right: LegalAction): number => {
@@ -34,8 +50,20 @@ const compareAction = (left: LegalAction, right: LegalAction): number => {
   const byId = compareText(leftId, rightId)
 
   if (byId !== 0) return byId
-  return compareNullableKey(left.target, right.target)
+  return compareTarget(left.target, right.target)
 }
+
+const isExpectedCandidateRejection = (error: unknown): boolean =>
+  error instanceof InvalidTargetError ||
+  error instanceof SameTeamTargetError ||
+  error instanceof InvalidHealTargetError ||
+  error instanceof TargetUnavailableError ||
+  error instanceof UnsupportedSkillEffectError ||
+  error instanceof SkillOnCooldownError ||
+  error instanceof InsufficientPowerForHealError ||
+  error instanceof EpicOnCooldownError ||
+  error instanceof UnsupportedEpicEffectError ||
+  error instanceof EpicTargetRequiredError
 
 /**
  * Enumerates candidates by asking BattleRoom's existing pure plan methods. Those methods
@@ -51,69 +79,57 @@ export class LegalActionGenerator {
     const battle = room.battle
     const actor = battle.currentEntry
 
-    if (actor.kind !== ParticipantKind.Human || actor.playerId === null) {
-      throw new DecisionStateUnavailableError(
-        'Combat aún no tiene un perfil ejecutable para participantes AI; su turno automático corresponde a HU-93',
-      )
-    }
-
     const candidates: LegalAction[] = []
+    const actorKey = immutableKey(actor)
     const targets = battle.turnOrder
       .map(({ teamLabel, seat }) => immutableKey({ teamLabel, seat }))
       .sort(compareKey)
-    const probeId = (stem: string): string => {
-      let suffix = 0
-      let commandId = `decision-probe-${stem}`
-
-      while (room.handledCommands.some((command) => command.commandId === commandId)) {
-        suffix += 1
-        commandId = `decision-probe-${stem}-${String(suffix)}`
-      }
-
-      return commandId
-    }
-
-    for (const [index, target] of targets.entries()) {
-      try {
-        const plan = room.planBasicAttack(actor.playerId, probeId(`basic-${String(index)}`), target)
-
-        if (plan.kind === 'ready') candidates.push(Object.freeze({ kind: 'BASIC_ATTACK', target }))
-      } catch (error) {
-        if (!(error instanceof DomainError)) throw error
-      }
-    }
-
     const attacker = battle.combatantFor(actor)
+
+    // A healer legitimately has no basic attack. Any other unsupported profile is a
+    // structural/configuration error and must propagate instead of looking like an illegal target.
+    if (attacker?.profile?.attack !== null && attacker?.profile?.attack !== undefined) {
+      for (const target of targets) {
+        try {
+          room.planBasicAttackForActor(actorKey, target)
+
+          candidates.push(Object.freeze({ kind: 'BASIC_ATTACK', target: combatantTarget(target) }))
+        } catch (error) {
+          if (!isExpectedCandidateRejection(error)) throw error
+        }
+      }
+    }
 
     if (attacker?.profile !== null && attacker?.profile !== undefined) {
       const abilities = [...attacker.abilities].sort((left, right) =>
         compareText(left.abilityId, right.abilityId),
       )
 
-      for (const [abilityIndex, ability] of abilities.entries()) {
-        // ALLIED_GROUP consumes a target-shaped command field but Combat resolves the group
-        // itself. Use the actor as a deterministic placeholder so it remains one candidate.
-        const abilityTargets = ability.effects.some((effect) => effect.target === 'ALLIED_GROUP')
-          ? [immutableKey({ teamLabel: actor.teamLabel, seat: actor.seat })]
-          : targets
+      for (const ability of abilities) {
+        const abilityTargets: readonly (CombatantKey | undefined)[] = [undefined, ...targets]
 
-        for (const [targetIndex, target] of abilityTargets.entries()) {
+        for (const target of abilityTargets) {
           try {
-            const plan = room.planSkill(
-              actor.playerId,
-              probeId(`ability-${String(abilityIndex)}-${String(targetIndex)}`),
-              ability.abilityId,
-              target,
-            )
+            const plan = room.planSkillForActor(actorKey, ability.abilityId, target)
 
             // A skill that degrades to a basic attack is not a distinct strategic candidate.
-            if (plan.kind !== 'replay' && plan.kind !== 'degraded') {
+            if (plan.kind !== 'degraded') {
+              const strategicTarget =
+                plan.kind === 'healingSkill' && plan.audience === 'ALLIED_GROUP'
+                  ? alliedGroupTarget
+                  : target === undefined
+                    ? alliedGroupTarget
+                    : combatantTarget(target)
               candidates.push(
-                Object.freeze({ kind: 'ABILITY', abilityId: ability.abilityId, target }),
+                Object.freeze({
+                  kind: 'ABILITY',
+                  abilityId: ability.abilityId,
+                  target: strategicTarget,
+                }),
               )
             }
           } catch (error) {
-            if (!(error instanceof DomainError)) throw error
+            if (!isExpectedCandidateRejection(error)) throw error
           }
         }
       }
@@ -123,29 +139,21 @@ export class LegalActionGenerator {
       if (epicId !== undefined) {
         const epicTargets: (CombatantKey | undefined)[] = [undefined, ...targets]
 
-        for (const [targetIndex, target] of epicTargets.entries()) {
+        for (const target of epicTargets) {
           try {
-            const plan = room.planEpic(
-              actor.playerId,
-              probeId(`epic-${String(targetIndex)}`),
-              target,
-            )
+            const plan = room.planEpicForActor(actorKey, target)
 
-            if (plan.kind === 'epic') {
-              const resolvedTarget =
-                plan.effectPlan.requiredAudience === 'ALLY' ||
-                plan.effectPlan.requiredAudience === 'OPPONENT'
-                  ? plan.target === null
-                    ? null
-                    : immutableKey({
-                        teamLabel: plan.target.teamLabel,
-                        seat: plan.target.seat,
-                      })
-                  : null
-              candidates.push(Object.freeze({ kind: 'EPIC', epicId, target: resolvedTarget }))
-            }
+            const strategicTarget =
+              plan.effectPlan.requiredAudience === 'ALLIED_GROUP'
+                ? alliedGroupTarget
+                : plan.effectPlan.requiredAudience === null
+                  ? selfTarget
+                  : plan.targetEntry === null
+                    ? selfTarget
+                    : combatantTarget(plan.targetEntry)
+            candidates.push(Object.freeze({ kind: 'EPIC', epicId, target: strategicTarget }))
           } catch (error) {
-            if (!(error instanceof DomainError)) throw error
+            if (!isExpectedCandidateRejection(error)) throw error
           }
         }
       }

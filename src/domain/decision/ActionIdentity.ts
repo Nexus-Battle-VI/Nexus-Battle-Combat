@@ -4,9 +4,16 @@ import { IllegalActionIntentError } from '../errors/DecisionContractErrors'
 
 const part = (value: string): string => `${String(value.length)}:${value}`
 
-const targetParts = (
-  target: { readonly teamLabel: string; readonly seat: number } | null,
-): string[] => (target === null ? ['-', '-'] : [part(target.teamLabel), String(target.seat)])
+const targetParts = (target: LegalAction['target']): string[] => {
+  switch (target.scope) {
+    case 'COMBATANT':
+      return ['COMBATANT', part(target.combatant.teamLabel), String(target.combatant.seat)]
+    case 'SELF':
+      return ['SELF']
+    case 'ALLIED_GROUP':
+      return ['ALLIED_GROUP']
+  }
+}
 
 /** Identidad canónica, explícita y no basada en serializar objetos arbitrarios. */
 export const legalActionIdentity = (action: LegalAction): string => {

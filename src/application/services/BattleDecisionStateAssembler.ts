@@ -2,8 +2,10 @@ import type { BattleRoom } from '../../domain/entities/BattleRoom'
 import type {
   DecisionActiveEffect,
   DecisionCombatant,
+  DecisionEffect,
 } from '../../domain/decision/BattleDecisionState'
 import type { CombatantKey } from '../../domain/entities/Combatant'
+import type { CombatAbilityEffect } from '../../domain/entities/CombatProfile'
 import { DecisionStateUnavailableError } from '../../domain/errors/DecisionContractErrors'
 import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import type { BattleDecisionState } from '../../domain/decision/BattleDecisionState'
@@ -13,6 +15,41 @@ const compareText = (left: string, right: string): number =>
 
 const sameKey = (left: CombatantKey, right: CombatantKey): boolean =>
   left.teamLabel === right.teamLabel && left.seat === right.seat
+
+const decisionEffect = (effect: CombatAbilityEffect): DecisionEffect =>
+  Object.freeze({
+    kind: effect.kind,
+    target: effect.target,
+    ...(effect.statistic === undefined ? {} : { statistic: effect.statistic }),
+    ...(effect.operation === undefined ? {} : { operation: effect.operation }),
+    ...(effect.magnitude === undefined
+      ? {}
+      : { magnitude: Object.freeze({ ...effect.magnitude }) }),
+    ...(effect.durationTurns === undefined ? {} : { durationTurns: effect.durationTurns }),
+    hasActivationCondition: effect.hasActivationCondition,
+    ...(effect.immunityCode === undefined ? {} : { immunityCode: effect.immunityCode }),
+  })
+
+const activeEffectIdentity = (effect: DecisionActiveEffect): string =>
+  effect.kind === 'STAT'
+    ? [
+        effect.sourceAbilityId,
+        effect.sourceCombatant.teamLabel,
+        String(effect.sourceCombatant.seat),
+        effect.kind,
+        effect.statistic,
+        effect.operation,
+        String(effect.amount),
+        String(effect.remainingOwnTurns),
+      ].join('|')
+    : [
+        effect.sourceAbilityId,
+        effect.sourceCombatant.teamLabel,
+        String(effect.sourceCombatant.seat),
+        effect.kind,
+        effect.immunityCode,
+        String(effect.remainingOwnTurns),
+      ].join('|')
 
 const decisionView = (
   room: BattleRoom,
@@ -35,6 +72,7 @@ const decisionView = (
         abilityId: ability.abilityId,
         powerCost: Object.freeze({ ...ability.powerCost }),
         chargeTurns: ability.chargeTurns,
+        effects: Object.freeze(ability.effects.map(decisionEffect)),
       }),
     )
     .sort((left, right) => compareText(left.abilityId, right.abilityId))
@@ -46,22 +84,29 @@ const decisionView = (
           powerCost: profile.epic.powerCost,
           cooldownTurns: profile.epic.cooldownTurns,
           cooldownRemaining: combatant.cooldownOf(profile.epic.epicProductId),
+          effects: Object.freeze(profile.epic.executableEffects.map(decisionEffect)),
         })
-  const activeEffects: DecisionActiveEffect[] = combatant.activeSkillEffects.map((effect) =>
-    'statistic' in effect
-      ? Object.freeze({
-          kind: 'STAT' as const,
-          statistic: effect.statistic,
-          operation: effect.operation,
-          amount: effect.amount,
-          remainingOwnTurns: effect.remainingOwnTurns,
-        })
-      : Object.freeze({
-          kind: 'IMMUNITY' as const,
-          immunityCode: effect.immunityCode,
-          remainingOwnTurns: effect.remainingOwnTurns,
-        }),
-  )
+  const activeEffects: DecisionActiveEffect[] = combatant.activeSkillEffects
+    .map((effect) =>
+      'statistic' in effect
+        ? Object.freeze({
+            kind: 'STAT' as const,
+            sourceAbilityId: effect.sourceAbilityId,
+            sourceCombatant: Object.freeze({ ...effect.sourceCombatant }),
+            statistic: effect.statistic,
+            operation: effect.operation,
+            amount: effect.amount,
+            remainingOwnTurns: effect.remainingOwnTurns,
+          })
+        : Object.freeze({
+            kind: 'IMMUNITY' as const,
+            sourceAbilityId: effect.sourceAbilityId,
+            sourceCombatant: Object.freeze({ ...effect.sourceCombatant }),
+            immunityCode: effect.immunityCode,
+            remainingOwnTurns: effect.remainingOwnTurns,
+          }),
+    )
+    .sort((left, right) => compareText(activeEffectIdentity(left), activeEffectIdentity(right)))
   const damageMemory =
     combatant.damageMemory === null ? null : Object.freeze({ ...combatant.damageMemory })
 
@@ -79,6 +124,11 @@ const decisionView = (
         : Object.freeze({ current: combatant.currentPower, max: profile.maxPower }),
     attack: profile?.attack ?? null,
     defense: profile?.defense ?? null,
+    damage:
+      profile?.damage === undefined || profile.damage === null
+        ? null
+        : Object.freeze({ ...profile.damage }),
+    level: profile === null ? null : (profile.level ?? 1),
     cooldowns: Object.freeze(cooldowns),
     abilities: Object.freeze(abilities),
     epic,
