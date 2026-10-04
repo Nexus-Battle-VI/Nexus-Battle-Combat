@@ -6,6 +6,7 @@ import {
   type MissionSimulationRequest,
 } from '../../src/application/services/MissionSimulation'
 import type { CombatAbility } from '../../src/domain/entities/CombatProfile'
+import { RuleBasedPolicy } from '../../src/application/policies/RuleBasedPolicy'
 
 const fighter = (
   maxHealth: number,
@@ -97,9 +98,9 @@ const temple: MissionSimulationRequest = {
 describe('mission simulation balance', () => {
   const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
 
-  it('lets a baseline equipped hero clear five chambers and defeat the boss', () => {
+  it('lets a baseline equipped hero clear five chambers and defeat the boss', async () => {
     const seed = new HmacMissionSeedFactory('test-secret').forOperation(temple.operationId)
-    const result = simulateMission(temple, seed, factory)
+    const result = await simulateMission(temple, seed, factory, new RuleBasedPolicy())
     expect(result.combatOutcome).toBe('HERO_VICTORIOUS')
     expect(result.summary).toMatchObject({
       encountersCompleted: 5,
@@ -109,16 +110,16 @@ describe('mission simulation balance', () => {
     expect(result.combatLog).toContainEqual(
       expect.objectContaining({ type: 'combatantDefeated', encounter: 5, combatant: 'guardian#1' }),
     )
-    expect(simulateMission(temple, seed, factory)).toEqual(result)
+    expect(await simulateMission(temple, seed, factory, new RuleBasedPolicy())).toEqual(result)
   })
 })
 
 describe('mission simulation combat log (HU-72, HU-09)', () => {
   const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
 
-  it('records every defeat as combatantDefeated with its encounter and numbered instance', () => {
+  it('records every defeat as combatantDefeated with its encounter and numbered instance', async () => {
     const seed = new HmacMissionSeedFactory('test-secret').forOperation(temple.operationId)
-    const result = simulateMission(temple, seed, factory)
+    const result = await simulateMission(temple, seed, factory, new RuleBasedPolicy())
     const defeats = result.combatLog.filter((event) => event.type === 'combatantDefeated')
     const summary = result.summary as { enemiesDefeated: { enemyRef: string; count: number }[] }
     const total = summary.enemiesDefeated.reduce((sum, entry) => sum + entry.count, 0)
@@ -205,10 +206,10 @@ const duel = (
   bossDrops: [],
 })
 
-const heroActions = (request: MissionSimulationRequest) => {
+const heroActions = async (request: MissionSimulationRequest) => {
   const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
   const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
-  return simulateMission(request, seed, factory).combatLog.filter(
+  return (await simulateMission(request, seed, factory, new RuleBasedPolicy())).combatLog.filter(
     (event) => event.type === 'heroAction',
   )
 }
@@ -222,24 +223,24 @@ describe('hero level multiplies the final damage result (HU-08 CA-06, option A)'
       ? request
       : { ...request, hero: { ...request.hero, profile: { ...request.hero.profile, level } } }
   }
-  const firstDamage = (request: MissionSimulationRequest): number =>
-    Number(heroActions(request).find((action) => Number(action.damage) > 0)?.damage)
+  const firstDamage = async (request: MissionSimulationRequest): Promise<number> =>
+    Number((await heroActions(request)).find((action) => Number(action.damage) > 0)?.damage)
 
-  it('level 3 deals at least 3x the damage of the same seeded hit at level 1 (fixed damage 1)', () => {
-    const base = firstDamage(withLevel(undefined))
+  it('level 3 deals at least 3x the damage of the same seeded hit at level 1 (fixed damage 1)', async () => {
+    const base = await firstDamage(withLevel(undefined))
 
-    expect(firstDamage(withLevel(1))).toBe(base)
-    expect(firstDamage(withLevel(3))).toBeGreaterThanOrEqual(base * 3)
+    expect(await firstDamage(withLevel(1))).toBe(base)
+    expect(await firstDamage(withLevel(3))).toBeGreaterThanOrEqual(base * 3)
   })
 
-  it('is deterministic: the same request and level give the same damage', () => {
-    expect(firstDamage(withLevel(5))).toBe(firstDamage(withLevel(5)))
+  it('is deterministic: the same request and level give the same damage', async () => {
+    expect(await firstDamage(withLevel(5))).toBe(await firstDamage(withLevel(5)))
   })
 })
 
 describe('rotation priority (HU-71 CA-02, CA-03)', () => {
-  it('D-2: when the high rotation lacks Power, the medium one acts', () => {
-    const actions = heroActions(
+  it('D-2: when the high rotation lacks Power, the medium one acts', async () => {
+    const actions = await heroActions(
       duel(
         [damageSkill('costosa', 10), damageSkill('barata', 1)],
         [
@@ -260,8 +261,8 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
     })
   })
 
-  it('D-3: with the high and medium rotations recharging, the low one acts', () => {
-    const actions = heroActions(
+  it('D-3: with the high and medium rotations recharging, the low one acts', async () => {
+    const actions = await heroActions(
       duel(
         [damageSkill('golpe', 1, 3), damageSkill('embate', 1, 3)],
         [
@@ -286,8 +287,8 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
     })
   })
 
-  it('D-4 (CA-03): with no viable rotation the hero uses the fallback basic attack', () => {
-    const actions = heroActions(
+  it('D-4 (CA-03): with no viable rotation the hero uses the fallback basic attack', async () => {
+    const actions = await heroActions(
       duel(
         [damageSkill('costosa', 10), damageSkill('carisima', 20)],
         [
@@ -306,8 +307,8 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
     }
   })
 
-  it('course example (7.8.5): the medium rotation acts while the high one recharges', () => {
-    const actions = heroActions(
+  it('course example (7.8.5): the medium rotation acts while the high one recharges', async () => {
+    const actions = await heroActions(
       duel(
         [
           damageSkill('golpe-de-tormenta', 1, 3),
@@ -334,13 +335,21 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
       strategy: {
         rotation: 'MEDIUM',
         step: 1,
-        skipped: [{ rotation: 'HIGH', step: 1, reason: 'ON_COOLDOWN' }],
+        // Revisión de PR #71: MissionRotationConstraint evalúa TODAS las
+        // rotaciones (no se detiene en la primera viable), así que LOW
+        // también se reporta -- su propio paso ('embate-sangriento') sigue
+        // en recarga en este turno. La acción elegida no cambia: sigue
+        // siendo la de MEDIUM (RuleBasedPolicy toma la primera candidata).
+        skipped: [
+          { rotation: 'HIGH', step: 1, reason: 'ON_COOLDOWN' },
+          { rotation: 'LOW', step: 1, reason: 'ON_COOLDOWN' },
+        ],
       },
     })
   })
 
-  it('P-R6: a rotation that is not viable keeps its cursor', () => {
-    const actions = heroActions(
+  it('P-R6: a rotation that is not viable keeps its cursor', async () => {
+    const actions = await heroActions(
       duel(
         [damageSkill('golpe', 1, 3)],
         [
@@ -364,7 +373,7 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
     })
   })
 
-  it('logs an ability whose effect Combat cannot execute instead of skipping it silently', () => {
+  it('logs an ability whose effect Combat cannot execute instead of skipping it silently', async () => {
     const dardo: CombatAbility = {
       ...damageSkill('dardo', 1),
       effects: [
@@ -378,7 +387,7 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
         },
       ],
     }
-    const actions = heroActions(
+    const actions = await heroActions(
       duel(
         [dardo],
         [
@@ -397,8 +406,8 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
     })
   })
 
-  it('skips an ability the hero does not have as UNKNOWN_ABILITY', () => {
-    const actions = heroActions(duel([], [{ priority: 'HIGH', steps: [skill('no-existe')] }]))
+  it('skips an ability the hero does not have as UNKNOWN_ABILITY', async () => {
+    const actions = await heroActions(duel([], [{ priority: 'HIGH', steps: [skill('no-existe')] }]))
     expect(actions[0]).toMatchObject({
       action: 'BASIC_ATTACK',
       strategy: {
@@ -444,15 +453,35 @@ const brawl = (
   }
 }
 
-const logOf = (request: MissionSimulationRequest) => {
+const logOf = async (request: MissionSimulationRequest) => {
   const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
   const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
-  return simulateMission(request, seed, factory)
+  return simulateMission(request, seed, factory, new RuleBasedPolicy())
 }
 
+/**
+ * Mismo heroe, con `effectiveStats.health` mas bajo (ADR-023, EN-035.3): la
+ * curacion solo es candidata estrategica con `healthRatio < 0.90`, asi que
+ * las pruebas de mecanica de curacion necesitan al heroe ya por debajo de ese
+ * umbral antes del paso de curacion, no a salud completa.
+ */
+const withMaxHealth = (
+  request: MissionSimulationRequest,
+  health: number,
+): MissionSimulationRequest => ({
+  ...request,
+  hero: {
+    ...request.hero,
+    profile: {
+      ...request.hero.profile,
+      effectiveStats: { ...request.hero.profile.effectiveStats, health },
+    },
+  },
+})
+
 describe('mission abilities beyond attack bonuses (P-J4)', () => {
-  it('direct damage hits without an attack roll and counts as ability damage', () => {
-    const result = logOf(
+  it('direct damage hits without an attack roll and counts as ability damage', async () => {
+    const result = await logOf(
       brawl(
         [
           utility('agonia', {
@@ -478,23 +507,28 @@ describe('mission abilities beyond attack bonuses (P-J4)', () => {
     expect(result.summary.abilityDamage).toBe(21)
   })
 
-  it('heals the hero now and, with duration, at the start of the next round', () => {
-    const result = logOf(
-      brawl(
-        [
-          utility('canto', {
-            kind: 'HEALING',
-            target: 'ALLIED_GROUP',
-            magnitude: { mode: 'FIXED', amount: 3 },
-            durationTurns: 2,
-          }),
-        ],
-        [basic, skill('canto'), basic],
+  it('heals the hero now and, with duration, at the start of the next round', async () => {
+    const result = await logOf(
+      withMaxHealth(
+        brawl(
+          [
+            utility('canto', {
+              kind: 'HEALING',
+              target: 'ALLIED_GROUP',
+              magnitude: { mode: 'FIXED', amount: 3 },
+              durationTurns: 2,
+            }),
+          ],
+          [basic, skill('canto'), basic],
+        ),
+        // Con 1 ataque enemigo de 5 antes de curar, 40 de salud maxima baja al
+        // 87,5 % (< 90 %): la curacion ya es candidata estrategica (ADR-023).
+        40,
       ),
     )
     const heroActions = result.combatLog.filter((event) => event.type === 'heroAction')
     expect(heroActions[1]).toMatchObject({
-      effects: [{ kind: 'HEAL', amount: 3, turns: 2, heroHealth: 998 }],
+      effects: [{ kind: 'HEAL', amount: 3, turns: 2, heroHealth: 38 }],
     })
     const secondRound = result.combatLog.findIndex((event) => event === heroActions[1])
     const nextHeal = result.combatLog
@@ -504,25 +538,30 @@ describe('mission abilities beyond attack bonuses (P-J4)', () => {
     expect(result.summary.healingDone).toBeGreaterThanOrEqual(6)
   })
 
-  it('heals a percentage of the maximum health (PvP Reanimacion semantics)', () => {
-    const result = logOf(
-      brawl(
-        [
-          utility('reanimacion', {
-            kind: 'REVIVE',
-            target: 'ALLY',
-            magnitude: { mode: 'PERCENTAGE', basisPoints: 10_000 },
-          }),
-        ],
-        [basic, basic, skill('reanimacion')],
+  it('heals a percentage of the maximum health (PvP Reanimacion semantics)', async () => {
+    const result = await logOf(
+      withMaxHealth(
+        brawl(
+          [
+            utility('reanimacion', {
+              kind: 'REVIVE',
+              target: 'ALLY',
+              magnitude: { mode: 'PERCENTAGE', basisPoints: 10_000 },
+            }),
+          ],
+          [basic, basic, skill('reanimacion')],
+        ),
+        // 2 ataques enemigos de 5 antes de curar, sobre 90 de salud maxima,
+        // bajan al 88,9 % (< 90 %): la curacion ya es candidata (ADR-023).
+        90,
       ),
     )
     const [, , third] = result.combatLog.filter((event) => event.type === 'heroAction')
-    expect(third).toMatchObject({ effects: [{ kind: 'HEAL', amount: 10, heroHealth: 1000 }] })
+    expect(third).toMatchObject({ effects: [{ kind: 'HEAL', amount: 10, heroHealth: 90 }] })
   })
 
-  it('immunity prevents the damage of that round', () => {
-    const result = logOf(
+  it('immunity prevents the damage of that round', async () => {
+    const result = await logOf(
       brawl([utility('defensa', { kind: 'IMMUNITY', target: 'SELF' })], [skill('defensa'), basic]),
     )
     const enemyActions = result.combatLog.filter((event) => event.type === 'enemyAction')
@@ -530,8 +569,8 @@ describe('mission abilities beyond attack bonuses (P-J4)', () => {
     expect(enemyActions[1]).toMatchObject({ hit: true, damage: 5 })
   })
 
-  it('a defense buff makes the enemy miss, and ends when its rounds are spent', () => {
-    const result = logOf(
+  it('a defense buff makes the enemy miss, and ends when its rounds are spent', async () => {
+    const result = await logOf(
       brawl(
         [
           utility('piedra', {
@@ -550,8 +589,8 @@ describe('mission abilities beyond attack bonuses (P-J4)', () => {
     expect(enemyActions.slice(0, 3).map((event) => event.hit)).toEqual([false, false, true])
   })
 
-  it('a debuff lowers the opponent attack while it lasts', () => {
-    const result = logOf(
+  it('a debuff lowers the opponent attack while it lasts', async () => {
+    const result = await logOf(
       brawl(
         [
           utility('cono', {
@@ -575,8 +614,8 @@ describe('mission abilities beyond attack bonuses (P-J4)', () => {
     expect(enemyActions.slice(0, 3).map((event) => event.hit)).toEqual([false, false, true])
   })
 
-  it('a damage reduction can soften a hit down to zero', () => {
-    const result = logOf(
+  it('a damage reduction can soften a hit down to zero', async () => {
+    const result = await logOf(
       brawl(
         [
           utility('hielo', {
@@ -595,8 +634,8 @@ describe('mission abilities beyond attack bonuses (P-J4)', () => {
     expect(enemyActions[1]).toMatchObject({ hit: true, damage: 5 })
   })
 
-  it('reflect returns part of the damage to the attacker', () => {
-    const result = logOf(
+  it('reflect returns part of the damage to the attacker', async () => {
+    const result = await logOf(
       brawl(
         [
           utility('toma', {
@@ -616,8 +655,8 @@ describe('mission abilities beyond attack bonuses (P-J4)', () => {
     expect(result.summary.abilityDamage).toBe(9)
   })
 
-  it('a damage buff with duration also improves the following basic attacks', () => {
-    const result = logOf(
+  it('a damage buff with duration also improves the following basic attacks', async () => {
+    const result = await logOf(
       brawl(
         [
           utility('cortada', {
@@ -643,7 +682,7 @@ describe('mission abilities beyond attack bonuses (P-J4)', () => {
     expect(heroActions[2]?.damage).toBeLessThan(41)
   })
 
-  it('reflected damage can finish the enemy during its own attack', () => {
+  it('reflected damage can finish the enemy during its own attack', async () => {
     const request = brawl(
       [
         utility('espejo', {
@@ -655,7 +694,7 @@ describe('mission abilities beyond attack bonuses (P-J4)', () => {
       ],
       [skill('espejo'), basic],
     )
-    const result = logOf({
+    const result = await logOf({
       ...request,
       encounters: [
         {

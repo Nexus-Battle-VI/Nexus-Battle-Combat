@@ -1,6 +1,7 @@
 import { evaluateMissionAbility } from '../../domain/policies/MissionAbilityPolicy'
 import type { MissionSeedPort } from '../ports/MissionSeedPort'
 import type { RandomSequenceFactoryPort } from '../ports/RandomSequencePort'
+import type { AiDecisionPort } from '../ports/AiDecisionPort'
 import { simulateMission, type MissionSimulationRequest } from '../services/MissionSimulation'
 
 export const DEFAULT_ESTIMATE_RUNS = 30
@@ -43,9 +44,10 @@ export class EstimateMissionOutcome {
   constructor(
     private readonly sequences: RandomSequenceFactoryPort,
     private readonly seeds: MissionSeedPort,
+    private readonly decisionPolicy: AiDecisionPort,
   ) {}
 
-  execute(request: MissionSimulationRequest, runs: number): MissionEstimate {
+  async execute(request: MissionSimulationRequest, runs: number): Promise<MissionEstimate> {
     let victories = 0
     let defeats = 0
     let timeouts = 0
@@ -56,7 +58,7 @@ export class EstimateMissionOutcome {
 
     for (let run = 1; run <= runs; run += 1) {
       const seed = this.seeds.forOperation(`${request.operationId}:estimate:${String(run)}`)
-      const result = simulateMission(request, seed, this.sequences)
+      const result = await simulateMission(request, seed, this.sequences, this.decisionPolicy)
       if (result.combatOutcome === 'HERO_VICTORIOUS') victories += 1
       else if (result.combatOutcome === 'HERO_DEFEATED') defeats += 1
       else timeouts += 1
