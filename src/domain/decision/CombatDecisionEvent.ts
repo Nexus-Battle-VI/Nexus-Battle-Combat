@@ -10,13 +10,7 @@ export const COMBAT_DECISION_EVENT_SCHEMA_VERSION = 1 as const
 export const COMBAT_END_TURN_DECISION_EVENT_SCHEMA_VERSION = 2 as const
 
 export type CombatDecisionOrigin = 'ONLINE' | 'MISSION' | 'TOURNAMENT'
-export type CombatDecisionSource =
-  | 'HUMAN'
-  | 'RULE_BASED'
-  | 'RANDOM'
-  | 'MCTS'
-  | 'NEURAL'
-  | 'SYSTEM'
+export type CombatDecisionSource = 'HUMAN' | 'RULE_BASED' | 'RANDOM' | 'MCTS' | 'NEURAL' | 'SYSTEM'
 
 /**
  * Resultado estratégico registrado. `END_TURN` no es un `ActionIntent`: ninguna

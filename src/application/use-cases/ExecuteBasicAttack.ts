@@ -254,9 +254,7 @@ export class ExecuteBasicAttack {
         ? undefined
         : room.events.find((candidate) => candidate.seq === handled.seq)
 
-    return event === undefined
-      ? null
-      : { event, replayed: true, followUp: [], finished: null }
+    return event === undefined ? null : { event, replayed: true, followUp: [], finished: null }
   }
 
   /** `prepareAttack` es puro (no sortea); un perfil que HU-20 no sabe preparar es un perfil no soportado. */
