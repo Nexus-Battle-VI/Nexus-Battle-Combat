@@ -70,6 +70,7 @@ import { ChatRealtimeHandler } from '../../adapters/inbound/ws/ChatRealtimeHandl
 import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTokenVerifier'
 import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClient'
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
+import { CatalogBotCandidatesHttpClient } from '../../adapters/outbound/http/CatalogBotCandidatesHttpClient'
 import { PlayerInventoryBattleCommitmentHttpClient } from '../../adapters/outbound/http/PlayerInventoryBattleCommitmentHttpClient'
 import { PlayerInventoryBattleDropHttpClient } from '../../adapters/outbound/http/PlayerInventoryBattleDropHttpClient'
 import { NotificationsBattleDropHttpClient } from '../../adapters/outbound/http/NotificationsBattleDropHttpClient'
@@ -166,6 +167,10 @@ import {
   PLAYER_INVENTORY_EQUIPPED_HERO,
   type PlayerInventoryEquippedHeroPort,
 } from '../../application/ports/PlayerInventoryEquippedHeroPort'
+import {
+  BOT_COMBAT_CATALOG,
+  type BotCombatCatalogPort,
+} from '../../application/ports/BotCombatCatalogPort'
 import type { RewardCreditPort } from '../../application/ports/RewardCreditPort'
 import type { RewardGrantPort } from '../../application/ports/RewardGrantPort'
 import type { RewardWorkflowRepositoryPort } from '../../application/ports/RewardWorkflowRepositoryPort'
@@ -207,6 +212,7 @@ import { BattleDeadlineSettler } from '../../application/services/BattleDeadline
 import { BattleFinalizer } from '../../application/services/BattleFinalizer'
 import { CombatDecisionRecorder } from '../../application/services/CombatDecisionRecorder'
 import { PersistVersusDropDecision } from '../../application/services/PersistVersusDropDecision'
+import { BotParticipantFactory } from '../../application/services/BotParticipantFactory'
 import { StakeReleaser } from '../../application/services/StakeReleaser'
 import { StakeReserver } from '../../application/services/StakeReserver'
 import { StakeSettler } from '../../application/services/StakeSettler'
@@ -499,6 +505,31 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       },
       inject: [APP_CONFIG, CLOCK, LOGGER],
     },
+    {
+      provide: BOT_COMBAT_CATALOG,
+      useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): BotCombatCatalogPort => {
+        if (config.internalServiceAuthSecret === null || config.catalogServiceBaseUrl === null) {
+          logger.warn('catalog_bot_client_sin_configurar', {
+            detail: 'CATALOG_SERVICE_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET no configurados.',
+          })
+
+          return {
+            listBotCandidates: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('catalog', 'no_configurado')),
+          }
+        }
+
+        return new CatalogBotCandidatesHttpClient({
+          baseUrl: config.catalogServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
     // HU-14: salas de batalla. `PERSISTENCE_DRIVER=memory` respalda pruebas
     // de integracion sin motor real, igual que el resto de repositorios del
     // proyecto cuando adoptan ese patron.
@@ -716,6 +747,12 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       provide: BATTLE_RANDOM,
       useFactory: (sequence: RandomSequencePort): BoundedRandom => createBoundedRandom(sequence),
       inject: [BATTLE_RANDOM_SEQUENCE],
+    },
+    {
+      provide: BotParticipantFactory,
+      useFactory: (catalog: BotCombatCatalogPort, random: BoundedRandom): BotParticipantFactory =>
+        new BotParticipantFactory(catalog, random),
+      inject: [BOT_COMBAT_CATALOG, BATTLE_RANDOM],
     },
     // IMPORTANTE: el gateway se registra como CLASE, no con `useFactory`. Nest solo
     // descubre y monta un `@WebSocketGateway` cuando el proveedor es la propia
@@ -1235,6 +1272,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         book: BattleDeadlineBookPort,
         connections: BattleConnectionsPort,
         dropInventory: BattleDropInventoryPort,
+        bots: BotParticipantFactory,
       ): StartBattle =>
         new StartBattle(
           rooms,
@@ -1247,6 +1285,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           book,
           connections,
           dropInventory,
+          bots,
         ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
@@ -1259,6 +1298,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_DEADLINE_BOOK,
         BATTLE_CONNECTIONS,
         BATTLE_DROP_INVENTORY,
+        BotParticipantFactory,
       ],
     },
     // Management#517: "arrancar esta sala de torneo concreta" delegando TAL

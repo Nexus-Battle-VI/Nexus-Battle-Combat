@@ -17,6 +17,7 @@ describe('Configuracion del servicio', () => {
       persistenceDriver: PersistenceDriver.Memory,
       databaseUrl: null,
       internalServiceAuthSecret: null,
+      catalogServiceBaseUrl: 'http://catalog:3003',
     })
   })
 
@@ -61,6 +62,7 @@ describe('Configuracion del servicio', () => {
       // "exige ACCOUNT_SERVICE_BASE_URL...").
       ACCOUNT_SERVICE_BASE_URL: 'https://account.internal',
       PLAYER_INVENTORY_SERVICE_BASE_URL: 'https://player-inventory.internal',
+      CATALOG_SERVICE_BASE_URL: 'https://catalog.internal',
       // HU-22: produccion tambien exige poder acreditar creditos de batalla.
       WALLET_SERVICE_BASE_URL: 'https://wallet.internal',
     })
@@ -68,7 +70,7 @@ describe('Configuracion del servicio', () => {
     expect(config.swaggerEnabled).toBe(false)
   })
 
-  it('exige ACCOUNT_SERVICE_BASE_URL y PLAYER_INVENTORY_SERVICE_BASE_URL en produccion (HU-15.2, RF-15)', () => {
+  it('exige las URLs internas de Account, Player-Inventory y Catalog en produccion', () => {
     expect(() =>
       loadConfig({
         NODE_ENV: 'production',

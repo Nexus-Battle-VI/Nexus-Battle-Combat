@@ -69,6 +69,8 @@ export interface AppConfig {
   readonly accountServiceBaseUrl: string | null
   /** URL base de Player-Inventory para el contrato interno `equipped-hero` (HU-15.2, DP-4). Sin barra final. */
   readonly playerInventoryServiceBaseUrl: string | null
+  /** URL base de Catalog para candidatos gameplay de bots (HU-93.1A). Sin barra final. */
+  readonly catalogServiceBaseUrl: string | null
   /** URL base de Wallet para el contrato interno `battle-reward` (HU-22, `hu-22-reward-contract-v1` §3). Sin barra final. */
   readonly walletServiceBaseUrl: string | null
   readonly notificationsServiceBaseUrl?: string | null
@@ -220,6 +222,14 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   const internalServiceAuthSecret = readString(env, 'INTERNAL_SERVICE_AUTH_SECRET', '')
   const accountServiceBaseUrl = readString(env, 'ACCOUNT_SERVICE_BASE_URL', '')
   const playerInventoryServiceBaseUrl = readString(env, 'PLAYER_INVENTORY_SERVICE_BASE_URL', '')
+  // El compose local histórico todavía no declara esta variable. El hostname
+  // estable de la red Compose permite probar HU-93.1 sin editar Infrastructure;
+  // producción, en cambio, debe declararla de forma explícita.
+  const catalogServiceBaseUrl = readString(
+    env,
+    'CATALOG_SERVICE_BASE_URL',
+    nodeEnv === 'development' ? 'http://catalog:3003' : '',
+  )
   const walletServiceBaseUrl = readString(env, 'WALLET_SERVICE_BASE_URL', '')
   const notificationsServiceBaseUrl = readString(env, 'NOTIFICATIONS_SERVICE_BASE_URL', '')
 
@@ -229,11 +239,13 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   // que el arranque lo advirtiera.
   if (
     nodeEnv === 'production' &&
-    (accountServiceBaseUrl === '' || playerInventoryServiceBaseUrl === '')
+    (accountServiceBaseUrl === '' ||
+      playerInventoryServiceBaseUrl === '' ||
+      catalogServiceBaseUrl === '')
   ) {
     throw new ConfigurationError(
-      'ACCOUNT_SERVICE_BASE_URL y PLAYER_INVENTORY_SERVICE_BASE_URL son obligatorios con ' +
-        'NODE_ENV=production (HU-15.2, RF-15: resolucion de displayName/heroId al unirse).',
+      'ACCOUNT_SERVICE_BASE_URL, PLAYER_INVENTORY_SERVICE_BASE_URL y ' +
+        'CATALOG_SERVICE_BASE_URL son obligatorios con NODE_ENV=production.',
     )
   }
 
@@ -267,6 +279,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     accountServiceBaseUrl: accountServiceBaseUrl === '' ? null : accountServiceBaseUrl,
     playerInventoryServiceBaseUrl:
       playerInventoryServiceBaseUrl === '' ? null : playerInventoryServiceBaseUrl,
+    catalogServiceBaseUrl: catalogServiceBaseUrl === '' ? null : catalogServiceBaseUrl,
     walletServiceBaseUrl: walletServiceBaseUrl === '' ? null : walletServiceBaseUrl,
     notificationsServiceBaseUrl:
       notificationsServiceBaseUrl === '' ? null : notificationsServiceBaseUrl,

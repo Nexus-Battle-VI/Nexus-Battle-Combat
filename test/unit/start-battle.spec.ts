@@ -23,8 +23,10 @@ import {
 import { BattleRoomStatus } from '../../src/domain/value-objects/BattleRoomStatus'
 import { battleDeadline, commitmentExpiresAt } from '../../src/domain/policies/BattleTimingPolicy'
 import type { BoundedRandom } from '../../src/domain/policies/TurnOrderPolicy'
+import { BotParticipantFactory } from '../../src/application/services/BotParticipantFactory'
 import { equippedHeroFixture, equippedProductNotOwnedBlocker } from '../fixtures/equipped-hero'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { botCatalogCandidates } from '../fixtures/combat-bot-candidates'
 import {
   NOW,
   ROOM_ID,
@@ -49,6 +51,7 @@ const build = (
     random?: BoundedRandom
     publisher?: ReturnType<typeof recordingPublisher>
     commitments?: ReturnType<typeof recordingBattleCommitments>
+    bots?: BotParticipantFactory
   } = {},
 ): {
   useCase: StartBattle
@@ -59,15 +62,25 @@ const build = (
   const heroes = overrides.heroes ?? heroesPort()
   const publisher = overrides.publisher ?? recordingPublisher()
   const commitments = overrides.commitments ?? recordingBattleCommitments()
+  const random = overrides.random ?? scriptedRandom([0])
 
   return {
     useCase: new StartBattle(
       repo,
       clock,
       heroes,
-      overrides.random ?? scriptedRandom([0]),
+      random,
       publisher,
       commitments,
+      null,
+      null,
+      null,
+      null,
+      overrides.bots ??
+        new BotParticipantFactory(
+          { listBotCandidates: () => Promise.resolve(botCatalogCandidates()) },
+          random,
+        ),
     ),
     commitments,
     heroes,
@@ -175,17 +188,73 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
     },
   )
 
-  it('PVE con AI: el AI entra en la cola sin heroe equipado que validar', async () => {
+  it('PVE con AI: lo prepara desde Catalog sin jugador ni Player-Inventory', async () => {
     const repo = new InMemoryBattleRoomRepository()
 
     await seed(repo, { teamSizes: [1, 1], aiInTeamB: 1 })
-    const { useCase, heroes } = build(repo, { random: scriptedRandom([0]) })
+    const random = scriptedRandom([0, 9999, 0])
+    const { useCase, heroes } = build(repo, { random })
 
     const dto = await useCase.execute(ROOM_ID, 'a1')
 
     expect(dto.battle?.turnOrder.map((entry) => entry.kind)).toEqual(['HUMAN', 'AI'])
     expect(heroes.calls).toEqual(['a1'])
-    expect(dto.battle?.turnOrder[1]?.heroSubtype).toBeNull()
+    expect(dto.battle?.turnOrder[1]).toMatchObject({
+      playerId: null,
+      heroId: '10000000-0000-4000-8000-000000000001',
+      heroSubtype: 'GUERRERO_ARMAS',
+    })
+    expect(dto.battle?.combatants[1]).toMatchObject({
+      health: { current: 40, max: 40 },
+      power: { current: 10, max: 10 },
+    })
+    expect(random.bounds).toEqual([1, 10_000, 2])
+  })
+
+  it('PVE idempotente: el retry no vuelve a consultar Catalog ni cambia el bot persistido', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const random = scriptedRandom([0, 9999, 0])
+    let catalogCalls = 0
+    const bots = new BotParticipantFactory(
+      {
+        listBotCandidates: () => {
+          catalogCalls += 1
+          return Promise.resolve(botCatalogCandidates())
+        },
+      },
+      random,
+    )
+
+    await seed(repo, { teamSizes: [1, 1], aiInTeamB: 1 })
+    const useCase = build(repo, { random, bots }).useCase
+    const first = await useCase.execute(ROOM_ID, 'a1')
+    const second = await useCase.execute(ROOM_ID, 'a1')
+
+    expect(second).toEqual(first)
+    expect(catalogCalls).toBe(1)
+    expect(random.bounds).toEqual([1, 10_000, 2])
+  })
+
+  it('Catalog caido: la sala sigue PREPARING y no compromete al humano ni consume RNG', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const random = scriptedRandom([])
+    const commitments = recordingBattleCommitments()
+    const bots = new BotParticipantFactory(
+      {
+        listBotCandidates: () =>
+          Promise.reject(new UpstreamServiceError('catalog', 'no_alcanzable')),
+      },
+      random,
+    )
+
+    await seed(repo, { teamSizes: [1, 1], aiInTeamB: 1 })
+    await expect(
+      build(repo, { random, commitments, bots }).useCase.execute(ROOM_ID, 'a1'),
+    ).rejects.toBeInstanceOf(UpstreamServiceError)
+
+    expect((await repo.findById(ROOM_ID))?.status).toBe(BattleRoomStatus.Preparing)
+    expect(commitments.commits).toEqual([])
+    expect(random.bounds).toEqual([])
   })
 
   it('las estadisticas y el equipamiento NO influyen: heroes muy distintos, mismo orden con el mismo sorteo', async () => {
@@ -624,7 +693,9 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       const repo = new InMemoryBattleRoomRepository()
 
       await seed(repo, { teamSizes: [1, 1], aiInTeamB: 1 })
-      const { useCase, commitments } = build(repo, { random: scriptedRandom([0]) })
+      const { useCase, commitments } = build(repo, {
+        random: scriptedRandom([0, 9999, 0]),
+      })
 
       await useCase.execute(ROOM_ID, 'a1')
 
