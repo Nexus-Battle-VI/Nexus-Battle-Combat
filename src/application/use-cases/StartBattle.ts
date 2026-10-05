@@ -3,6 +3,7 @@ import { Combatant } from '../../domain/entities/Combatant'
 import { createCombatProfile } from '../../domain/entities/CombatProfile'
 import { ParticipantKind } from '../../domain/entities/Participant'
 import type { RosterMember, TeamRoster } from '../../domain/entities/TurnOrder'
+import { memberKey } from '../../domain/entities/TurnOrder'
 import { InvalidCombatProfileError, RoomNotStartableError } from '../../domain/errors/BattleErrors'
 import {
   assessPrecombatEligibility,
@@ -37,6 +38,10 @@ import type {
   PlayerInventoryEquippedHeroPort,
 } from '../ports/PlayerInventoryEquippedHeroPort'
 import { combatProfileFrom } from '../services/CombatProfileFactory'
+import type {
+  BotParticipantFactory,
+  PreparedBotParticipant,
+} from '../services/BotParticipantFactory'
 
 /** El heroe equipado ya no es el que se aprobo al unirse (HU-16, TOCTOU). */
 export const HERO_CHANGED_SINCE_JOIN = 'HERO_CHANGED_SINCE_JOIN'
@@ -102,6 +107,8 @@ export class StartBattle {
     private readonly connections: BattleConnectionsPort | null = null,
     /** HU-30: congela las identidades/tasas mientras el compromiso HU-29 está activo. */
     private readonly dropInventory: BattleDropInventoryPort | null = null,
+    /** HU-93.1: prepara únicamente participantes AI de JcE; Tournament queda fuera de alcance. */
+    private readonly bots: Pick<BotParticipantFactory, 'create'> | null = null,
   ) {}
 
   async execute(roomId: string, requesterId: string): Promise<BattleRoomDto> {
@@ -256,7 +263,8 @@ export class StartBattle {
    * Revalida a cada HUMAN y devuelve la lista definitiva con el subtipo de
    * presentacion y el SNAPSHOT DE COMBATE congelado (HU-18): con la misma respuesta de
    * Player-Inventory que ya se pidio para revalidar HU-16, sin una segunda llamada.
-   * Los `AI` no tienen perfil (no hay fuente autoritativa de sus estadisticas).
+   * Los `AI` de JcE reciben un perfil efimero desde Catalog. Tournament conserva
+   * su flujo anterior: integrar bots de bracket requiere una Task propia.
    */
   private async revalidate(room: BattleRoom): Promise<{
     readonly rosters: readonly [TeamRoster, TeamRoster]
@@ -280,6 +288,24 @@ export class StartBattle {
         heroes.set(playerId, await this.equippedHeroes.getEquippedHero(playerId))
       }),
     )
+
+    const preparedBots = new Map<string, PreparedBotParticipant>()
+
+    if (room.tournament === null) {
+      const aiMembers = rosters.flatMap((roster) =>
+        roster.members.filter((member) => member.kind === ParticipantKind.Ai),
+      )
+
+      if (aiMembers.length > 0 && this.bots === null) {
+        throw new UpstreamServiceError('catalog', 'no_configurado')
+      }
+
+      // Secuencial: todos consumen el mismo stream BATTLE_RANDOM en orden de roster.
+      for (const member of aiMembers) {
+        const bots = this.bots
+        if (bots !== null) preparedBots.set(memberKey(member), await bots.create())
+      }
+    }
 
     const enriched = new Map<string, RosterMember>()
     const profiles = new Map<string, Combatant>()
@@ -337,13 +363,28 @@ export class StartBattle {
         heroId: member.heroId ?? hero.heroId,
         heroSubtype: hero.subtype,
       })
-      profiles.set(playerId, this.freeze(member, hero))
+      profiles.set(memberKey(member), this.freeze(member, hero))
+    }
+
+    for (const roster of rosters) {
+      for (const member of roster.members) {
+        if (member.kind !== ParticipantKind.Ai) continue
+        const bot = preparedBots.get(memberKey(member))
+        if (bot === undefined) continue
+
+        enriched.set(memberKey(member), {
+          ...member,
+          heroId: bot.heroId,
+          heroSubtype: bot.heroSubtype,
+        })
+        profiles.set(memberKey(member), Combatant.start(member, bot.profile))
+      }
     }
 
     const withSubtype = (roster: TeamRoster): TeamRoster => ({
       label: roster.label,
-      members: roster.members.map((member) =>
-        member.playerId === null ? member : (enriched.get(member.playerId) ?? member),
+      members: roster.members.map(
+        (member) => enriched.get(member.playerId ?? memberKey(member)) ?? member,
       ),
     })
 
@@ -353,11 +394,7 @@ export class StartBattle {
     ]
     const combatants = finalRosters
       .flatMap((roster) => roster.members)
-      .map((member) =>
-        member.playerId === null
-          ? Combatant.start(member, null)
-          : (profiles.get(member.playerId) ?? Combatant.start(member, null)),
-      )
+      .map((member) => profiles.get(memberKey(member)) ?? Combatant.start(member, null))
 
     return {
       rosters: finalRosters,

@@ -328,6 +328,7 @@ describe('Configuracion de autenticacion', () => {
       // prueba de autenticacion).
       ACCOUNT_SERVICE_BASE_URL: 'https://account.internal',
       PLAYER_INVENTORY_SERVICE_BASE_URL: 'https://player-inventory.internal',
+      CATALOG_SERVICE_BASE_URL: 'https://catalog.internal',
       // HU-22: produccion tambien exige poder acreditar creditos de batalla.
       WALLET_SERVICE_BASE_URL: 'https://wallet.internal',
     })

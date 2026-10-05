@@ -3,11 +3,13 @@ import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persis
 import { UpstreamServiceError } from '../../src/application/errors/UpstreamErrors'
 import type { EquippedHero } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
 import { combatProfileFrom } from '../../src/application/services/CombatProfileFactory'
+import { BotParticipantFactory } from '../../src/application/services/BotParticipantFactory'
 import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasicAttack'
 import { StartBattle } from '../../src/application/use-cases/StartBattle'
 import { RandomEffectType } from '../../src/domain/random-effects/RandomEffectType'
 import { equippedHeroFixture, golpeDeDefensaEpic } from '../fixtures/equipped-hero'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { botCatalogCandidates } from '../fixtures/combat-bot-candidates'
 import {
   ROOM_ID,
   clock,
@@ -48,13 +50,24 @@ const start = async (
 
   await repo.save(preparingRoom(options), 0)
 
+  const random = scriptedRandom(
+    (options.aiInTeamA ?? 0) + (options.aiInTeamB ?? 0) > 0 ? [0, 9999, 0] : [0],
+  )
   const useCase = new StartBattle(
     repo,
     clock,
     heroes,
-    scriptedRandom([0]),
+    random,
     recordingPublisher(),
     recordingBattleCommitments(),
+    null,
+    null,
+    null,
+    null,
+    new BotParticipantFactory(
+      { listBotCandidates: () => Promise.resolve(botCatalogCandidates()) },
+      random,
+    ),
   )
   const dto = await useCase.execute(ROOM_ID, 'a1')
 
@@ -200,7 +213,7 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
     expect(profile.damage).not.toBe(source.effectiveStats.damage)
   })
 
-  it('un participante AI queda sin perfil (no hay fuente autoritativa): Vida null, y no se inventan valores', async () => {
+  it('un participante AI recibe perfil autoritativo de Catalog, sin consultar Player-Inventory', async () => {
     const { dto, heroes } = await start(
       { mode: 'PVE', teamSizes: [1, 1], aiInTeamB: 1 },
       heroesPort({}, (playerId) => hero(playerId)),
@@ -211,13 +224,12 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
       seat: 0,
       health: { current: 44, max: 44 },
     })
-    // Un `AI` no tiene perfil: ni Vida, ni Poder, ni habilidades (no se inventan valores).
-    expect(dto.battle?.combatants[1]).toEqual({
+    expect(dto.battle?.combatants[1]).toMatchObject({
       teamLabel: 'B',
       seat: 0,
-      health: null,
-      power: null,
-      skills: [],
+      health: { current: 40, max: 40 },
+      power: { current: 10, max: 10 },
+      skills: [{ abilityId: '20000000-0000-4000-8000-000000000001' }],
     })
     expect(heroes.calls).toEqual(['a1'])
   })
