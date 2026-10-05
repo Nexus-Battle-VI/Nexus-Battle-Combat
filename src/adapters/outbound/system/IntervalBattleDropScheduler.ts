@@ -1,6 +1,7 @@
 import type { OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common'
 
 import type { BattleRoom } from '../../../domain/entities/BattleRoom'
+import { BattleMode } from '../../../domain/value-objects/BattleMode'
 import { BattleRoomStatus } from '../../../domain/value-objects/BattleRoomStatus'
 import type { BattleDropInventoryPort } from '../../../application/ports/BattleDropInventoryPort'
 import type { BattleDropNotificationPort } from '../../../application/ports/BattleDropNotificationPort'
@@ -100,6 +101,11 @@ export class IntervalBattleDropScheduler implements OnApplicationBootstrap, OnAp
   }
 
   private async reconcileRoom(room: BattleRoom): Promise<void> {
+    // HU-30/HU-93.3: el drop de Versus solo existe en PVP (`PersistVersusDropDecision`
+    // ya lo limita asi). Una sala PVE nunca tiene decisiones de drop que conciliar,
+    // asi que barrerla igual solo produce una llamada a `closeBattle` contra
+    // Player-Inventory que nunca abrio nada para esa batalla.
+    if (room.mode !== BattleMode.Pvp) return
     const decisions = battleDropEvents(room)
     for (const { seq, decision } of decisions) {
       await this.workflows.createIfAbsent({

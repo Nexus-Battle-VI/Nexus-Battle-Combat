@@ -8,7 +8,14 @@ import { battleDropWorkflowId } from '../../src/application/ports/BattleDropWork
 import { PersistVersusDropDecision } from '../../src/application/services/PersistVersusDropDecision'
 import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasicAttack'
 import { RandomEffectType } from '../../src/domain/random-effects/RandomEffectType'
-import { NOW, ROOM_ID, clock, scriptedSequence, silentLogger } from '../fixtures/battle'
+import {
+  NOW,
+  ROOM_ID,
+  clock,
+  finishedRoom,
+  scriptedSequence,
+  silentLogger,
+} from '../fixtures/battle'
 import { battleWithCombat, indexForEffect, indexForFace } from '../fixtures/basic-attack'
 
 describe('HU-30: conciliación del drop diferido', () => {
@@ -102,5 +109,38 @@ describe('HU-30: conciliación del drop diferido', () => {
     await scheduler.tick()
     expect(transfer).toHaveBeenCalledTimes(1)
     expect(closeBattle).toHaveBeenCalledTimes(1)
+  })
+
+  it('HU-93.3: una sala PVE FINISHED nunca llama a closeBattle ni libera compromisos por este camino', async () => {
+    const rooms = new InMemoryBattleRoomRepository()
+    await rooms.save(finishedRoom({ aiInTeamB: 1, winnerTeamLabel: 'A' }), 0)
+    const closeBattle = jest.fn().mockResolvedValue(undefined)
+    const inventory: BattleDropInventoryPort = {
+      capture: jest.fn(),
+      find: jest.fn(),
+      transfer: jest.fn(),
+      closeBattle,
+    }
+    const release = jest.fn().mockResolvedValue(undefined)
+    const commitments: BattleHeroCommitmentPort = { commit: jest.fn(), release }
+    const workflows = new InMemoryBattleDropWorkflowRepository()
+    const scheduler = new IntervalBattleDropScheduler(
+      rooms,
+      workflows,
+      inventory,
+      commitments,
+      { notify: jest.fn().mockResolvedValue(undefined) },
+      silentLogger,
+    )
+
+    await scheduler.tick()
+
+    // El unico origen de un drop diferido es `PersistVersusDropDecision`
+    // (PVP exclusivo): una sala PVE jamas tuvo nada que conciliar, asi que
+    // barrerla no debe producir ninguna llamada de cierre contra
+    // Player-Inventory ni ninguna liberacion de compromiso por este camino
+    // (`BattleFinalizer` ya libera los compromisos al finalizar).
+    expect(closeBattle).not.toHaveBeenCalled()
+    expect(release).not.toHaveBeenCalled()
   })
 })

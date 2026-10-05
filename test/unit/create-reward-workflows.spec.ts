@@ -175,3 +175,63 @@ describe('CreateRewardWorkflows', () => {
     expect(created[0]).toMatchObject({ creditsAmount: 1, victoryCreditsAmount: 0 })
   })
 })
+
+/**
+ * HU-93.3: la forma REAL de una justa JcE 1v1 (2 participantes, no 3) —
+ * `execute()` es agnostico al modo (no lee `notification.mode`), asi que esto
+ * confirma con el escenario autentico lo que la prueba generica de AI ya
+ * demostraba con una composicion sintetica.
+ */
+describe('CreateRewardWorkflows — JcE 1v1 Humano vs IA (HU-93.3)', () => {
+  const pve1v1 = (
+    overrides: Partial<BattleFinishedNotification> = {},
+  ): BattleFinishedNotification =>
+    notification({
+      participants: [
+        {
+          kind: 'HUMAN',
+          playerId: 'sub-human',
+          heroId: 'hero-human',
+          teamLabel: 'A',
+          seat: 0,
+          result: overrides.winnerTeamLabel === 'B' ? 'LOST' : 'WON',
+          credits: overrides.winnerTeamLabel === 'B' ? 1 : 2,
+        },
+        {
+          kind: 'AI',
+          playerId: null,
+          heroId: 'ai-0',
+          teamLabel: 'B',
+          seat: 0,
+          result: overrides.winnerTeamLabel === 'B' ? 'WON' : 'LOST',
+          credits: null,
+        },
+      ],
+      mode: 'PVE',
+      ...overrides,
+    })
+
+  it('Humano gana: UN solo workflow (el del humano); la IA no genera ninguno', async () => {
+    const repository = new InMemoryRewardWorkflowRepository()
+    const useCase = new CreateRewardWorkflows(repository)
+
+    const created = await useCase.execute(pve1v1({ winnerTeamLabel: 'A' }))
+
+    expect(created).toHaveLength(1)
+    expect(created[0]).toMatchObject({ playerId: 'sub-human', creditsAmount: 2 })
+  })
+
+  it('IA gana: el humano SIGUE recibiendo su workflow de participacion (LOST); la IA no recibe nada', async () => {
+    const repository = new InMemoryRewardWorkflowRepository()
+    const useCase = new CreateRewardWorkflows(repository)
+
+    const created = await useCase.execute(pve1v1({ winnerTeamLabel: 'B' }))
+
+    expect(created).toHaveLength(1)
+    expect(created[0]).toMatchObject({
+      playerId: 'sub-human',
+      creditsAmount: 1,
+      victoryCreditsAmount: 0,
+    })
+  })
+})

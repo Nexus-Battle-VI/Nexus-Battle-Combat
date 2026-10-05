@@ -1,5 +1,5 @@
 import { BattleRoomStatus } from '../../src/domain/value-objects/BattleRoomStatus'
-import { NOW } from '../fixtures/battle'
+import { NOW, finishedRoom as finishedRosterRoom } from '../fixtures/battle'
 import { battleWithCombat } from '../fixtures/basic-attack'
 import { finalizationHarness } from '../fixtures/finalization'
 import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
@@ -138,6 +138,79 @@ describe('BattleFinalizer — orden, resiliencia y notificacion', () => {
 
     expect(room.status).not.toBe(BattleRoomStatus.Finished)
     expect(h.notifications).toEqual([])
+  })
+})
+
+/**
+ * HU-93.3: la IA nunca es una entidad economica. El participante AI aparece
+ * en la notificacion (igual que cualquier otro, sin ocultar el resultado),
+ * pero con `credits: null` (BattleCreditsPolicy) y SIN compromiso que
+ * liberar (nunca lo tuvo, HU-29). El HUMAN conserva su derecho normal, gane
+ * o pierda: esta Task no le quita nada, solo aisla a la IA.
+ */
+describe('BattleFinalizer — la IA nunca es una entidad economica (HU-93.3)', () => {
+  it('Humano gana contra IA: el humano conserva sus creditos, la IA queda en null y sin liberacion', () => {
+    const h = finalizationHarness()
+    const room = finishedRosterRoom({ aiInTeamB: 1, winnerTeamLabel: 'A' })
+
+    h.finalizer.afterFinished(room)
+
+    const notification = h.notifications[0]
+    expect(notification?.participants).toEqual([
+      {
+        kind: 'HUMAN',
+        playerId: 'a1',
+        heroId: 'hero-a1',
+        teamLabel: 'A',
+        seat: 0,
+        result: 'WON',
+        credits: 2,
+      },
+      {
+        kind: 'AI',
+        playerId: null,
+        heroId: 'ai-0',
+        teamLabel: 'B',
+        seat: 0,
+        result: 'LOST',
+        credits: null,
+      },
+    ])
+    expect(h.commitments.releases).toEqual([{ roomId: room.id, playerId: 'a1' }])
+  })
+
+  it('IA gana contra Humano: el resultado SIGUE siendo WIN de la IA; ella no recibe credito ni liberacion', () => {
+    const h = finalizationHarness()
+    const room = finishedRosterRoom({ aiInTeamB: 1, winnerTeamLabel: 'B' })
+
+    h.finalizer.afterFinished(room)
+
+    const notification = h.notifications[0]
+    expect(notification?.outcome).toBe('WIN')
+    expect(notification?.winnerTeamLabel).toBe('B')
+    expect(notification?.participants).toEqual([
+      {
+        kind: 'HUMAN',
+        playerId: 'a1',
+        heroId: 'hero-a1',
+        teamLabel: 'A',
+        seat: 0,
+        result: 'LOST',
+        credits: 1,
+      },
+      {
+        kind: 'AI',
+        playerId: null,
+        heroId: 'ai-0',
+        teamLabel: 'B',
+        seat: 0,
+        result: 'WON',
+        credits: null,
+      },
+    ])
+    // El humano que PIERDE sigue liberando su compromiso (HU-29); la IA
+    // jamas tuvo uno que liberar, gane o pierda.
+    expect(h.commitments.releases).toEqual([{ roomId: room.id, playerId: 'a1' }])
   })
 })
 
