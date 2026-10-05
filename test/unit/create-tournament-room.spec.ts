@@ -1,5 +1,6 @@
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { RoomConflictError } from '../../src/application/errors/ApplicationError'
+import { InvalidTournamentRosterError } from '../../src/domain/errors/BattleRoomErrors'
 import { TournamentRoomOperationReusedError } from '../../src/application/errors/TournamentRoomErrors'
 import {
   AccountProfileMissingError,
@@ -201,5 +202,27 @@ describe('CreateTournamentRoom (Management#517)', () => {
     const { useCase } = build({ rooms: failing })
 
     await expect(useCase.execute(REQUEST, REQUEST_HASH)).rejects.toBeInstanceOf(RoomConflictError)
+  })
+
+  it('rechaza un equipo con un numero de jugadores distinto de 2 ANTES de llamar a Account ni a Player/Inventory', async () => {
+    const accountProfiles = fakeAccountProfiles()
+    const equippedHeroes = fakeEquippedHeroes()
+    const getBattleProfile = jest.spyOn(accountProfiles, 'getBattleProfile')
+    const getEquippedHero = jest.spyOn(equippedHeroes, 'getEquippedHero')
+    const { useCase, rooms } = build({ accountProfiles, equippedHeroes })
+    const oversized: CreateTournamentRoomRequest = {
+      ...REQUEST,
+      teams: [
+        { teamId: 'equipo1', memberIds: ['p1', 'p2', 'p3'] },
+        { teamId: 'equipo2', memberIds: ['p4', 'p5'] },
+      ],
+    }
+
+    await expect(useCase.execute(oversized, REQUEST_HASH)).rejects.toBeInstanceOf(
+      InvalidTournamentRosterError,
+    )
+    expect(getBattleProfile).not.toHaveBeenCalled()
+    expect(getEquippedHero).not.toHaveBeenCalled()
+    await expect(rooms.findByTournamentOperationId(REQUEST.operationId)).resolves.toBeNull()
   })
 })
