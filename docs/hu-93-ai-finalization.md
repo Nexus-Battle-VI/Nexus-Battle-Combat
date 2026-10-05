@@ -14,23 +14,23 @@ llamadas a Wallet ni a Player-Inventory. Y el equipamiento nunca se
 transfiere entre Humano e IA en ninguna dirección.
 
 **Esto NO reduce la recompensa del jugador humano.** `#559` dice "sin
-recompensas ni drops *para la IA*", no "JcE no otorga recompensas al
+recompensas ni drops _para la IA_", no "JcE no otorga recompensas al
 humano". El humano conserva exactamente el mismo derecho económico que ya le
 da `BattleCreditsPolicy`/HU-22, gane o pierda contra la IA.
 
 ## Matriz funcional
 
-| | Humano gana | IA gana |
-|---|---|---|
-| Resultado | `HUMAN = WON`, `AI = LOST` | `AI = WON`, `HUMAN = LOST` |
-| `AI.credits` | `null` | `null` |
-| `RewardWorkflow` de la IA | ninguno | ninguno |
-| Llamada a Wallet por la IA | ninguna | ninguna |
-| Llamada a Player-Inventory grant por la IA | ninguna | ninguna |
-| Drop IA → Humano | nunca | — |
-| Drop Humano → IA | — | nunca |
-| Recompensa normal del Humano (HU-22) | preservada | preservada (participación) |
-| `outcome`/telemetría | `WIN`, ganador real | `WIN`, ganador real (la IA, sin ocultarlo) |
+|                                            | Humano gana                | IA gana                                    |
+| ------------------------------------------ | -------------------------- | ------------------------------------------ |
+| Resultado                                  | `HUMAN = WON`, `AI = LOST` | `AI = WON`, `HUMAN = LOST`                 |
+| `AI.credits`                               | `null`                     | `null`                                     |
+| `RewardWorkflow` de la IA                  | ninguno                    | ninguno                                    |
+| Llamada a Wallet por la IA                 | ninguna                    | ninguna                                    |
+| Llamada a Player-Inventory grant por la IA | ninguna                    | ninguna                                    |
+| Drop IA → Humano                           | nunca                      | —                                          |
+| Drop Humano → IA                           | —                          | nunca                                      |
+| Recompensa normal del Humano (HU-22)       | preservada                 | preservada (participación)                 |
+| `outcome`/telemetría                       | `WIN`, ganador real        | `WIN`, ganador real (la IA, sin ocultarlo) |
 
 ## Dos brechas reales cerradas (lo único que cambió)
 
@@ -95,7 +95,7 @@ antes). El scheduler de drop nunca necesitó hacerlo también.
   quien `CreateRewardWorkflows` ya proceso (nunca la IA). No hay ningún otro
   camino que pueda invocar esos puertos con una identidad de IA.
 - **`PersistVersusDropDecision`**: `if (previous.mode !== BattleMode.Pvp)
-  return next` es lo PRIMERO que ejecuta — antes de `inventory.find(...)` y
+return next` es lo PRIMERO que ejecuta — antes de `inventory.find(...)` y
   antes de cualquier sorteo. En PVE no consume ningún índice de la secuencia
   HU-24 por este concepto: los únicos sorteos de un turno PVE son los del
   combate (ataque, efecto, daño), exactamente los mismos que en PVP.
