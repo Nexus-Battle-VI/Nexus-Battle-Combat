@@ -4,6 +4,7 @@ import {
   type TournamentRosterMemberInput,
   type TournamentTeamInput,
 } from '../../domain/entities/BattleRoom'
+import { InvalidTournamentRosterError } from '../../domain/errors/BattleRoomErrors'
 import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
 import { RoomConflictError } from '../errors/ApplicationError'
 import { TournamentRoomOperationReusedError } from '../errors/TournamentRoomErrors'
@@ -77,6 +78,8 @@ export class CreateTournamentRoom {
     if (existing !== null) {
       return CreateTournamentRoom.replayOf(existing, request.operationId, requestHash)
     }
+
+    assertRosterCardinality(request.teams)
 
     const [teamA, teamB] = await Promise.all([
       this.resolveTeam(request.teams[0]),
@@ -152,5 +155,14 @@ export class CreateTournamentRoom {
     }
 
     return toBattleRoomDto(room, null)
+  }
+}
+
+/** Antes de cualquier llamada upstream: un roster mal formado no debe costar lecturas a Account ni a Player/Inventory. */
+const assertRosterCardinality = (teams: readonly TournamentRoomTeamRequest[]): void => {
+  if (teams.some((team) => team.memberIds.length !== 2)) {
+    throw new InvalidTournamentRosterError(
+      'Cada equipo de torneo necesita exactamente 2 jugadores.',
+    )
   }
 }
