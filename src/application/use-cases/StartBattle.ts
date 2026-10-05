@@ -15,6 +15,7 @@ import {
   generateTurnOrder,
   type BoundedRandom,
 } from '../../domain/policies/TurnOrderPolicy'
+import { BattleMode } from '../../domain/value-objects/BattleMode'
 import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import { commitmentExpiresAt } from '../../domain/policies/BattleTimingPolicy'
 import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
@@ -192,7 +193,12 @@ export class StartBattle {
     // con el loadout modificable, que es justo lo que la HU prohibe. En este
     // orden, el peor caso es un compromiso sin batalla, que caduca solo.
     await this.commitBattleHeroes(room, heroes, startedAt)
-    if (this.dropInventory !== null) {
+    // HU-30/HU-93.3: el snapshot de drop solo le sirve a PVP (Versus) -- el
+    // unico lector es `PersistVersusDropDecision`, que ya se limita a PVP. En
+    // PVE nadie lo lee nunca: capturarlo igual solo agrega una llamada a
+    // Player-Inventory que puede bloquear el inicio de una justa Humano vs IA
+    // sin ningun beneficio.
+    if (this.dropInventory !== null && room.mode === BattleMode.Pvp) {
       for (const [playerId, hero] of heroes) {
         await this.dropInventory.capture({
           battleId: room.id,
