@@ -1,6 +1,6 @@
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
 import { ListMyActiveBattleRooms } from '../../src/application/use-cases/ListMyActiveBattleRooms'
-import { BattleRoom } from '../../src/domain/entities/BattleRoom'
+import { BattleRoom, type CreateTournamentRoomInput } from '../../src/domain/entities/BattleRoom'
 import { finishedRoom, inBattleRoom, preparingRoom } from '../fixtures/battle'
 
 const uuid = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -116,6 +116,35 @@ describe('ListMyActiveBattleRooms', () => {
 
     expect(await new ListMyActiveBattleRooms(repo).execute('ai-0')).toEqual([])
     expect(await new ListMyActiveBattleRooms(repo).execute('a1')).toHaveLength(1)
+  })
+
+  it('NUNCA devuelve una sala de torneo (Management#517: aislamiento del lobby publico)', async () => {
+    const repo = new InMemoryBattleRoomRepository()
+    const member = (playerId: string) => ({
+      playerId,
+      heroId: `heroe-de-${playerId}`,
+      heroLoadoutVersion: 0,
+      displayName: `nombre-de-${playerId}`,
+    })
+    const input: CreateTournamentRoomInput = {
+      operationId: 'T1:E1',
+      tournamentId: 'T1',
+      encounterId: 'T1:E1',
+      requestHash: 'a'.repeat(64),
+      teams: [
+        { teamId: 'equipo1', members: [member('p1'), member('p2')] },
+        { teamId: 'equipo2', members: [member('p3'), member('p4')] },
+      ],
+    }
+    const tournamentRoom = BattleRoom.createTournamentRoom(uuid(14), 'tournament:T1', input, T1)
+    await persist(repo, tournamentRoom)
+
+    expect(tournamentRoom.status).toBe('PREPARING')
+
+    for (const playerId of ['p1', 'p2', 'p3', 'p4']) {
+      const rooms = await new ListMyActiveBattleRooms(repo).execute(playerId)
+      expect(rooms.map((room) => room.id)).not.toContain(uuid(14))
+    }
   })
 
   it('reutiliza la vista de GET /rooms/:id: la apuesta ajena no se expone', async () => {
