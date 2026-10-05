@@ -131,6 +131,9 @@ const effect = (value: unknown): BotCatalogEffect => {
 
 const hero = (value: unknown): BotCatalogHero => {
   const input = record(value)
+  const abilities = stringList(input.abilities)
+  if (abilities.length !== 3 || new Set(abilities).size !== 3) throw invalid()
+
   const base = {
     productId: text(input.productId),
     sku: text(input.sku),
@@ -138,7 +141,7 @@ const hero = (value: unknown): BotCatalogHero => {
     basePower: integer(input.basePower),
     baseHealth: integer(input.baseHealth),
     baseDefense: integer(input.baseDefense),
-    abilities: stringList(input.abilities),
+    abilities,
   }
   const baseAttack = input.baseAttack === undefined ? undefined : baseMagnitude(input.baseAttack)
   const baseDamage = input.baseDamage === undefined ? undefined : baseMagnitude(input.baseDamage)

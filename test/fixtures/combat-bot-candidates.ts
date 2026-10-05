@@ -1,8 +1,44 @@
 import type {
+  BotCatalogAbility,
   BotCatalogCandidates,
   BotCatalogEquipment,
   BotCatalogHero,
 } from '../../src/application/ports/BotCombatCatalogPort'
+
+const offensiveAbility = (sequence: number): BotCatalogAbility => ({
+  productId: `20000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`,
+  sku: `ability-strike-${String(sequence)}`,
+  name: `Golpe preciso ${String(sequence)}`,
+  compatibleHeroSubtypes: ['GUERRERO_ARMAS'],
+  powerCostMode: 'FIXED',
+  powerCost: 2,
+  chargeTurns: 1,
+  effects: [
+    {
+      kind: 'DAMAGE',
+      target: 'OPPONENT',
+      magnitude: { mode: 'FIXED', amount: 5 },
+      stackable: false,
+    },
+  ],
+})
+
+const supportAbility = (sequence: number): BotCatalogAbility => ({
+  productId: `20000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`,
+  sku: `ability-heal-${String(sequence)}`,
+  name: `Curacion ${String(sequence)}`,
+  compatibleHeroSubtypes: ['CHAMAN', 'MEDICO'],
+  powerCostMode: 'ALL_AVAILABLE',
+  chargeTurns: 1,
+  effects: [
+    {
+      kind: 'HEALING',
+      target: 'ALLY',
+      magnitude: { mode: 'FIXED', amount: 6 },
+      stackable: false,
+    },
+  ],
+})
 
 export const offensiveHero = (overrides: Partial<BotCatalogHero> = {}): BotCatalogHero => ({
   productId: '10000000-0000-4000-8000-000000000001',
@@ -13,7 +49,11 @@ export const offensiveHero = (overrides: Partial<BotCatalogHero> = {}): BotCatal
   baseDefense: 8,
   baseAttack: { mode: 'FIXED', amount: 7 },
   baseDamage: { mode: 'DICE', count: 1, sides: 6 },
-  abilities: ['20000000-0000-4000-8000-000000000001'],
+  abilities: [
+    '20000000-0000-4000-8000-000000000001',
+    '20000000-0000-4000-8000-000000000003',
+    '20000000-0000-4000-8000-000000000004',
+  ],
   ...overrides,
 })
 
@@ -28,7 +68,11 @@ export const supportHero = (
   baseHealth: 36,
   baseDefense: 6,
   baseHealing: { mode: 'FIXED', amount: 8 },
-  abilities: ['20000000-0000-4000-8000-000000000002'],
+  abilities: [
+    '20000000-0000-4000-8000-000000000002',
+    '20000000-0000-4000-8000-000000000005',
+    '20000000-0000-4000-8000-000000000006',
+  ],
   ...overrides,
 })
 
@@ -50,39 +94,12 @@ export const botCatalogCandidates = (
   schemaVersion: '1',
   heroes: [offensiveHero()],
   abilities: [
-    {
-      productId: '20000000-0000-4000-8000-000000000001',
-      sku: 'ability-strike',
-      name: 'Golpe preciso',
-      compatibleHeroSubtypes: ['GUERRERO_ARMAS'],
-      powerCostMode: 'FIXED',
-      powerCost: 2,
-      chargeTurns: 1,
-      effects: [
-        {
-          kind: 'DAMAGE',
-          target: 'OPPONENT',
-          magnitude: { mode: 'FIXED', amount: 5 },
-          stackable: false,
-        },
-      ],
-    },
-    {
-      productId: '20000000-0000-4000-8000-000000000002',
-      sku: 'ability-heal',
-      name: 'Curacion',
-      compatibleHeroSubtypes: ['CHAMAN', 'MEDICO'],
-      powerCostMode: 'ALL_AVAILABLE',
-      chargeTurns: 1,
-      effects: [
-        {
-          kind: 'HEALING',
-          target: 'ALLY',
-          magnitude: { mode: 'FIXED', amount: 6 },
-          stackable: false,
-        },
-      ],
-    },
+    offensiveAbility(1),
+    offensiveAbility(3),
+    offensiveAbility(4),
+    supportAbility(2),
+    supportAbility(5),
+    supportAbility(6),
   ],
   equipment: [],
   epics: [],

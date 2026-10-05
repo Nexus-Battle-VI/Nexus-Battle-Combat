@@ -47,7 +47,11 @@ describe('BotParticipantFactory — HU-93.1', () => {
       attack: 13,
       damage: { mode: 'FIXED', amount: 9 },
       maxPower: 10,
-      abilities: [{ abilityId: second.abilities[0], name: 'Golpe preciso' }],
+      abilities: [
+        { abilityId: second.abilities[0], name: 'Golpe preciso 1' },
+        { abilityId: second.abilities[1], name: 'Golpe preciso 3' },
+        { abilityId: second.abilities[2], name: 'Golpe preciso 4' },
+      ],
     })
     expect(result.profile).not.toHaveProperty('level')
   })
@@ -69,27 +73,30 @@ describe('BotParticipantFactory — HU-93.1', () => {
 
   it('falla cerrado antes de consumir RNG si CHAMAN/MEDICO referencia DAMAGE o REFLECT_DAMAGE', async () => {
     const hero = supportHero('CHAMAN')
+    const baseline = botCatalogCandidates({ heroes: [hero] })
     const invalid = botCatalogCandidates({
       heroes: [hero],
-      abilities: [
-        {
-          productId: hero.abilities[0]!,
-          sku: 'ability-invalid',
-          name: 'No debe existir',
-          compatibleHeroSubtypes: ['CHAMAN'],
-          powerCostMode: 'FIXED',
-          powerCost: 1,
-          chargeTurns: 1,
-          effects: [
-            {
-              kind: 'REFLECT_DAMAGE',
-              target: 'SELF',
-              magnitude: { mode: 'PERCENTAGE', basisPoints: 500 },
-              stackable: false,
-            },
-          ],
-        },
-      ],
+      abilities: baseline.abilities.map((ability) =>
+        ability.productId === hero.abilities[0]
+          ? {
+              productId: ability.productId,
+              sku: 'ability-invalid',
+              name: 'No debe existir',
+              compatibleHeroSubtypes: ['CHAMAN'],
+              powerCostMode: 'FIXED' as const,
+              powerCost: 1,
+              chargeTurns: 1,
+              effects: [
+                {
+                  kind: 'REFLECT_DAMAGE' as const,
+                  target: 'SELF' as const,
+                  magnitude: { mode: 'PERCENTAGE' as const, basisPoints: 500 },
+                  stackable: false as const,
+                },
+              ],
+            }
+          : ability,
+      ),
     })
     const random = scriptedRandom([])
 

@@ -229,7 +229,11 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
       seat: 0,
       health: { current: 40, max: 40 },
       power: { current: 10, max: 10 },
-      skills: [{ abilityId: '20000000-0000-4000-8000-000000000001' }],
+      skills: [
+        { abilityId: '20000000-0000-4000-8000-000000000001' },
+        { abilityId: '20000000-0000-4000-8000-000000000003' },
+        { abilityId: '20000000-0000-4000-8000-000000000004' },
+      ],
     })
     expect(heroes.calls).toEqual(['a1'])
   })

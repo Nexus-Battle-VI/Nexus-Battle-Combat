@@ -94,4 +94,30 @@ describe('CatalogBotCandidatesHttpClient — contrato HU-93.1A', () => {
 
     await expect(client.listBotCandidates()).rejects.toBeInstanceOf(UpstreamServiceError)
   })
+
+  it.each([
+    ['dos habilidades', ['ability-1', 'ability-2']],
+    ['cuatro habilidades', ['ability-1', 'ability-2', 'ability-3', 'ability-4']],
+    ['habilidades duplicadas', ['ability-1', 'ability-2', 'ability-1']],
+  ])('rechaza heroes con %s', async (_scenario, abilities) => {
+    const candidates = botCatalogCandidates()
+    const body = {
+      ...candidates,
+      heroes: [{ ...candidates.heroes[0], abilities }],
+    }
+    const client = new CatalogBotCandidatesHttpClient({
+      baseUrl: 'http://catalog:3003',
+      callerService: 'combat',
+      secret: SECRET,
+      clock,
+      logger,
+      fetchImpl: () => Promise.resolve(jsonResponse(200, body)),
+    })
+
+    await expect(client.listBotCandidates()).rejects.toMatchObject({
+      name: 'UpstreamServiceError',
+      service: 'catalog',
+      reason: 'respuesta_invalida',
+    })
+  })
 })
