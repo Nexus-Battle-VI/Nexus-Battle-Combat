@@ -315,9 +315,11 @@ describe('EN-035.2 decision contract', () => {
   })
 
   it('does not invent pass/skip when the current state has no legal target', () => {
-    expect(() =>
-      new LegalActionGenerator().generate(battleWithCombat({ health: { 'B#0': 0 } })),
-    ).toThrow(/no contiene acciones legales/u)
+    const room = battleWithCombat({ health: { 'B#0': 0 } })
+    const generator = new LegalActionGenerator()
+
+    expect(generator.generateAvailable(room)).toEqual([])
+    expect(() => generator.generate(room)).toThrow(/no contiene acciones legales/u)
   })
 
   it('includes executable equipped epics and omits unsupported epics', () => {

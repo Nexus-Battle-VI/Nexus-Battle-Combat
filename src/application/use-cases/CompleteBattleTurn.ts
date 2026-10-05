@@ -3,6 +3,8 @@ import { RoomConflictError, RoomNotFoundError } from '../errors/ApplicationError
 import type { BattleEventPublisherPort } from '../ports/BattleEventPublisherPort'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../ports/ClockPort'
+import type { BattleEvent } from '../../domain/entities/BattleEvent'
+import type { BattleRoom } from '../../domain/entities/BattleRoom'
 
 /** Reintentos ante un conflicto de version (otra escritura entre la lectura y el guardado). */
 const MAX_ATTEMPTS = 3
@@ -13,6 +15,12 @@ export interface CompleteBattleTurnInput {
   readonly actorPlayerId: string | null
   /** Identificador del comando (ADR-020): repetirlo devuelve el resultado ya calculado. */
   readonly commandId: string
+}
+
+export interface CompleteBattleTurnResult {
+  readonly room: BattleRoom
+  readonly event: BattleEvent
+  readonly replayed: boolean
 }
 
 /**
@@ -41,6 +49,24 @@ export class CompleteBattleTurn {
   ) {}
 
   async execute(input: CompleteBattleTurnInput): Promise<BattleRoomDto> {
+    const result = await this.executeExclusively(input)
+
+    if (!result.replayed) {
+      try {
+        this.publisher.publish(result.room.id, [result.event])
+      } catch {
+        // El estado ya esta persistido; un cliente que se pierda el evento usa `resume`.
+      }
+    }
+
+    return toBattleRoomDto(result.room)
+  }
+
+  /**
+   * Cierra el turno sin publicar. La ruta AI la usa dentro del lock de sala y
+   * difunde despues mediante el mismo orden persistir -> publicar.
+   */
+  async executeExclusively(input: CompleteBattleTurnInput): Promise<CompleteBattleTurnResult> {
     for (let attempt = 1; ; attempt += 1) {
       const room = await this.rooms.findById(input.roomId)
 
@@ -51,23 +77,25 @@ export class CompleteBattleTurn {
       const next = room.completeTurn(input.actorPlayerId, input.commandId, this.clock.now())
 
       if (next === room) {
-        // `commandId` ya procesado: mismo resultado, sin persistir ni difundir.
-        return toBattleRoomDto(room)
+        const handled = room.handledCommands.find(
+          (candidate) => candidate.commandId === input.commandId,
+        )
+        const event =
+          handled === undefined
+            ? undefined
+            : room.events.find((candidate) => candidate.seq === handled.seq)
+
+        if (event === undefined) throw new RoomConflictError(input.roomId)
+        return { room, event, replayed: true }
       }
 
       try {
         const saved = await this.rooms.save(next, room.version)
         const event = saved.events[saved.events.length - 1]
 
-        if (event !== undefined) {
-          try {
-            this.publisher.publish(saved.id, [event])
-          } catch {
-            // El estado ya esta persistido; un cliente que se pierda el evento usa `resume`.
-          }
-        }
+        if (event === undefined) throw new RoomConflictError(input.roomId)
 
-        return toBattleRoomDto(saved)
+        return { room: saved, event, replayed: false }
       } catch (error: unknown) {
         if (!(error instanceof RoomConflictError) || attempt >= MAX_ATTEMPTS) {
           throw error

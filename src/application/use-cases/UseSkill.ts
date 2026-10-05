@@ -60,6 +60,21 @@ export interface UseSkillResult {
   readonly finished: BattleRoom | null
 }
 
+/** Entrada interna: Combat ya resolvio al actor AI por su identidad estructural. */
+export interface UseSkillForActorInput {
+  readonly roomId: string
+  readonly actor: CombatantKey
+  readonly commandId: string
+  readonly abilityId: string
+  readonly target?: CombatantKey
+}
+
+type SkillExecutionInput = Pick<
+  UseSkillForActorInput,
+  'roomId' | 'commandId' | 'abilityId' | 'target'
+> &
+  ({ readonly requesterId: string } | { readonly actor: CombatantKey })
+
 /**
  * Ejecuta una habilidad especial durante el turno del jugador (HU-19, RF-19).
  *
@@ -139,21 +154,6 @@ export class UseSkill {
       return { event: plan.event, replayed: true, followUp: [], finished: null }
     }
 
-    if (plan.kind === 'degraded') {
-      // Ya se tiene el bloqueo de la sala: se ejecuta el ataque basico SIN volver a pedirlo.
-      return this.basicAttack.executeExclusively({
-        roomId: input.roomId,
-        requesterId: input.requesterId,
-        commandId: input.commandId,
-        target: input.target,
-        degradedFrom: {
-          command: 'useSkill',
-          abilityId: plan.abilityId,
-          reason: 'INSUFFICIENT_POWER',
-        },
-      })
-    }
-
     const decision = this.decisionRecorder?.tryPrepareHumanDecision(room, input.commandId, {
       kind: 'ABILITY',
       abilityId: input.abilityId,
@@ -162,6 +162,60 @@ export class UseSkill {
           ? { scope: 'ALLIED_GROUP' }
           : { scope: 'COMBATANT', combatant: input.target },
     })
+
+    return this.executePlan(room, plan, input, decision)
+  }
+
+  /** Ruta interna sin lock; el orquestador AI ya serializa la sala. */
+  async executeForActorExclusively(input: UseSkillForActorInput): Promise<UseSkillResult> {
+    let room = await this.rooms.findById(input.roomId)
+
+    if (room === null) throw new RoomNotFoundError(input.roomId)
+
+    const replay = this.handledResult(room, input.commandId)
+    if (replay !== null) return replay
+
+    if (this.settler !== null) room = await this.settler.settle(room)
+
+    const plan = room.planSkillForActor(input.actor, input.abilityId, input.target)
+
+    return this.executePlan(room, plan, input, null)
+  }
+
+  private executePlan(
+    room: BattleRoom,
+    plan: Exclude<ReturnType<BattleRoom['planSkillForActor']>, { readonly kind: 'replay' }>,
+    input: SkillExecutionInput,
+    decision: CombatDecisionEvent | null | undefined,
+  ): Promise<UseSkillResult> {
+    if (plan.kind === 'degraded') {
+      if (input.target === undefined) {
+        throw new DomainError('Una habilidad ofensiva degradada requiere un objetivo.')
+      }
+
+      // Ya se tiene el bloqueo de la sala: se ejecuta el ataque basico SIN volver a pedirlo.
+      const degradedFrom = {
+        command: 'useSkill' as const,
+        abilityId: plan.abilityId,
+        reason: 'INSUFFICIENT_POWER' as const,
+      }
+
+      return 'actor' in input
+        ? this.basicAttack.executeForActorExclusively({
+            roomId: input.roomId,
+            actor: input.actor,
+            commandId: input.commandId,
+            target: input.target,
+            degradedFrom,
+          })
+        : this.basicAttack.executeExclusively({
+            roomId: input.roomId,
+            requesterId: input.requesterId,
+            commandId: input.commandId,
+            target: input.target,
+            degradedFrom,
+          })
+    }
 
     if (plan.kind === 'healSkill') {
       // Curar es DETERMINISTA (excepcion de HU-12, `HealApplicationPolicy`): no hay
@@ -258,7 +312,7 @@ export class UseSkill {
     room: BattleRoom,
     next: BattleRoom,
     actionSeq: number,
-    input: UseSkillInput,
+    input: Pick<UseSkillInput, 'roomId' | 'commandId'>,
     decision: CombatDecisionEvent | null | undefined,
   ): Promise<UseSkillResult> {
     try {
@@ -286,6 +340,18 @@ export class UseSkill {
 
       throw error
     }
+  }
+
+  private handledResult(room: BattleRoom, commandId: string): UseSkillResult | null {
+    const handled = room.handledCommands.find((candidate) => candidate.commandId === commandId)
+    const event =
+      handled === undefined
+        ? undefined
+        : room.events.find((candidate) => candidate.seq === handled.seq)
+
+    return event === undefined
+      ? null
+      : { event, replayed: true, followUp: [], finished: null }
   }
 
   /** `prepareAttack` es puro (no sortea); un perfil que HU-20 no sabe preparar es un perfil no soportado. */
@@ -396,7 +462,7 @@ export class UseSkill {
    * reintenta con el mismo `commandId`).
    */
   private async resolveConflict(
-    input: UseSkillInput,
+    input: Pick<UseSkillInput, 'roomId' | 'commandId'>,
     conflict: RoomConflictError,
   ): Promise<UseSkillResult> {
     const current = await this.rooms.findById(input.roomId)

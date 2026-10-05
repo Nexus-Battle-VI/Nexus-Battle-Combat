@@ -23,6 +23,7 @@ import * as battleRoomsEpicMigration from '../../adapters/outbound/persistence/m
 import * as battleRoomsEpicStatEffectsMigration from '../../adapters/outbound/persistence/migrations/021-battle-rooms-epic-stat-effects'
 import * as battleRoomsEpicUsedEventMigration from '../../adapters/outbound/persistence/migrations/022-battle-rooms-epic-used-event'
 import * as combatDecisionEventsMigration from '../../adapters/outbound/persistence/migrations/023-combat-decision-events'
+import * as combatDecisionEventsEndTurnMigration from '../../adapters/outbound/persistence/migrations/024-combat-decision-events-end-turn'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -97,6 +98,10 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '021-battle-rooms-epic-stat-effects', up: battleRoomsEpicStatEffectsMigration.up },
   { name: '022-battle-rooms-epic-used-event', up: battleRoomsEpicUsedEventMigration.up },
   { name: '023-combat-decision-events', up: combatDecisionEventsMigration.up },
+  {
+    name: '024-combat-decision-events-end-turn',
+    up: combatDecisionEventsEndTurnMigration.up,
+  },
 ]
 
 const REGISTRY = '_migrations'

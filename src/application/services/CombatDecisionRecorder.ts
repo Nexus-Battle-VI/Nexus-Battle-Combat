@@ -2,6 +2,7 @@ import { resolveLegalAction } from '../../domain/decision/ActionIdentity'
 import type { ActionIntent } from '../../domain/decision/ActionIntent'
 import type { BattleDecisionState } from '../../domain/decision/BattleDecisionState'
 import {
+  COMBAT_END_TURN_DECISION_EVENT_SCHEMA_VERSION,
   COMBAT_DECISION_EVENT_SCHEMA_VERSION,
   decisionOutcomeEventId,
   missionDecisionEventId,
@@ -11,6 +12,7 @@ import {
   type CombatDecisionOutcome,
   type CombatDecisionOutcomeEvent,
   type CombatDecisionSource,
+  type CombatDecisionSelection,
   type CombatDecisionTelemetryEvent,
 } from '../../domain/decision/CombatDecisionEvent'
 import type { LegalAction } from '../../domain/decision/LegalAction'
@@ -22,6 +24,7 @@ import type { CommandIdFingerprintPort } from '../ports/CommandIdFingerprintPort
 import type { CombatDecisionTelemetryRepositoryPort } from '../ports/CombatDecisionTelemetryRepositoryPort'
 import { BattleDecisionStateAssembler } from './BattleDecisionStateAssembler'
 import { LegalActionGenerator } from './LegalActionGenerator'
+import { IllegalActionIntentError } from '../../domain/errors/DecisionContractErrors'
 
 export interface CombatDecisionRecorderLogger {
   error(message: string, context?: Readonly<Record<string, string | number>>): void
@@ -37,7 +40,7 @@ export interface DecisionDraft {
   readonly decisionSource: CombatDecisionSource
   readonly stateBefore: BattleDecisionState
   readonly legalActions: readonly LegalAction[]
-  readonly selectedAction: ActionIntent
+  readonly selectedAction: CombatDecisionSelection
 }
 
 export type OutcomeDraft = Omit<
@@ -111,6 +114,17 @@ export class CombatDecisionRecorder {
     })
   }
 
+  tryPrepareOnline(
+    input: Omit<DecisionDraft, 'eventId'> & { readonly commandId: string },
+  ): CombatDecisionEvent | null {
+    try {
+      return this.prepareOnline(input)
+    } catch (error: unknown) {
+      this.logPreparationFailure(input.battleId, input.origin, error)
+      return null
+    }
+  }
+
   prepareMission(input: Omit<DecisionDraft, 'eventId' | 'origin'>): CombatDecisionEvent {
     return this.prepare({
       ...input,
@@ -129,10 +143,20 @@ export class CombatDecisionRecorder {
   }
 
   prepare(input: DecisionDraft): CombatDecisionEvent {
-    const selectedAction = resolveLegalAction(input.selectedAction, input.legalActions)
+    const endTurn = input.selectedAction.kind === 'END_TURN'
+
+    if (endTurn && (input.legalActions.length !== 0 || input.decisionSource !== 'SYSTEM')) {
+      throw new IllegalActionIntentError()
+    }
+
+    const selectedAction = endTurn
+      ? Object.freeze({ kind: 'END_TURN' as const })
+      : resolveLegalAction(input.selectedAction, input.legalActions)
 
     return Object.freeze({
-      schemaVersion: COMBAT_DECISION_EVENT_SCHEMA_VERSION,
+      schemaVersion: endTurn
+        ? COMBAT_END_TURN_DECISION_EVENT_SCHEMA_VERSION
+        : COMBAT_DECISION_EVENT_SCHEMA_VERSION,
       eventType: 'COMBAT_DECISION' as const,
       eventId: input.eventId,
       battleId: input.battleId,

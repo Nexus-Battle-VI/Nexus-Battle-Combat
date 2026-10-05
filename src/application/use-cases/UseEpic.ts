@@ -58,6 +58,14 @@ export interface UseEpicInput {
   readonly target?: CombatantKey
 }
 
+/** Entrada interna: Combat ya resolvio al actor AI por `(teamLabel, seat)`. */
+export interface UseEpicForActorInput {
+  readonly roomId: string
+  readonly actor: CombatantKey
+  readonly commandId: string
+  readonly target?: CombatantKey
+}
+
 export interface UseEpicResult {
   readonly event: BattleEvent
   readonly replayed: boolean
@@ -138,6 +146,31 @@ export class UseEpic {
                 },
     })
 
+    return this.resolveAndPersist(room, plan, input, decision)
+  }
+
+  /** Ruta interna sin lock; el orquestador AI ya serializa la sala. */
+  async executeForActorExclusively(input: UseEpicForActorInput): Promise<UseEpicResult> {
+    let room = await this.rooms.findById(input.roomId)
+
+    if (room === null) throw new RoomNotFoundError(input.roomId)
+
+    const replay = this.handledResult(room, input.commandId)
+    if (replay !== null) return replay
+
+    if (this.settler !== null) room = await this.settler.settle(room)
+
+    const plan = room.planEpicForActor(input.actor, input.target)
+
+    return this.resolveAndPersist(room, plan, input, null)
+  }
+
+  private resolveAndPersist(
+    room: BattleRoom,
+    plan: EpicReadyPlan,
+    input: Pick<UseEpicForActorInput, 'roomId' | 'commandId' | 'target'>,
+    decision: CombatDecisionEvent | null | undefined,
+  ): Promise<UseEpicResult> {
     const outcome = this.resolve(plan)
     const actionSeq = room.lastSeq + 1
     const next = room.applyEpic(plan, outcome, input.commandId, this.clock.now())
@@ -242,7 +275,7 @@ export class UseEpic {
     room: BattleRoom,
     next: BattleRoom,
     actionSeq: number,
-    input: UseEpicInput,
+    input: Pick<UseEpicInput, 'roomId' | 'commandId'>,
     decision: CombatDecisionEvent | null | undefined,
   ): Promise<UseEpicResult> {
     try {
@@ -272,8 +305,20 @@ export class UseEpic {
     }
   }
 
+  private handledResult(room: BattleRoom, commandId: string): UseEpicResult | null {
+    const handled = room.handledCommands.find((candidate) => candidate.commandId === commandId)
+    const event =
+      handled === undefined
+        ? undefined
+        : room.events.find((candidate) => candidate.seq === handled.seq)
+
+    return event === undefined
+      ? null
+      : { event, replayed: true, followUp: [], finished: null }
+  }
+
   private async resolveConflict(
-    input: UseEpicInput,
+    input: Pick<UseEpicInput, 'roomId' | 'commandId'>,
     conflict: RoomConflictError,
   ): Promise<UseEpicResult> {
     const current = await this.rooms.findById(input.roomId)

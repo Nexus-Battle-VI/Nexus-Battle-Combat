@@ -64,3 +64,12 @@ export const ESTIMATE_MISSION_OUTCOME = Symbol('EstimateMissionOutcome')
 export const CREATE_TOURNAMENT_ROOM = Symbol('CreateTournamentRoom')
 export const START_TOURNAMENT_ROOM = Symbol('StartTournamentRoom')
 export const GET_TOURNAMENT_ROOM_RECORD = Symbol('GetTournamentRoomRecord')
+/**
+ * HU-93.2 (EN-035.3/.4): turno automatico de IA en JcE 1v1. `DECISION_POLICY_SELECTOR`
+ * envuelve la politica productiva (RuleBasedPolicy, ADR-023) con un fallback nunca
+ * elegido por defecto; `AI_TURN_TRIGGER` es el adaptador fail-open que dispara
+ * `ExecuteAiTurn` tras una transicion ya persistida y difundida.
+ */
+export const DECISION_POLICY_SELECTOR = Symbol('DecisionPolicySelector')
+export const EXECUTE_AI_TURN = Symbol('ExecuteAiTurn')
+export const AI_TURN_TRIGGER = Symbol('AiTurnTrigger')

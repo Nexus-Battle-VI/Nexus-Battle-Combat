@@ -72,6 +72,17 @@ const isExpectedCandidateRejection = (error: unknown): boolean =>
  */
 export class LegalActionGenerator {
   generate(room: BattleRoom): readonly LegalAction[] {
+    const result = this.generateAvailable(room)
+
+    if (result.length === 0) throw new NoLegalDecisionActionsError()
+    return result
+  }
+
+  /**
+   * Variante para el orquestador JcE: conserva todas las validaciones estructurales,
+   * pero representa honestamente el caso valido de cero acciones como `[]`.
+   */
+  generateAvailable(room: BattleRoom): readonly LegalAction[] {
     if (room.status !== BattleRoomStatus.InBattle || room.battle === null) {
       throw new DecisionStateUnavailableError('la batalla no está en curso')
     }
@@ -165,7 +176,6 @@ export class LegalActionGenerator {
 
     const result = [...unique.values()].sort(compareAction)
 
-    if (result.length === 0) throw new NoLegalDecisionActionsError()
     return Object.freeze(result)
   }
 }
