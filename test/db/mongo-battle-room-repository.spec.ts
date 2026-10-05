@@ -841,6 +841,22 @@ describe('MongoBattleRoomRepository', () => {
       ).resolves.not.toBeNull()
     })
 
+    it('findActiveByParticipant NUNCA devuelve una sala de torneo (aislamiento del lobby publico)', async () => {
+      const id = nextId()
+      const input = tournamentInput()
+      const room = BattleRoom.createTournamentRoom(id, 'tournament:T1', input, AT)
+      await repository.save(room, 0)
+
+      // La sala de torneo nace en PREPARING con sus 4 jugadores humanos ya
+      // resueltos: sin el filtro `tournament: null`, cada uno de ellos la
+      // veria mezclada con sus salas normales en la ruta PUBLICA
+      // `GET /v1/combat/me/rooms`.
+      for (const playerId of ['p1', 'p2', 'p3', 'p4']) {
+        const mine = await repository.findActiveByParticipant(playerId)
+        expect(mine.map((found) => found.id)).not.toContain(id)
+      }
+    })
+
     it('el indice unico rechaza DOS salas distintas con el MISMO operationId (RoomConflictError)', async () => {
       const operationId = `op-duplicado-${nextId()}`
       const first = BattleRoom.createTournamentRoom(

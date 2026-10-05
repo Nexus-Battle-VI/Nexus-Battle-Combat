@@ -68,6 +68,7 @@ export class InMemoryBattleRoomRepository implements BattleRoomRepositoryPort {
   findActiveByParticipant(playerId: string): Promise<readonly BattleRoom[]> {
     const active: readonly string[] = ACTIVE_ROOM_STATUSES
     const rooms = [...this.byId.values()]
+      .filter((snapshot) => snapshot.tournament === null)
       .filter(
         (snapshot) =>
           (active.includes(snapshot.status) &&
