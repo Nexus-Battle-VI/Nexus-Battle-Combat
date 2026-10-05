@@ -7,6 +7,7 @@ import type { BattleDropInventoryPort } from '../../src/application/ports/Battle
 import { battleDropWorkflowId } from '../../src/application/ports/BattleDropWorkflowRepositoryPort'
 import { PersistVersusDropDecision } from '../../src/application/services/PersistVersusDropDecision'
 import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasicAttack'
+import { UseEpic } from '../../src/application/use-cases/UseEpic'
 import { RandomEffectType } from '../../src/domain/random-effects/RandomEffectType'
 import {
   NOW,
@@ -17,6 +18,7 @@ import {
   silentLogger,
 } from '../fixtures/battle'
 import { battleWithCombat, indexForEffect, indexForFace } from '../fixtures/basic-attack'
+import { EPICA_DANO, battleWithEpic } from '../fixtures/epic'
 
 describe('HU-30: conciliación del drop diferido', () => {
   afterEach(() => jest.restoreAllMocks())
@@ -105,6 +107,105 @@ describe('HU-30: conciliación del drop diferido', () => {
     expect(transfer).toHaveBeenCalledTimes(1)
     expect(closeBattle).toHaveBeenCalledWith(ROOM_ID)
     expect(release).toHaveBeenCalledTimes(2)
+
+    await scheduler.tick()
+    expect(transfer).toHaveBeenCalledTimes(1)
+    expect(closeBattle).toHaveBeenCalledTimes(1)
+  })
+
+  /**
+   * BUG #582: una epica con efecto DAMAGE puede ser tan letal como un ataque
+   * basico, y `PersistVersusDropDecision` ya adhiere `versusDrop` al evento
+   * `epicUsed` resultante -- pero `battleDropEvents` no lo reconocia, asi
+   * que el scheduler jamas encontraba esa decision para reconciliarla. Usa
+   * el motor REAL (`UseEpic`, `PersistVersusDropDecision`, el scheduler) de
+   * principio a fin, igual que la prueba de ataque basico de arriba.
+   */
+  it('BUG #582: una epica letal (DAMAGE) tambien se reconcilia; repetir no duplica', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(NOW.getTime())
+    const rooms = new InMemoryBattleRoomRepository()
+    // EPICA_DANO inflige 9 de dano FIJO (sin dados): con 9 de Vida, el golpe es letal.
+    await rooms.save(battleWithEpic(EPICA_DANO, { health: { 'B#0': 9 } }), 0)
+    // Sin dados que resolver (magnitud FIJA): los unicos 2 sorteos son los de
+    // `resolveVersusDrop` (seleccion de pieza + desempate).
+    const sequence = scriptedSequence([1, 1])
+    const transfer = jest.fn().mockResolvedValue({
+      operationId: '55555555-5555-4555-8555-555555555555',
+      battleId: ROOM_ID,
+      defeatEventSeq: 2,
+      sourcePlayerId: 'b1',
+      targetPlayerId: 'a1',
+      productInstanceId: 'unit-epic-1',
+      productId: 'product-epic-1',
+      itemId: 'item-epic-1',
+      creditedAt: '2026-10-01T00:00:00.000Z',
+    })
+    const closeBattle = jest.fn().mockResolvedValue(undefined)
+    const inventory: BattleDropInventoryPort = {
+      capture: jest.fn(),
+      find: jest.fn().mockResolvedValue({
+        battleId: ROOM_ID,
+        playerId: 'b1',
+        heroId: 'hero-b1',
+        loadoutVersion: 3,
+        equipment: [
+          {
+            productInstanceId: 'unit-epic-1',
+            productId: 'product-epic-1',
+            itemId: 'item-epic-1',
+            dropChanceBasisPoints: 10_000,
+          },
+        ],
+      }),
+      transfer,
+      closeBattle,
+    }
+    const release = jest.fn().mockResolvedValue(undefined)
+    const commitments: BattleHeroCommitmentPort = { commit: jest.fn(), release }
+    const workflows = new InMemoryBattleDropWorkflowRepository()
+    const scheduler = new IntervalBattleDropScheduler(
+      rooms,
+      workflows,
+      inventory,
+      commitments,
+      { notify: jest.fn().mockResolvedValue(undefined) },
+      silentLogger,
+    )
+
+    const epic = new UseEpic(
+      rooms,
+      clock,
+      sequence,
+      new ChannelLock(),
+      null,
+      new PersistVersusDropDecision(inventory, sequence),
+    )
+    const result = await epic.execute({
+      roomId: ROOM_ID,
+      requesterId: 'a1',
+      commandId: 'epic-lethal-1',
+      target: { teamLabel: 'B', seat: 0 },
+    })
+
+    expect(result.event.type).toBe('epicUsed')
+    expect(result.event.payload).toMatchObject({
+      targetHealth: { before: 9, after: 0 },
+      versusDrop: {
+        killerPlayerId: 'a1',
+        defeatedPlayerId: 'b1',
+        resolution: { status: 'PENDING', selected: { productInstanceId: 'unit-epic-1' } },
+      },
+    })
+    expect(transfer).not.toHaveBeenCalled()
+
+    await scheduler.tick()
+
+    expect(await workflows.findById(battleDropWorkflowId(ROOM_ID, 2))).toMatchObject({
+      state: 'CREDITED',
+      receipt: { productInstanceId: 'unit-epic-1' },
+    })
+    expect(transfer).toHaveBeenCalledTimes(1)
+    expect(closeBattle).toHaveBeenCalledWith(ROOM_ID)
 
     await scheduler.tick()
     expect(transfer).toHaveBeenCalledTimes(1)

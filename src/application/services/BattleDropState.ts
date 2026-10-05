@@ -9,7 +9,16 @@ export interface BattleDropEvent {
 
 export const battleDropEvents = (room: BattleRoom): readonly BattleDropEvent[] =>
   room.events.flatMap((event: BattleEvent) => {
-    if (!['basicAttackResolved', 'skillUsed', 'directDamageSkillUsed'].includes(event.type)) {
+    // BUG #582: `PersistVersusDropDecision` ya adhiere `versusDrop` tambien a
+    // `epicUsed` (una epica con efecto DAMAGE puede ser letal igual que un
+    // ataque basico o una habilidad); este filtro debe reconocer exactamente
+    // los mismos tipos de evento que esa persistencia, o la decision queda
+    // invisible para el scheduler de HU-30.
+    if (
+      !['basicAttackResolved', 'skillUsed', 'directDamageSkillUsed', 'epicUsed'].includes(
+        event.type,
+      )
+    ) {
       return []
     }
     const decision = (event.payload as { versusDrop?: VersusDropDecision }).versusDrop
