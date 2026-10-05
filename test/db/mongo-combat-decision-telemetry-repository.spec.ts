@@ -114,6 +114,23 @@ describe('MongoCombatDecisionTelemetryRepository', () => {
     ).rejects.toMatchObject({ code: 121 })
   })
 
+  it('rejects a COMBAT_DECISION_OUTCOME event tagged with schemaVersion 2', async () => {
+    const outcome = recorder().prepareOutcome({
+      origin: 'ONLINE',
+      battleId: 'outcome-smuggled-schema-version',
+      mode: 'PVE',
+      outcome: { kind: 'MISSION', outcome: 'HERO_VICTORIOUS' },
+    })
+    const valid = toCombatDecisionTelemetryDocument(outcome)
+
+    await expect(
+      db!.collection<RawTelemetryDocument>(COMBAT_DECISION_EVENTS_COLLECTION).insertOne({
+        ...valid,
+        schemaVersion: 2,
+      }),
+    ).rejects.toMatchObject({ code: 121 })
+  })
+
   it('creates the append-only indexes required for identity and versioned dataset reads', async () => {
     const indexes = await db!.collection(COMBAT_DECISION_EVENTS_COLLECTION).indexes()
 

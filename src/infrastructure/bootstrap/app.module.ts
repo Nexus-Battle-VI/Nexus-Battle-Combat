@@ -233,7 +233,6 @@ import { RunMissionSimulation } from '../../application/use-cases/RunMissionSimu
 import { Sha256CommandIdFingerprint } from '../../adapters/outbound/system/Sha256CommandIdFingerprint'
 import { EstimateMissionOutcome } from '../../application/use-cases/EstimateMissionOutcome'
 import { RuleBasedPolicy } from '../../application/policies/RuleBasedPolicy'
-import { RandomPolicy } from '../../application/policies/RandomPolicy'
 import { DecisionPolicySelector } from '../../application/services/DecisionPolicySelector'
 import { ExecuteAiTurn, AiTurnTrigger } from '../../application/use-cases/ExecuteAiTurn'
 import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
@@ -1572,25 +1571,16 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       ): EpicRealtimeHandler => new EpicRealtimeHandler(epic, logger, finalizer, aiTurnTrigger),
       inject: [USE_EPIC, LOGGER, BATTLE_FINALIZER, AI_TURN_TRIGGER],
     },
-    // HU-93.2 (EN-035.3/.4): turno automatico de IA en JcE 1v1 Humano vs IA. La
-    // politica productiva (ADR-023) es RuleBasedPolicy; el fallback (RandomPolicy)
-    // solo se ejercita si la primaria falla o inventa una accion, y consume una
-    // secuencia PROPIA, nunca BATTLE_RANDOM_SEQUENCE (esa es la del combate vivo).
+    // HU-93.2 (Management#558): sin `NeuralPolicy` entrenada todavia (EN-036), no
+    // hay primaria -- el fallback fijo es `RuleBasedPolicy`, nunca `RandomPolicy`
+    // (esa es solo el baseline experimental de EN-035.3 para Misiones/evaluacion,
+    // jamas el fallback productivo de JcE). El dia que exista una politica
+    // entrenable real, pasa a ser la primaria aqui; `RuleBasedPolicy` sigue
+    // siendo el mismo fallback fijo.
     {
       provide: DECISION_POLICY_SELECTOR,
-      useFactory: (
-        sequences: RandomSequenceFactoryPort,
-        config: AppConfig,
-      ): DecisionPolicySelector => {
-        const fallbackSeed = RandomSeed.create((config.randomSeed ^ 0x5a5a_5a5a) >>> 0)
-        const fallbackSequence = sequences.create(fallbackSeed)
-
-        return new DecisionPolicySelector(
-          { policy: new RuleBasedPolicy(), source: 'RULE_BASED' },
-          { policy: new RandomPolicy(createBoundedRandom(fallbackSequence)), source: 'RANDOM' },
-        )
-      },
-      inject: [RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
+      useFactory: (): DecisionPolicySelector =>
+        new DecisionPolicySelector(null, { policy: new RuleBasedPolicy(), source: 'RULE_BASED' }),
     },
     {
       provide: EXECUTE_AI_TURN,

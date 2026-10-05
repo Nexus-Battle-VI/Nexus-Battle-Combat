@@ -51,7 +51,7 @@ const start = async (
   await repo.save(preparingRoom(options), 0)
 
   const random = scriptedRandom(
-    (options.aiInTeamA ?? 0) + (options.aiInTeamB ?? 0) > 0 ? [0, 9999, 0] : [0],
+    (options.aiInTeamA ?? 0) + (options.aiInTeamB ?? 0) > 0 ? [0, 7999, 0] : [0],
   )
   const useCase = new StartBattle(
     repo,

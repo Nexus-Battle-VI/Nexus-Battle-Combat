@@ -39,9 +39,12 @@ const withoutKey = (schema: Schema, key: string): Schema => {
  *    exigiendo exactamente lo mismo que antes;
  * 6. añade una rama nueva `COMBAT_DECISION` para `schemaVersion: 2` que exige
  *    `decisionSource: 'SYSTEM'`, `legalActions` vacío (`maxItems: 0`) y
- *    `selectedAction = { kind: 'END_TURN' }` exclusivamente.
- *
- * La rama `COMBAT_DECISION_OUTCOME` no se toca.
+ *    `selectedAction = { kind: 'END_TURN' }` exclusivamente;
+ * 7. fija tambien `schemaVersion: [1]` en la rama `COMBAT_DECISION_OUTCOME`
+ *    existente. Sin esto, ampliar el `enum` GLOBAL a `[1, 2]` (paso 1) deja
+ *    colarse un `COMBAT_DECISION_OUTCOME` con `schemaVersion: 2` -- esa rama
+ *    nunca necesito el `END_TURN` v2, y `CombatDecisionOutcomeEvent` (dominio)
+ *    sigue siendo exclusivamente `schemaVersion: 1`.
  *
  * Es idempotente: si `schemaVersion.enum` ya incluye `2`, no hace nada.
  */
@@ -148,8 +151,36 @@ export const up = async (db: Db): Promise<void> => {
     },
   }
 
+  const outcomeBranchIndex = branches.findIndex(
+    (branch) =>
+      isRecord(branch) &&
+      isRecord(branch.properties) &&
+      isRecord(branch.properties.eventType) &&
+      deepEqual(branch.properties.eventType.enum, ['COMBAT_DECISION_OUTCOME']),
+  )
+  if (outcomeBranchIndex === -1) {
+    throw new Error('No se encontró la rama COMBAT_DECISION_OUTCOME dentro de oneOf.')
+  }
+  const outcomeBranch = branches[outcomeBranchIndex]
+  if (!isRecord(outcomeBranch)) {
+    throw new Error('La rama COMBAT_DECISION_OUTCOME encontrada no es un objeto de esquema.')
+  }
+  const outcomeBranchProperties = isRecord(outcomeBranch.properties) ? outcomeBranch.properties : {}
+
+  const v1OutcomeBranch: Schema = {
+    ...outcomeBranch,
+    properties: { ...outcomeBranchProperties, schemaVersion: { enum: [1] } },
+  }
+
   const widenedBranches: unknown[] = branches.slice()
   widenedBranches.splice(decisionBranchIndex, 1, v1DecisionBranch, endTurnDecisionBranch)
+  // `outcomeBranchIndex` sigue siendo valido tras el splice anterior: ese splice
+  // solo inserto elementos DESPUES de `decisionBranchIndex` (nunca antes), asi que
+  // un indice posterior al de COMBAT_DECISION se desplaza en +1, y uno anterior
+  // queda intacto; se recalcula explicitamente para no asumir cual es el caso.
+  const shiftedOutcomeIndex =
+    outcomeBranchIndex > decisionBranchIndex ? outcomeBranchIndex + 1 : outcomeBranchIndex
+  widenedBranches.splice(shiftedOutcomeIndex, 1, v1OutcomeBranch)
 
   const widenedRoot: Schema = {
     ...root,

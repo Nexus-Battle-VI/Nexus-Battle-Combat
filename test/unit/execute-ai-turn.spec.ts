@@ -4,10 +4,11 @@ import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/ou
 import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import type { BattleEventPublisherPort } from '../../src/application/ports/BattleEventPublisherPort'
 import type { AiDecisionPort } from '../../src/application/ports/AiDecisionPort'
-import { createBoundedRandom } from '../../src/application/services/BoundedRandom'
 import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
-import { DecisionPolicySelector } from '../../src/application/services/DecisionPolicySelector'
-import { RandomPolicy } from '../../src/application/policies/RandomPolicy'
+import {
+  DecisionPolicySelector,
+  type DecisionPolicyBinding,
+} from '../../src/application/services/DecisionPolicySelector'
 import { RuleBasedPolicy } from '../../src/application/policies/RuleBasedPolicy'
 import { CompleteBattleTurn } from '../../src/application/use-cases/CompleteBattleTurn'
 import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasicAttack'
@@ -88,7 +89,10 @@ const fakePublisher = (): { calls: unknown[]; publisher: BattleEventPublisherPor
   return { calls, publisher: { publish: (roomId, events) => calls.push({ roomId, events }) } }
 }
 
-const setup = (room: BattleRoom, overrides: { readonly primary?: AiDecisionPort } = {}) => {
+const setup = (
+  room: BattleRoom,
+  overrides: { readonly primary?: DecisionPolicyBinding | null } = {},
+) => {
   const rooms = new InMemoryBattleRoomRepository()
   void rooms.save(room, 0)
 
@@ -96,10 +100,6 @@ const setup = (room: BattleRoom, overrides: { readonly primary?: AiDecisionPort 
   const sequence = scriptedSequence(
     Array.from({ length: 200 }, (_value, index) => (index % 8000) + 1),
   )
-  const fallbackSequence = scriptedSequence(
-    Array.from({ length: 200 }, (_value, index) => (index % 8000) + 1),
-  )
-  const fallbackRandom = createBoundedRandom(fallbackSequence)
 
   const attack = new ExecuteBasicAttack(rooms, clock, sequence, lock)
   const skill = new UseSkill(rooms, clock, sequence, lock, attack)
@@ -112,12 +112,12 @@ const setup = (room: BattleRoom, overrides: { readonly primary?: AiDecisionPort 
     silentLogger,
     new Sha256CommandIdFingerprint(),
   )
-  const policies = new DecisionPolicySelector(
-    overrides.primary === undefined
-      ? { policy: new RuleBasedPolicy(), source: 'RULE_BASED' }
-      : { policy: overrides.primary, source: 'RULE_BASED' },
-    { policy: new RandomPolicy(fallbackRandom), source: 'RANDOM' },
-  )
+  // Mismo wiring productivo que `app.module.ts` (Management#558): sin
+  // primaria entrenable todavia, el fallback fijo es `RuleBasedPolicy`.
+  const policies = new DecisionPolicySelector(overrides.primary ?? null, {
+    policy: new RuleBasedPolicy(),
+    source: 'RULE_BASED',
+  })
   const { calls: publishCalls, publisher } = fakePublisher()
   const { calls: finishedRooms, finalizer } = fakeFinalizer()
 
@@ -234,12 +234,17 @@ describe('ExecuteAiTurn — turno automatico de IA en JcE 1v1 (HU-93.2)', () => 
     expect(decisions[0]?.selectedAction).toEqual({ kind: 'END_TURN' })
   })
 
-  it('politica principal invalida: usa el fallback (RandomPolicy) y lo registra como tal', async () => {
+  it('politica primaria (futura NEURAL) invalida: cae al fallback RuleBasedPolicy, nunca RANDOM', async () => {
+    // Management#558: "si la politica neuronal no esta disponible, falla o no
+    // produce una decision utilizable -> RuleBasedPolicy". Se simula con un stub
+    // en el rol de primaria que hoy no existe en produccion (`primary: null`).
     const room = aiVsHumanRoom({ aiProfile: combatProfileFixture({ attack: 12, defense: 0 }) })
-    const failingPolicy: AiDecisionPort = {
+    const failingPrimary: AiDecisionPort = {
       decide: () => Promise.reject(new NoLegalDecisionActionsError()),
     }
-    const { aiTurn, telemetry, currentRoom } = setup(room, { primary: failingPolicy })
+    const { aiTurn, telemetry, currentRoom } = setup(room, {
+      primary: { policy: failingPrimary, source: 'NEURAL' },
+    })
 
     await aiTurn.execute(ROOM_ID)
 
@@ -247,7 +252,7 @@ describe('ExecuteAiTurn — turno automatico de IA en JcE 1v1 (HU-93.2)', () => 
     expect(after.battle?.turnsCompleted).toBe(1)
 
     const decisions = await telemetry.listDecisionsByBattle('ONLINE', ROOM_ID)
-    expect(decisions[0]?.decisionSource).toBe('RANDOM')
+    expect(decisions[0]?.decisionSource).toBe('RULE_BASED')
   })
 
   it('PVP: no automatiza nada aunque el actor actual sea AI por construccion directa', async () => {

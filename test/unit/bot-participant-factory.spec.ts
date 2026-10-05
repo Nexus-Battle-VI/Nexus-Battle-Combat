@@ -31,7 +31,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
       baseAttack: { mode: 'FIXED', amount: 13 },
       baseDamage: { mode: 'FIXED', amount: 9 },
     })
-    const random = scriptedRandom([1, 9999])
+    const random = scriptedRandom([1, 7999])
     const factory = new BotParticipantFactory(
       catalog(botCatalogCandidates({ heroes: [second, offensiveHero()] })),
       random,
@@ -39,7 +39,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
 
     const result = await factory.create()
 
-    expect(random.bounds).toEqual([2, 10_000])
+    expect(random.bounds).toEqual([2, 8000])
     expect(result.heroId).toBe(second.productId)
     expect(result.heroSubtype).toBe('GUERRERO_ARMAS')
     expect(result.profile).toMatchObject({
@@ -62,7 +62,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
       const hero = supportHero(subtype)
       const result = await new BotParticipantFactory(
         catalog(botCatalogCandidates({ heroes: [hero] })),
-        scriptedRandom([0, 9999]),
+        scriptedRandom([0, 7999]),
       ).create()
 
       expect(result.profile.attack).toBeNull()
@@ -119,7 +119,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
       compatibilityScope: 'SELECTED_SUBTYPES',
       compatibleHeroSubtypes: ['MEDICO'],
     })
-    const random = scriptedRandom([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9999])
+    const random = scriptedRandom([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7999])
     const result = await new BotParticipantFactory(
       catalog(botCatalogCandidates({ equipment: [...compatible, incompatible] })),
       random,
@@ -166,7 +166,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
     })
     const result = await new BotParticipantFactory(
       catalog(botCatalogCandidates({ equipment: [sword] })),
-      scriptedRandom([0, 0, 9999]),
+      scriptedRandom([0, 0, 7999]),
     ).create()
 
     expect(result.profile.attack).toBe(10)
@@ -178,8 +178,8 @@ describe('BotParticipantFactory — HU-93.1', () => {
   })
 
   it.each([
-    [499, true],
-    [500, false],
+    [399, true],
+    [400, false],
   ] as const)('roll %i respeta frontera exacta 5%%', async (roll, expectedEpic) => {
     const result = await new BotParticipantFactory(
       catalog(
