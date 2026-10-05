@@ -61,8 +61,74 @@ describe('MongoCombatDecisionTelemetryRepository', () => {
       target: { scope: 'COMBATANT', combatant: { teamLabel: 'B', seat: 0 } },
     })
 
-  it('registers migration 023 after the frozen migration history', () => {
-    expect(MIGRATIONS.at(-1)?.name).toBe('023-combat-decision-events')
+  it('registers migration 024 after the frozen migration history', () => {
+    expect(MIGRATIONS.at(-1)?.name).toBe('024-combat-decision-events-end-turn')
+  })
+
+  it('accepts a SYSTEM END_TURN event under schemaVersion 2 while keeping v1 strict', async () => {
+    const base = toCombatDecisionTelemetryDocument(decision('cmd-end-turn-base'))
+    const endTurnDocument = {
+      ...base,
+      _id: 'decision:MISSION:end-turn-room:0',
+      battleId: 'end-turn-room',
+      schemaVersion: 2,
+      decisionSource: 'SYSTEM',
+      legalActions: [],
+      selectedAction: { kind: 'END_TURN' },
+    }
+
+    await expect(
+      db!
+        .collection<RawTelemetryDocument>(COMBAT_DECISION_EVENTS_COLLECTION)
+        .insertOne(endTurnDocument as unknown as RawTelemetryDocument),
+    ).resolves.toMatchObject({ acknowledged: true })
+  })
+
+  it('rejects a v1 decision that tries to use SYSTEM/END_TURN under schemaVersion 1', async () => {
+    const base = toCombatDecisionTelemetryDocument(decision('cmd-end-turn-smuggled'))
+
+    await expect(
+      db!.collection<RawTelemetryDocument>(COMBAT_DECISION_EVENTS_COLLECTION).insertOne({
+        ...base,
+        _id: 'decision:MISSION:smuggled-room:0',
+        battleId: 'smuggled-room',
+        decisionSource: 'SYSTEM',
+        legalActions: [],
+        selectedAction: { kind: 'END_TURN' },
+      }),
+    ).rejects.toMatchObject({ code: 121 })
+  })
+
+  it('rejects a schemaVersion 2 event that still carries non-empty legalActions', async () => {
+    const base = toCombatDecisionTelemetryDocument(decision('cmd-end-turn-nonempty'))
+
+    await expect(
+      db!.collection<RawTelemetryDocument>(COMBAT_DECISION_EVENTS_COLLECTION).insertOne({
+        ...base,
+        _id: 'decision:MISSION:nonempty-room:0',
+        battleId: 'nonempty-room',
+        schemaVersion: 2,
+        decisionSource: 'SYSTEM',
+        selectedAction: { kind: 'END_TURN' },
+      }),
+    ).rejects.toMatchObject({ code: 121 })
+  })
+
+  it('rejects a COMBAT_DECISION_OUTCOME event tagged with schemaVersion 2', async () => {
+    const outcome = recorder().prepareOutcome({
+      origin: 'ONLINE',
+      battleId: 'outcome-smuggled-schema-version',
+      mode: 'PVE',
+      outcome: { kind: 'MISSION', outcome: 'HERO_VICTORIOUS' },
+    })
+    const valid = toCombatDecisionTelemetryDocument(outcome)
+
+    await expect(
+      db!.collection<RawTelemetryDocument>(COMBAT_DECISION_EVENTS_COLLECTION).insertOne({
+        ...valid,
+        schemaVersion: 2,
+      }),
+    ).rejects.toMatchObject({ code: 121 })
   })
 
   it('creates the append-only indexes required for identity and versioned dataset reads', async () => {

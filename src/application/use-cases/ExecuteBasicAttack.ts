@@ -24,6 +24,7 @@ import { prepareAttack, type AttackParticipant } from './PrepareAttack'
 import { ResolveAttack } from './ResolveAttack'
 import type { PersistVersusDropDecision } from '../services/PersistVersusDropDecision'
 import type { CombatDecisionRecorder } from '../services/CombatDecisionRecorder'
+import type { CombatDecisionEvent } from '../../domain/decision/CombatDecisionEvent'
 
 export interface ExecuteBasicAttackInput {
   readonly roomId: string
@@ -38,6 +39,15 @@ export interface ExecuteBasicAttackInput {
    * El evento lo lleva para explicar por que hubo un ataque basico; el resto del flujo es
    * exactamente el de `attack`. Un cliente nunca lo aporta: el handler de `attack` no lo lee.
    */
+  readonly degradedFrom?: DegradedFrom
+}
+
+/** Entrada interna: el actor ya fue resuelto por Combat, nunca por un cliente. */
+export interface ExecuteBasicAttackForActorInput {
+  readonly roomId: string
+  readonly actor: CombatantKey
+  readonly commandId: string
+  readonly target: CombatantKey
   readonly degradedFrom?: DegradedFrom
 }
 
@@ -161,6 +171,39 @@ export class ExecuteBasicAttack {
       target: { scope: 'COMBATANT', combatant: input.target },
     })
 
+    return this.resolveAndPersist(room, plan, input, decision)
+  }
+
+  /**
+   * Ruta interna para una IA. El llamador DEBE poseer el lock de la sala; se
+   * revalida el actor vigente con `planBasicAttackForActor` antes de consumir RNG.
+   */
+  async executeForActorExclusively(
+    input: ExecuteBasicAttackForActorInput,
+  ): Promise<ExecuteBasicAttackResult> {
+    let room = await this.rooms.findById(input.roomId)
+
+    if (room === null) throw new RoomNotFoundError(input.roomId)
+
+    const replay = this.handledResult(room, input.commandId)
+    if (replay !== null) return replay
+
+    if (this.settler !== null) room = await this.settler.settle(room)
+
+    const plan = room.planBasicAttackForActor(input.actor, input.target)
+
+    return this.resolveAndPersist(room, plan, input, null)
+  }
+
+  private async resolveAndPersist(
+    room: BattleRoom,
+    plan: BasicAttackReadyPlan,
+    input: Pick<
+      ExecuteBasicAttackForActorInput,
+      'roomId' | 'commandId' | 'target' | 'degradedFrom'
+    >,
+    decision: CombatDecisionEvent | null | undefined,
+  ): Promise<ExecuteBasicAttackResult> {
     // A partir de aqui se consume la secuencia: todo lo que puede fallar por el perfil
     // ya se comprobo (planBasicAttack) o se comprueba en `prepare`, que no sortea.
     const prepared = this.prepare(plan)
@@ -202,6 +245,16 @@ export class ExecuteBasicAttack {
 
       throw error
     }
+  }
+
+  private handledResult(room: BattleRoom, commandId: string): ExecuteBasicAttackResult | null {
+    const handled = room.handledCommands.find((candidate) => candidate.commandId === commandId)
+    const event =
+      handled === undefined
+        ? undefined
+        : room.events.find((candidate) => candidate.seq === handled.seq)
+
+    return event === undefined ? null : { event, replayed: true, followUp: [], finished: null }
   }
 
   /** `prepareAttack` es puro (no sortea); un perfil que HU-20 no sabe preparar es un perfil no soportado. */
@@ -295,7 +348,7 @@ export class ExecuteBasicAttack {
    * conflicto (el cliente reintenta con el mismo `commandId`).
    */
   private async resolveConflict(
-    input: ExecuteBasicAttackInput,
+    input: Pick<ExecuteBasicAttackInput, 'roomId' | 'commandId'>,
     conflict: RoomConflictError,
   ): Promise<ExecuteBasicAttackResult> {
     const current = await this.rooms.findById(input.roomId)

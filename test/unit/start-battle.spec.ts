@@ -192,7 +192,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
     const repo = new InMemoryBattleRoomRepository()
 
     await seed(repo, { teamSizes: [1, 1], aiInTeamB: 1 })
-    const random = scriptedRandom([0, 9999, 0])
+    const random = scriptedRandom([0, 7999, 0])
     const { useCase, heroes } = build(repo, { random })
 
     const dto = await useCase.execute(ROOM_ID, 'a1')
@@ -208,12 +208,12 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       health: { current: 40, max: 40 },
       power: { current: 10, max: 10 },
     })
-    expect(random.bounds).toEqual([1, 10_000, 2])
+    expect(random.bounds).toEqual([1, 8000, 2])
   })
 
   it('PVE idempotente: el retry no vuelve a consultar Catalog ni cambia el bot persistido', async () => {
     const repo = new InMemoryBattleRoomRepository()
-    const random = scriptedRandom([0, 9999, 0])
+    const random = scriptedRandom([0, 7999, 0])
     let catalogCalls = 0
     const bots = new BotParticipantFactory(
       {
@@ -232,7 +232,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
 
     expect(second).toEqual(first)
     expect(catalogCalls).toBe(1)
-    expect(random.bounds).toEqual([1, 10_000, 2])
+    expect(random.bounds).toEqual([1, 8000, 2])
   })
 
   it('Catalog caido: la sala sigue PREPARING y no compromete al humano ni consume RNG', async () => {
@@ -694,7 +694,7 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
 
       await seed(repo, { teamSizes: [1, 1], aiInTeamB: 1 })
       const { useCase, commitments } = build(repo, {
-        random: scriptedRandom([0, 9999, 0]),
+        random: scriptedRandom([0, 7999, 0]),
       })
 
       await useCase.execute(ROOM_ID, 'a1')

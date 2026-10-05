@@ -6,16 +6,26 @@ import type { BattleFinishReason, BattleOutcome } from '../entities/BattleResult
 import type { BattleMode } from '../value-objects/BattleMode'
 
 export const COMBAT_DECISION_EVENT_SCHEMA_VERSION = 1 as const
+/** Version que incorpora el cierre tecnico `END_TURN` con `legalActions = []`. */
+export const COMBAT_END_TURN_DECISION_EVENT_SCHEMA_VERSION = 2 as const
 
 export type CombatDecisionOrigin = 'ONLINE' | 'MISSION' | 'TOURNAMENT'
-export type CombatDecisionSource = 'HUMAN' | 'RULE_BASED' | 'RANDOM' | 'MCTS' | 'NEURAL'
+export type CombatDecisionSource = 'HUMAN' | 'RULE_BASED' | 'RANDOM' | 'MCTS' | 'NEURAL' | 'SYSTEM'
+
+/**
+ * Resultado estratégico registrado. `END_TURN` no es un `ActionIntent`: ninguna
+ * política puede escogerlo y solo Combat lo emite cuando no hay candidatas.
+ */
+export type CombatDecisionSelection = ActionIntent | { readonly kind: 'END_TURN' }
 
 /**
  * Hecho append-only que describe exactamente lo que una política pudo observar y elegir.
  * No contiene identidad personal, estado del RNG ni el resultado posterior de la acción.
  */
 export interface CombatDecisionEvent {
-  readonly schemaVersion: typeof COMBAT_DECISION_EVENT_SCHEMA_VERSION
+  readonly schemaVersion:
+    | typeof COMBAT_DECISION_EVENT_SCHEMA_VERSION
+    | typeof COMBAT_END_TURN_DECISION_EVENT_SCHEMA_VERSION
   readonly eventType: 'COMBAT_DECISION'
   readonly eventId: string
   readonly battleId: string
@@ -26,7 +36,7 @@ export interface CombatDecisionEvent {
   readonly decisionSource: CombatDecisionSource
   readonly stateBefore: BattleDecisionState
   readonly legalActions: readonly LegalAction[]
-  readonly selectedAction: ActionIntent
+  readonly selectedAction: CombatDecisionSelection
   readonly occurredAt: Date
 }
 

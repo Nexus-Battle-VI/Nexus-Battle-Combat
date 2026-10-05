@@ -41,7 +41,8 @@ El orden de consumo para cada bot JcE es:
 3. una armadura compatible por ranura, en orden `HEAD`, `CHEST`, `GLOVES`,
    `BRACERS`, `PANTS`, `SHOES`;
 4. hasta dos ítems, sin repetir definición;
-5. roll de épica `nextInt(10_000)`: `0..499` sí, `500..9999` no;
+5. roll de épica `nextInt(8000)`: `0..399` sí, `400..7999` no (5 % exacto;
+   `BoundedRandom.nextInt` solo acepta `bound <= RandomIndex.MAX = 8000`, HU-24);
 6. selección uniforme de una épica compatible si el roll fue positivo;
 7. generación del orden de turnos existente.
 

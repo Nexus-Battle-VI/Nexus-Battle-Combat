@@ -12,6 +12,7 @@ import { TournamentRoomController } from '../../adapters/inbound/http/tournament
 import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
 import {
+  AI_TURN_TRIGGER,
   BATTLE_RANDOM,
   BATTLE_RANDOM_SEQUENCE,
   BATTLE_DEADLINE_SCHEDULER_OPTIONS,
@@ -22,6 +23,8 @@ import {
   CONSUME_REALTIME_TICKET,
   CREATE_BATTLE_ROOM,
   CREATE_REWARD_WORKFLOWS,
+  DECISION_POLICY_SELECTOR,
+  EXECUTE_AI_TURN,
   EXECUTE_BASIC_ATTACK,
   USE_SKILL,
   USE_EPIC,
@@ -230,6 +233,8 @@ import { RunMissionSimulation } from '../../application/use-cases/RunMissionSimu
 import { Sha256CommandIdFingerprint } from '../../adapters/outbound/system/Sha256CommandIdFingerprint'
 import { EstimateMissionOutcome } from '../../application/use-cases/EstimateMissionOutcome'
 import { RuleBasedPolicy } from '../../application/policies/RuleBasedPolicy'
+import { DecisionPolicySelector } from '../../application/services/DecisionPolicySelector'
+import { ExecuteAiTurn, AiTurnTrigger } from '../../application/use-cases/ExecuteAiTurn'
 import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
@@ -1479,8 +1484,10 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         attack: ExecuteBasicAttack,
         finalizer: BattleFinalizer,
         logger: Logger,
-      ): BasicAttackRealtimeHandler => new BasicAttackRealtimeHandler(attack, logger, finalizer),
-      inject: [EXECUTE_BASIC_ATTACK, BATTLE_FINALIZER, LOGGER],
+        aiTurnTrigger: AiTurnTrigger,
+      ): BasicAttackRealtimeHandler =>
+        new BasicAttackRealtimeHandler(attack, logger, finalizer, aiTurnTrigger),
+      inject: [EXECUTE_BASIC_ATTACK, BATTLE_FINALIZER, LOGGER, AI_TURN_TRIGGER],
     },
     // HU-19 (RF-19): habilidad especial por el mismo WebSocket (`useSkill`). Comparte el bloqueo
     // de sala y la secuencia HU-24 con el ataque basico, y lo reutiliza (mismo bloqueo, sin pedirlo
@@ -1525,8 +1532,9 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         skill: UseSkill,
         logger: Logger,
         finalizer: BattleFinalizer,
-      ): SkillRealtimeHandler => new SkillRealtimeHandler(skill, logger, finalizer),
-      inject: [USE_SKILL, LOGGER, BATTLE_FINALIZER],
+        aiTurnTrigger: AiTurnTrigger,
+      ): SkillRealtimeHandler => new SkillRealtimeHandler(skill, logger, finalizer, aiTurnTrigger),
+      inject: [USE_SKILL, LOGGER, BATTLE_FINALIZER, AI_TURN_TRIGGER],
     },
     // Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): la epica equipada, por el
     // mismo WebSocket (`useEpic`). Comparte el bloqueo de sala y la secuencia HU-24 con el
@@ -1559,8 +1567,71 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         epic: UseEpic,
         logger: Logger,
         finalizer: BattleFinalizer,
-      ): EpicRealtimeHandler => new EpicRealtimeHandler(epic, logger, finalizer),
-      inject: [USE_EPIC, LOGGER, BATTLE_FINALIZER],
+        aiTurnTrigger: AiTurnTrigger,
+      ): EpicRealtimeHandler => new EpicRealtimeHandler(epic, logger, finalizer, aiTurnTrigger),
+      inject: [USE_EPIC, LOGGER, BATTLE_FINALIZER, AI_TURN_TRIGGER],
+    },
+    // HU-93.2 (Management#558): sin `NeuralPolicy` entrenada todavia (EN-036), no
+    // hay primaria -- el fallback fijo es `RuleBasedPolicy`, nunca `RandomPolicy`
+    // (esa es solo el baseline experimental de EN-035.3 para Misiones/evaluacion,
+    // jamas el fallback productivo de JcE). El dia que exista una politica
+    // entrenable real, pasa a ser la primaria aqui; `RuleBasedPolicy` sigue
+    // siendo el mismo fallback fijo.
+    {
+      provide: DECISION_POLICY_SELECTOR,
+      useFactory: (): DecisionPolicySelector =>
+        new DecisionPolicySelector(null, { policy: new RuleBasedPolicy(), source: 'RULE_BASED' }),
+    },
+    {
+      provide: EXECUTE_AI_TURN,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        lock: RoomCommandLockPort,
+        policies: DecisionPolicySelector,
+        attack: ExecuteBasicAttack,
+        skill: UseSkill,
+        epic: UseEpic,
+        completeTurn: CompleteBattleTurn,
+        decisions: CombatDecisionRecorder,
+        publisher: BattleEventPublisherPort,
+        finalizer: BattleFinalizer,
+        settler: BattleDeadlineSettler,
+      ): ExecuteAiTurn =>
+        new ExecuteAiTurn(
+          rooms,
+          lock,
+          policies,
+          attack,
+          skill,
+          epic,
+          completeTurn,
+          decisions,
+          publisher,
+          finalizer,
+          new Sha256CommandIdFingerprint(),
+          settler,
+        ),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        ROOM_COMMAND_LOCK,
+        DECISION_POLICY_SELECTOR,
+        EXECUTE_BASIC_ATTACK,
+        USE_SKILL,
+        USE_EPIC,
+        COMPLETE_BATTLE_TURN,
+        CombatDecisionRecorder,
+        BATTLE_EVENT_PUBLISHER,
+        BATTLE_FINALIZER,
+        BATTLE_DEADLINE_SETTLER,
+      ],
+    },
+    {
+      // Fail-open (contrato HU-93.2 §7): un fallo del bot nunca rechaza una
+      // accion humana ya persistida y difundida.
+      provide: AI_TURN_TRIGGER,
+      useFactory: (turns: ExecuteAiTurn, logger: Logger): AiTurnTrigger =>
+        new AiTurnTrigger(turns, logger),
+      inject: [EXECUTE_AI_TURN, LOGGER],
     },
     {
       provide: READINESS_CHECKS,

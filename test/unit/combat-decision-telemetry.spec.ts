@@ -5,6 +5,8 @@ import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
 import type { CombatDecisionTelemetryRepositoryPort } from '../../src/application/ports/CombatDecisionTelemetryRepositoryPort'
 import { CombatDecisionTelemetryConflictError } from '../../src/application/ports/CombatDecisionTelemetryRepositoryPort'
 import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
+import { BattleDecisionStateAssembler } from '../../src/application/services/BattleDecisionStateAssembler'
+import { LegalActionGenerator } from '../../src/application/services/LegalActionGenerator'
 import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasicAttack'
 import { battleWithCombat, indexForFace } from '../fixtures/basic-attack'
 import { clock, NOW, ROOM_ID, scriptedSequence } from '../fixtures/battle'
@@ -59,8 +61,70 @@ describe('CombatDecisionRecorder e in-memory telemetry', () => {
     expect(event.eventId).toMatch(/^decision:ONLINE:\d+:[^:]+:[a-f0-9]{64}$/u)
     expect(JSON.stringify(event)).not.toContain(commandId)
     expect(
-      recorder.prepareHumanDecision(battleWithCombat(), commandId, event.selectedAction).eventId,
+      recorder.prepareHumanDecision(battleWithCombat(), commandId, {
+        kind: 'BASIC_ATTACK',
+        target: { scope: 'COMBATANT', combatant: target },
+      }).eventId,
     ).toBe(event.eventId)
+  })
+
+  it('records END_TURN only as a SYSTEM decision with no legal actions', () => {
+    const repository = new InMemoryCombatDecisionTelemetryRepository()
+    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger, commandIds)
+    const room = battleWithCombat()
+    const stateBefore = new BattleDecisionStateAssembler().assemble(room)
+    const event = recorder.prepareOnline({
+      commandId: 'ai-turn:room:0:0',
+      battleId: room.id,
+      decisionSequence: 0,
+      origin: 'ONLINE',
+      mode: 'PVE',
+      actor: stateBefore.actor.identity,
+      decisionSource: 'SYSTEM',
+      stateBefore,
+      legalActions: [],
+      selectedAction: { kind: 'END_TURN' },
+    })
+
+    expect(event).toMatchObject({
+      schemaVersion: 2,
+      decisionSource: 'SYSTEM',
+      legalActions: [],
+      selectedAction: { kind: 'END_TURN' },
+    })
+  })
+
+  it('rejects END_TURN when a real action exists or the source is not SYSTEM', () => {
+    const repository = new InMemoryCombatDecisionTelemetryRepository()
+    const recorder = new CombatDecisionRecorder(repository, fixedClock, silentLogger, commandIds)
+    const room = battleWithCombat()
+    const stateBefore = new BattleDecisionStateAssembler().assemble(room)
+    const legalActions = new LegalActionGenerator().generate(room)
+    const base = {
+      commandId: 'ai-turn:room:0:0',
+      battleId: room.id,
+      decisionSequence: 0,
+      origin: 'ONLINE' as const,
+      mode: 'PVE' as const,
+      actor: stateBefore.actor.identity,
+      stateBefore,
+      selectedAction: { kind: 'END_TURN' as const },
+    }
+
+    expect(() =>
+      recorder.prepareOnline({
+        ...base,
+        decisionSource: 'SYSTEM',
+        legalActions,
+      }),
+    ).toThrow()
+    expect(() =>
+      recorder.prepareOnline({
+        ...base,
+        decisionSource: 'RULE_BASED',
+        legalActions: [],
+      }),
+    ).toThrow()
   })
 
   it('treats the same semantic event as a no-op even when retry time differs', async () => {

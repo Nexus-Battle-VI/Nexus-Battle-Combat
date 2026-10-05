@@ -150,6 +150,9 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
       'adapters/inbound/ws/EpicRealtimeHandler.ts',
       'adapters/inbound/ws/SkillRealtimeHandler.ts',
       'application/services/BattleDeadlineSettler.ts',
+      // HU-93.2: el orquestador de turno AI publica el resultado y, solo si la
+      // batalla terminó, cierra con `afterFinished`, igual que los handlers humanos.
+      'application/use-cases/ExecuteAiTurn.ts',
     ])
 
     for (const path of callers) {

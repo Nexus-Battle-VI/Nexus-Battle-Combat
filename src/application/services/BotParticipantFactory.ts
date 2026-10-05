@@ -26,8 +26,12 @@ const SLOT_FOR_ARMOR: Readonly<Record<(typeof ARMOR_SLOTS)[number], BotLoadoutSl
   PANTS: 'PANTS',
   SHOES: 'SHOES',
 }
-const EPIC_ROLL_BOUND = 10_000
-const EPIC_ROLL_SUCCESS_COUNT = 500
+// `BoundedRandom.nextInt` solo acepta `bound <= RandomIndex.MAX` (8000, HU-24):
+// un `bound` de 10.000 hacia que CUALQUIER bot real lanzara al iniciar la
+// batalla (`BoundedRandom.ts` lo rechaza antes de sortear). 8000/400 preserva
+// EXACTAMENTE el 5 % documentado (400/8000 = 500/10_000 = 0,05).
+const EPIC_ROLL_BOUND = 8000
+const EPIC_ROLL_SUCCESS_COUNT = 400
 
 export type BotLoadoutSlot =
   | 'WEAPON_1'

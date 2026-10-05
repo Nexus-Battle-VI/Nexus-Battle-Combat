@@ -6,6 +6,7 @@ import {
 } from '../../../application/errors/ApplicationError'
 import type { UseEpic } from '../../../application/use-cases/UseEpic'
 import type { BattleFinalizer } from '../../../application/services/BattleFinalizer'
+import type { AiTurnTrigger } from '../../../application/use-cases/ExecuteAiTurn'
 import {
   ActorUnavailableError,
   BattleNotInProgressError,
@@ -131,6 +132,8 @@ export class EpicRealtimeHandler {
     private readonly epic: UseEpic,
     private readonly logger: Logger,
     private readonly finalizer: BattleFinalizer | null = null,
+    /** HU-93.2: dispara el turno AI tras una transicion humana valida (fail-open). */
+    private readonly aiTurnTrigger: AiTurnTrigger | null = null,
   ) {}
 
   async handle(
@@ -180,6 +183,8 @@ export class EpicRealtimeHandler {
 
       if (result.finished !== null) {
         this.finalizer?.afterFinished(result.finished)
+      } else {
+        void this.aiTurnTrigger?.afterTransition(command.roomId)
       }
     } catch (error: unknown) {
       this.reject(client, this.codeFor(error, command), command.commandId)

@@ -78,6 +78,7 @@ import {
   JoinBattleRoomRequest,
 } from './battle-room.dto'
 import {
+  AI_TURN_TRIGGER,
   CANCEL_BATTLE_ROOM,
   CREATE_BATTLE_ROOM,
   GET_BATTLE_ROOM,
@@ -86,6 +87,7 @@ import {
   LIST_AVAILABLE_BATTLE_ROOMS,
   START_BATTLE,
 } from './tokens'
+import type { AiTurnTrigger } from '../../../application/use-cases/ExecuteAiTurn'
 
 /**
  * Creacion, listado y cancelacion de salas de batalla (HU-14, RF-14).
@@ -112,6 +114,7 @@ export class BattleRoomController {
     @Inject(GET_BATTLE_ROOM) private readonly getBattleRoom: GetBattleRoom,
     @Inject(START_BATTLE) private readonly startBattle: StartBattle,
     @Inject(REALTIME_NOTIFIER) private readonly realtime: RealtimeNotifierPort,
+    @Inject(AI_TURN_TRIGGER) private readonly aiTurnTrigger: AiTurnTrigger,
   ) {}
 
   @Post()
@@ -349,6 +352,9 @@ export class BattleRoomController {
       const dto = await this.startBattle.execute(roomId, identity.subject)
 
       this.notifyRoomUpdated(dto)
+      // HU-93.2: `battleStarted` ya esta publicado por `StartBattle`; si el primer
+      // turno es AI, lo juega ahora (fail-open, nunca revierte este arranque).
+      void this.aiTurnTrigger.afterTransition(roomId)
 
       return dto
     } catch (error: unknown) {
