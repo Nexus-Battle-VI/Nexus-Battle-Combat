@@ -13,7 +13,7 @@ import { CdfUniformIndexMapper } from '../../src/adapters/outbound/system/CdfUni
 import { MctsSearch, extractUtilityVitals } from '../../src/application/services/MctsSearch'
 import { LegalActionGenerator } from '../../src/application/services/LegalActionGenerator'
 import { battleWithCombat, combatProfileFixture } from '../fixtures/basic-attack'
-import { battleWithSkills } from '../fixtures/skills'
+import { battleWithSkills, AGONY, AGONY_ID } from '../fixtures/skills'
 import { clock, preparingRoom } from '../fixtures/battle'
 
 const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
@@ -152,6 +152,45 @@ describe('MctsSearch (teacher MCTS, EN-036.1)', () => {
 
     expect(actor).toEqual({ currentHealth: 44, maxHealth: 44, power: { current: 10, max: 10 } })
     expect(enemies).toEqual([{ currentHealth: 44, maxHealth: 44 }])
+  })
+
+  it('M-12: cada rollout vuelve a aplicar la accion elegida desde la sala raiz original (no congela un resultado aleatorio, bug #2 de la revision de PR#80)', async () => {
+    const room = battleWithCombat() // una sola accion legal (BASIC_ATTACK): todos los rollouts la eligen
+    const applyActionSpy = jest.spyOn(simulation, 'applyAction')
+
+    await search().search(room, { ...MCTS_TEACHER_V1_CONFIG, rollouts: 10 }, SEED)
+
+    // Cada rollout llama a `applyAction` varias veces (la propia + el resto
+    // de la trayectoria), pero la PRIMERA llamada de CADA rollout debe partir
+    // siempre de la sala raiz original intacta. Si el arbol anterior
+    // "congelaba" la primera accion expandida, solo UNA llamada en total
+    // habria recibido esa sala raiz; las demas habrian reusado el nodo ya
+    // calculado en vez de volver a muestrearlo.
+    const callsFromRoot = applyActionSpy.mock.calls.filter((call) => call[0] === room)
+    expect(callsFromRoot).toHaveLength(10)
+
+    applyActionSpy.mockRestore()
+  })
+
+  it('M-13: el Poder de una hoja terminal refleja lo gastado de verdad, no el Poder restaurado por BattleRoom.finish() (bug #3 de la revision de PR#80)', async () => {
+    const lethalProfile = combatProfileFixture({ maxPower: 3, abilities: [AGONY] })
+    const room = battleWithCombat({
+      profiles: { a1: lethalProfile },
+      health: { 'B#0': 1 }, // 2d9 de Agonia (minimo 2) siempre es letal contra 1 de Vida
+    })
+
+    const result = await search().search(room, { ...MCTS_TEACHER_V1_CONFIG, rollouts: 4 }, SEED)
+
+    const agonyCandidate = result.candidates.find(
+      (c) => c.action.kind === 'ABILITY' && c.action.abilityId === AGONY_ID,
+    )
+    expect(agonyCandidate).toBeDefined()
+
+    // W=1 (gana), H=1 (Agonia no inflige dano propio), P=0/3=0 (gasto los 3 de
+    // Poder y la sala terminal NO debe leer el Poder restaurado = 1),
+    // D=1-0/44=1 (enemigo a 0 de Vida). U = 0.60*1+0.15*1+0.10*0+0.15*1 = 0.90.
+    // Si el bug #3 siguiera presente, P se leeria como 1 y U daria 1.00.
+    expect(agonyCandidate?.meanUtility).toBeCloseTo(0.9, 10)
   })
 
   it('completa 128 rollouts (configuracion v1 por defecto) en un tiempo razonable', async () => {

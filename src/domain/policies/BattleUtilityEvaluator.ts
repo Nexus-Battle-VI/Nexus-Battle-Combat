@@ -93,22 +93,30 @@ const powerRatio = (actor: BattleUtilityActorVitals): number => {
 }
 
 /**
- * D (§13, DECISION TECNICA V1): `1 - (sum currentHealth vivos / sum maxHealth
- * vivos)` de los enemigos del actor raiz (fijo desde el inicio de la busqueda,
- * nunca recalculado por "de quien es el turno" en un nodo). Si no queda
- * ningun enemigo vivo (incluye el caso de lista vacia) el progreso de dano es
- * maximo por definicion: `D = 1`, en vez de dividir por cero.
+ * D (§13, DECISION TECNICA V1): `1 - (sum currentHealth / sum maxHealth)` de
+ * TODOS los enemigos del actor raiz, vivos o muertos (fijo desde el inicio de
+ * la busqueda, nunca recalculado por "de quien es el turno" en un nodo). Un
+ * enemigo muerto aporta `currentHealth = 0` al numerador pero su `maxHealth`
+ * SIGUE contando en el denominador -- excluirlo (como hacia una version
+ * anterior de este archivo) hace que matar a un enemigo de un equipo de 2+ no
+ * mueva `D` nada, porque su Vida maxima desaparece del calculo junto con el.
+ * Sin enemigos en absoluto (lista vacia) el progreso de dano es maximo por
+ * definicion: `D = 1`, en vez de dividir por cero.
  */
 const damageProgress = (enemies: readonly BattleUtilityEnemyVitals[]): number => {
-  const living = enemies.filter((enemy) => enemy.currentHealth > 0)
-  if (living.length === 0) return 1
+  if (enemies.length === 0) return 1
 
   let currentSum = 0
   let maxSum = 0
-  for (const enemy of living) {
+  for (const enemy of enemies) {
     if (!Number.isFinite(enemy.maxHealth) || enemy.maxHealth <= 0) {
       throw new InvalidUtilityStateError(
         `maxHealth de enemigo invalido (${String(enemy.maxHealth)}).`,
+      )
+    }
+    if (!Number.isFinite(enemy.currentHealth) || enemy.currentHealth < 0) {
+      throw new InvalidUtilityStateError(
+        `currentHealth de enemigo invalido (${String(enemy.currentHealth)}).`,
       )
     }
     currentSum += enemy.currentHealth

@@ -92,13 +92,25 @@ describe('BattleUtilityEvaluator (pve-utility-v1, EN-036.1)', () => {
     expect(todosMuertos.components.damage).toBe(1)
   })
 
-  it('U-10: D promedia por Vida total del equipo rival, no por enemigo', () => {
+  it('U-10: D promedia por Vida total del equipo rival (vivos Y muertos), no solo por los vivos', () => {
     const result = evaluateBattleUtility('NON_TERMINAL', actor(), [
       enemy({ currentHealth: 10, maxHealth: 20 }), // vivo, mitad de Vida
-      enemy({ currentHealth: 0, maxHealth: 20 }), // muerto: no cuenta en la suma
+      enemy({ currentHealth: 0, maxHealth: 20 }), // muerto: su maxHealth SIGUE en el denominador
     ])
 
-    // Solo el enemigo vivo cuenta: D = 1 - 10/20 = 0.5
+    // D = 1 - (10+0)/(20+20) = 1 - 10/40 = 0.75
+    expect(result.components.damage).toBeCloseTo(0.75, 10)
+  })
+
+  it('un enemigo del equipo ya eliminado mueve D aunque el resto siga ileso (regresion del bug de #80)', () => {
+    // 2 enemigos de 100 HP cada uno: uno muerto, el otro intacto. Ya se
+    // elimino el 50% del pool rival, asi que D debe reflejar ese progreso,
+    // NO quedarse en 0 por excluir al muerto del denominador.
+    const result = evaluateBattleUtility('NON_TERMINAL', actor(), [
+      enemy({ currentHealth: 0, maxHealth: 100 }),
+      enemy({ currentHealth: 100, maxHealth: 100 }),
+    ])
+
     expect(result.components.damage).toBeCloseTo(0.5, 10)
   })
 

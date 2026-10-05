@@ -4,7 +4,7 @@ import { UTILITY_VERSION_PVE_V1 } from '../policies/BattleUtilityEvaluator'
 /**
  * Configuracion fija del teacher MCTS `mcts-teacher-v1` (EN-036.1, Management
  * Task #565, §7, §82-§87). Todo numero que gobierna la busqueda vive AQUI,
- * nunca como literal disperso en `MctsSearch`/`MctsPolicy`, para que un
+ * nunca como literal disperso en `MctsSearch`/`MctsTeacher`, para que un
  * `MctsTeacherResult` sea reproducible solo con estos valores + la semilla.
  */
 export interface MctsTeacherConfig {

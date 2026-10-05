@@ -63,14 +63,16 @@ export class InMemoryMctsSimulationAdapter implements MctsSimulationPort {
       )
     }
 
-    if (result.finished !== null) return { room: result.finished, finished: true }
+    if (result.finished !== null) {
+      return { room: result.finished, finished: true, event: result.event }
+    }
 
     const next = await rooms.findById(room.id)
     if (next === null) {
       throw new SimulationTransitionError('la sala clonada desaparecio tras aplicar la accion.')
     }
 
-    return { room: next, finished: false }
+    return { room: next, finished: false, event: result.event }
   }
 
   async applyEndTurn(room: BattleRoom, commandId: string): Promise<MctsSimulationStepResult> {
@@ -94,7 +96,7 @@ export class InMemoryMctsSimulationAdapter implements MctsSimulationPort {
       )
     }
 
-    return { room: result.room, finished: false }
+    return { room: result.room, finished: false, event: result.event }
   }
 
   private dispatch(

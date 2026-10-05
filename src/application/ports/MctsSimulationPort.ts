@@ -1,3 +1,4 @@
+import type { BattleEvent } from '../../domain/entities/BattleEvent'
 import type { BattleRoom } from '../../domain/entities/BattleRoom'
 import type { CombatantKey } from '../../domain/entities/Combatant'
 import type { LegalAction } from '../../domain/decision/LegalAction'
@@ -8,6 +9,14 @@ export interface MctsSimulationStepResult {
   readonly room: BattleRoom
   /** `true` si ese paso dejo la sala `FINISHED` (fin de la simulacion para esa rama). */
   readonly finished: boolean
+  /**
+   * El evento que el motor real persistio para este paso. `MctsSearch` lo usa
+   * SOLO para leer `payload.power.before/after` cuando existe (habilidad o
+   * epica): es la unica forma de conocer el Poder del actor justo antes de
+   * que `BattleRoom.finish()` lo restaure (HU-11), ya que una sala `FINISHED`
+   * nunca vuelve a exponer ese valor intermedio.
+   */
+  readonly event: BattleEvent
 }
 
 /**

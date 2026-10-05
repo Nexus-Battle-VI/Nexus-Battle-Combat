@@ -1,3 +1,4 @@
+import type { BattleEvent } from '../../domain/entities/BattleEvent'
 import type { BattleRoom } from '../../domain/entities/BattleRoom'
 import type { CombatantKey } from '../../domain/entities/Combatant'
 import type { LegalAction } from '../../domain/decision/LegalAction'
@@ -27,28 +28,7 @@ import type { RandomSequenceFactoryPort, RandomSequencePort } from '../ports/Ran
 import { RuleBasedPolicy } from '../policies/RuleBasedPolicy'
 import { BattleDecisionStateAssembler } from './BattleDecisionStateAssembler'
 import { LegalActionGenerator } from './LegalActionGenerator'
-
-/** `END_TURN` (legalActions = []) representado como una arista mas, interna a la busqueda. */
-const END_TURN_EDGE = 'END_TURN'
-
-interface MctsEdge {
-  /** `null` solo representa `END_TURN`; nunca aparece entre las aristas del nodo RAIZ (ver `search`). */
-  readonly action: LegalAction | null
-  child: MctsNode | null
-}
-
-interface MctsNode {
-  readonly room: BattleRoom
-  readonly depthPlies: number
-  readonly terminal: boolean
-  /** `true` cuando se trunco por `maxDepthPlies`: hoja forzada, sin aristas (nunca se re-expande). */
-  readonly depthCapped: boolean
-  visits: number
-  totalUtility: number
-  /** Orden de expansion FIJO y determinista (decision v1: ver cabecera de `MctsSearch`). */
-  readonly edgeOrder: readonly string[]
-  readonly edges: ReadonlyMap<string, MctsEdge>
-}
+import { filterStrategicCandidates } from './MctsStrategicCandidateFilter'
 
 /**
  * Extrae, de forma pura y SIN pasar por `BattleDecisionStateAssembler` (atado
@@ -101,15 +81,42 @@ export const extractUtilityVitals = (
   return { actor, enemies: Object.freeze(enemies) }
 }
 
-const uctScore = (child: MctsNode, parentVisits: number, explorationConstant: number): number => {
-  const exploitation = child.totalUtility / child.visits
-  const exploration = explorationConstant * Math.sqrt(Math.log(parentVisits) / child.visits)
+interface RootCandidateStats {
+  readonly action: LegalAction
+  visits: number
+  totalUtility: number
+}
+
+const uctScore = (
+  candidate: RootCandidateStats,
+  totalVisits: number,
+  explorationConstant: number,
+): number => {
+  const exploitation = candidate.totalUtility / candidate.visits
+  const exploration = explorationConstant * Math.sqrt(Math.log(totalVisits) / candidate.visits)
   return exploitation + exploration
 }
 
 /** Compara identidades de arista de forma estable y determinista (desempates). */
 const compareEdgeKey = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0
+
+const sameCombatant = (left: CombatantKey, right: CombatantKey): boolean =>
+  left.teamLabel === right.teamLabel && left.seat === right.seat
+
+/**
+ * Lee `payload.power.after` de un evento SI lo tiene (`skillUsed`,
+ * `healSkillUsed`, `directDamageSkillUsed`, `epicUsed`); `null` en cualquier
+ * otro caso (p. ej. `basicAttackResolved`, que nunca toca Poder).
+ */
+const powerAfterFromEvent = (event: BattleEvent): number | null => {
+  const payload: unknown = event.payload
+  if (typeof payload !== 'object' || payload === null || !('power' in payload)) return null
+  const power = payload.power
+  if (typeof power !== 'object' || power === null || !('after' in power)) return null
+  const after = power.after
+  return typeof after === 'number' ? after : null
+}
 
 /**
  * Teacher MCTS (UCT) para EN-036.1 (Management Task #565). Busca, usando
@@ -121,19 +128,35 @@ const compareEdgeKey = (left: string, right: string): number =>
  * DECISIONES TECNICAS V1 (no requisitos funcionales; ampliadas en
  * `docs/en-036-mcts-teacher.md`):
  *
- *  - El arbol SOLO ramifica en los turnos del actor raiz. Los turnos del
- *    equipo rival (dentro del arbol y durante el rollout) se resuelven
- *    siempre con la misma politica fija de rollout (`RuleBasedPolicy`), nunca
- *    se buscan: evita un UCT adversarial de dos bandos y mantiene cada ply
- *    resuelto por las reglas reales, sin montar un segundo motor.
- *  - La expansion de aristas no visitadas sigue SIEMPRE el orden en que
- *    `LegalActionGenerator` las genera (determinista, ordenado por
- *    `legalActionIdentity`): el UNICO azar de toda la busqueda es el que
- *    consume el motor real a traves de la secuencia aislada de cada rollout;
- *    MCTS no inventa un sorteo propio para elegir que ramificar.
+ *  - **Arbol de un solo nivel.** UCT asigna los `rollouts` disponibles entre
+ *    las acciones legales (estrategicas) del actor raiz; TODO lo que ocurre
+ *    despues de esa primera accion -- el resto del propio turno, los turnos
+ *    del rival, cualquier turno posterior del actor raiz dentro del mismo
+ *    rollout -- se juega con `RuleBasedPolicy`, nunca se vuelve a buscar.
+ *    Revision anterior de este archivo mantenia un arbol mas profundo cuyas
+ *    aristas, una vez expandidas, CONGELABAN el resultado aleatorio de la
+ *    primera vez que se jugaron (el mismo acierto/critico/dano para siempre);
+ *    en un motor estocastico eso sesga el teacher hacia lo que haya salido en
+ *    el primer muestreo. Con un solo nivel, CADA rollout vuelve a aplicar la
+ *    accion elegida con la secuencia de ESE rollout: nunca se reutiliza una
+ *    transicion ya muestreada.
+ *  - La expansion (primera visita) de cada candidata sigue el orden de
+ *    `legalActionIdentity` (determinista): el UNICO azar de toda la busqueda
+ *    es el que consume el motor real a traves de la secuencia aislada de cada
+ *    rollout.
+ *  - Antes de repartir rollouts, `filterStrategicCandidates` descarta las
+ *    curaciones desperdiciadas (regla de salud de EN-036 #555: un receptor
+ *    con `healthRatio >= 0.90`) para no gastar presupuesto en ellas; nunca
+ *    toca la legalidad real de Combat.
  *  - La utilidad se evalua SIEMPRE desde la perspectiva del equipo del actor
- *    raiz, fijada al iniciar la busqueda, en toda hoja (terminal o truncada
- *    por profundidad) sin importar de quien sea el turno en ese nodo.
+ *    raiz. El Poder NUNCA se lee directamente de la hoja final: una sala
+ *    `FINISHED` ya paso por `BattleRoom.finish() -> restoreAllPower()` (HU-11)
+ *    y mostraria Poder maximo igual para una victoria agotandolo todo que
+ *    para una sin gastar nada. En vez de eso, cada rollout seguimiento SU
+ *    PROPIO Poder del actor raiz ply a ply, leyendo `payload.power.after` de
+ *    cada evento de habilidad/epica que el actor raiz protagoniza (el unico
+ *    dato que expone el valor justo antes de cualquier restauracion), y usa
+ *    ese valor seguido -- nunca el de la sala final -- para `P`.
  */
 export class MctsSearch {
   constructor(
@@ -162,52 +185,48 @@ export class MctsSearch {
       teamLabel: room.battle.currentEntry.teamLabel,
       seat: room.battle.currentEntry.seat,
     }
-    const rootLegalActions = this.legalActions.generateAvailable(room)
-    if (rootLegalActions.length === 0) {
+    const legalActionsAll = this.legalActions.generateAvailable(room)
+    if (legalActionsAll.length === 0) {
       throw new NoLegalDecisionActionsError()
     }
 
-    const root = this.makeNode(room, 0, rootLegalActions)
+    const strategicCandidates = filterStrategicCandidates(room, rootActor, legalActionsAll)
+    const stats = new Map<string, RootCandidateStats>(
+      strategicCandidates.map((action) => [
+        legalActionIdentity(action),
+        { action, visits: 0, totalUtility: 0 },
+      ]),
+    )
+    const order = [...stats.keys()].sort(compareEdgeKey)
+    const initialPower = extractUtilityVitals(room, rootActor).actor.power
 
     for (let i = 0; i < config.rollouts; i += 1) {
       const seed = deriveMctsRolloutSeed(simulationSeed, i)
       const sequence = this.randomSequenceFactory.create(seed)
-      const plyId = { value: 0 }
-      const commandNamespace = `mcts:${String(i)}`
+      const chosenKey = this.selectRootAction(stats, order, config)
+      const chosen = stats.get(chosenKey)
+      if (chosen === undefined) throw new InvalidMctsConfigError('candidata seleccionada ausente')
 
-      const path = this.select(root, config)
-      const leaf = path[path.length - 1]
-      if (leaf === undefined) throw new InvalidMctsConfigError('ruta de seleccion vacia')
-
-      if (leaf.terminal || leaf.depthCapped) {
-        const utility = this.evaluate(leaf.room, rootActor, leaf.terminal)
-        this.backpropagate(path, utility)
-        continue
-      }
-
-      const untriedKey = leaf.edgeOrder.find((key) => leaf.edges.get(key)?.child === null)
-      const edge = untriedKey === undefined ? undefined : leaf.edges.get(untriedKey)
-      if (edge === undefined) {
-        throw new InvalidMctsConfigError('nodo sin aristas no visitadas ni hoja')
-      }
-
-      const expanded = await this.expand(
-        leaf,
-        edge,
+      const {
+        room: finalRoom,
+        terminal,
+        rootActorPower,
+      } = await this.simulateTrajectory(
+        room,
         rootActor,
+        chosen.action,
+        initialPower,
         config,
         sequence,
-        commandNamespace,
-        plyId,
+        `mcts:${String(i)}`,
       )
-      edge.child = expanded
+      const utility = this.evaluate(finalRoom, rootActor, terminal, rootActorPower)
 
-      const rolledOut = await this.rollout(expanded, config, sequence, commandNamespace, plyId)
-      const utility = this.evaluate(rolledOut.room, rootActor, rolledOut.terminal)
-      this.backpropagate([...path, expanded], utility)
+      chosen.visits += 1
+      chosen.totalUtility += utility
     }
 
-    return this.buildResult(root, config, simulationSeed)
+    return this.buildResult(stats, order, config, simulationSeed)
   }
 
   private validateConfig(config: MctsTeacherConfig): void {
@@ -224,149 +243,97 @@ export class MctsSearch {
     }
   }
 
-  private makeNode(
-    room: BattleRoom,
-    depthPlies: number,
-    ownLegalActions: readonly LegalAction[],
-  ): MctsNode {
-    const terminal = room.status === BattleRoomStatus.Finished
-    const edgeKeys = terminal
-      ? []
-      : ownLegalActions.length === 0
-        ? [END_TURN_EDGE]
-        : [...ownLegalActions.map((action) => legalActionIdentity(action))].sort(compareEdgeKey)
-    const edges = new Map<string, MctsEdge>(
-      edgeKeys.map((key) => [
-        key,
-        {
-          action:
-            key === END_TURN_EDGE
-              ? null
-              : (ownLegalActions.find((action) => legalActionIdentity(action) === key) ?? null),
-          child: null,
-        },
-      ]),
-    )
+  /** Primera visita (orden fijo) si queda alguna; si no, argmax UCT con desempate determinista. */
+  private selectRootAction(
+    stats: ReadonlyMap<string, RootCandidateStats>,
+    order: readonly string[],
+    config: MctsTeacherConfig,
+  ): string {
+    const untried = order.find((key) => stats.get(key)?.visits === 0)
+    if (untried !== undefined) return untried
 
-    return {
-      room,
-      depthPlies,
-      terminal,
-      depthCapped: false,
-      visits: 0,
-      totalUtility: 0,
-      edgeOrder: edgeKeys,
-      edges,
-    }
-  }
+    const totalVisits = order.reduce((sum, key) => sum + (stats.get(key)?.visits ?? 0), 0)
 
-  private depthCappedLeaf(room: BattleRoom, depthPlies: number): MctsNode {
-    return {
-      room,
-      depthPlies,
-      terminal: false,
-      depthCapped: true,
-      visits: 0,
-      totalUtility: 0,
-      edgeOrder: [],
-      edges: new Map(),
-    }
-  }
-
-  private select(root: MctsNode, config: MctsTeacherConfig): MctsNode[] {
-    const path: MctsNode[] = [root]
-    let current = root
-
-    for (;;) {
-      if (current.terminal || current.depthCapped) return path
-
-      const hasUntried = current.edgeOrder.some((key) => current.edges.get(key)?.child === null)
-      if (hasUntried) return path
-
-      let best: MctsNode | null = null
-      let bestScore = -Infinity
-      let bestKey = ''
-      for (const key of current.edgeOrder) {
-        const child = current.edges.get(key)?.child
-        if (child === null || child === undefined) continue
-        const score = uctScore(child, current.visits, config.explorationConstant)
-        if (score > bestScore || (score === bestScore && compareEdgeKey(key, bestKey) < 0)) {
-          best = child
-          bestScore = score
-          bestKey = key
-        }
+    let bestKey = ''
+    let bestScore = -Infinity
+    for (const key of order) {
+      const candidate = stats.get(key)
+      if (candidate === undefined) continue
+      const score = uctScore(candidate, totalVisits, config.explorationConstant)
+      if (score > bestScore || (score === bestScore && compareEdgeKey(key, bestKey) < 0)) {
+        bestKey = key
+        bestScore = score
       }
-
-      if (best === null) return path
-      path.push(best)
-      current = best
     }
+
+    return bestKey
   }
 
-  private async expand(
-    parent: MctsNode,
-    edge: MctsEdge,
-    rootActor: CombatantKey,
-    config: MctsTeacherConfig,
-    sequence: RandomSequencePort,
-    commandNamespace: string,
-    plyId: { value: number },
-  ): Promise<MctsNode> {
-    const parentEntry = parent.room.battle?.currentEntry
-    if (parentEntry === undefined) {
-      throw new InvalidMctsConfigError('expansion sobre un nodo sin batalla activa')
-    }
-    const mover: CombatantKey = { teamLabel: parentEntry.teamLabel, seat: parentEntry.seat }
-    const commandId = `${commandNamespace}:${String(plyId.value)}`
-    plyId.value += 1
-
-    const step =
-      edge.action === null
-        ? await this.simulation.applyEndTurn(parent.room, commandId)
-        : await this.simulation.applyAction(parent.room, mover, edge.action, commandId, sequence)
-
-    return this.materializeUntilRootTurn(
-      step.room,
-      parent.depthPlies + 1,
-      step.finished,
-      rootActor,
-      config,
-      sequence,
-      commandNamespace,
-      plyId,
-    )
-  }
-
-  private async materializeUntilRootTurn(
+  /**
+   * Aplica `firstAction` FRESCA (con la secuencia de ESTE rollout) y continua
+   * el resto de la trayectoria -- ambos lados, cuantos plies hagan falta --
+   * via la politica de rollout fija, hasta terminal o `maxDepthPlies`.
+   *
+   * Tambien sigue el Poder del actor raiz PLY A PLY, EMPEZANDO en
+   * `initialPower` (el de la sala raiz, el mismo para todos los rollouts):
+   * cada vez que el actor raiz protagoniza un evento con `power.after`
+   * (habilidad o epica), el seguimiento se actualiza a ese valor; cualquier
+   * otro ply (ataque basico, turno del rival, `END_TURN`) lo deja intacto.
+   * Es el UNICO dato fiable del Poder del actor raiz si la hoja final resulta
+   * terminal (ver cabecera de la clase).
+   */
+  private async simulateTrajectory(
     room: BattleRoom,
-    depthPlies: number,
-    alreadyFinished: boolean,
     rootActor: CombatantKey,
+    firstAction: LegalAction,
+    initialPower: BattleUtilityActorVitals['power'],
     config: MctsTeacherConfig,
     sequence: RandomSequencePort,
     commandNamespace: string,
-    plyId: { value: number },
-  ): Promise<MctsNode> {
-    let current = room
-    let depth = depthPlies
-    let finished = alreadyFinished
+  ): Promise<{
+    room: BattleRoom
+    terminal: boolean
+    rootActorPower: BattleUtilityActorVitals['power']
+  }> {
+    const plyId = { value: 0 }
+    const firstCommandId = `${commandNamespace}:0`
+    plyId.value = 1
 
-    while (!finished && depth < config.maxDepthPlies) {
-      const currentEntry = current.battle?.currentEntry
-      if (currentEntry === undefined || currentEntry.teamLabel === rootActor.teamLabel) break
+    const first = await this.simulation.applyAction(
+      room,
+      rootActor,
+      firstAction,
+      firstCommandId,
+      sequence,
+    )
+
+    let current = first.room
+    let terminal = first.finished
+    let depth = 1
+    let rootActorPower = this.trackRootPower(initialPower, rootActor, rootActor, first.event)
+
+    while (!terminal && depth < config.maxDepthPlies) {
       const commandId = `${commandNamespace}:${String(plyId.value)}`
       plyId.value += 1
       const step = await this.advanceOnePly(current, commandId, sequence)
+      rootActorPower = this.trackRootPower(rootActorPower, rootActor, step.actor, step.event)
       current = step.room
-      finished = step.finished
+      terminal = step.finished
       depth += 1
     }
 
-    if (finished) return this.makeNode(current, depth, [])
-    if (depth >= config.maxDepthPlies) return this.depthCappedLeaf(current, depth)
+    return { room: current, terminal, rootActorPower }
+  }
 
-    const legalActionsHere = this.legalActions.generateAvailable(current)
-    return this.makeNode(current, depth, legalActionsHere)
+  private trackRootPower(
+    current: BattleUtilityActorVitals['power'],
+    rootActor: CombatantKey,
+    mover: CombatantKey,
+    event: BattleEvent,
+  ): BattleUtilityActorVitals['power'] {
+    if (current === null || !sameCombatant(mover, rootActor)) return current
+    const after = powerAfterFromEvent(event)
+    return after === null ? current : { current: after, max: current.max }
   }
 
   /** Resuelve UN ply (de quien sea el turno vigente) con la politica de rollout fija. */
@@ -374,46 +341,24 @@ export class MctsSearch {
     room: BattleRoom,
     commandId: string,
     sequence: RandomSequencePort,
-  ): Promise<{ room: BattleRoom; finished: boolean }> {
+  ): Promise<{ room: BattleRoom; finished: boolean; actor: CombatantKey; event: BattleEvent }> {
     const currentEntry = room.battle?.currentEntry
     if (currentEntry === undefined) {
       throw new InvalidMctsConfigError('avance de ply sin batalla activa')
     }
+    const mover: CombatantKey = { teamLabel: currentEntry.teamLabel, seat: currentEntry.seat }
 
     const legalActionsHere = this.legalActions.generateAvailable(room)
     if (legalActionsHere.length === 0) {
-      return this.simulation.applyEndTurn(room, commandId)
+      const step = await this.simulation.applyEndTurn(room, commandId)
+      return { ...step, actor: mover }
     }
 
     const state = this.stateAssembler.assemble(room)
     const intent = await this.rolloutPolicy.decide(state, legalActionsHere)
     const action = resolveLegalAction(intent, legalActionsHere)
-    const mover: CombatantKey = { teamLabel: currentEntry.teamLabel, seat: currentEntry.seat }
-    return this.simulation.applyAction(room, mover, action, commandId, sequence)
-  }
-
-  /** Continua jugando (TODOS los movimientos via la politica de rollout) hasta terminal o tope. */
-  private async rollout(
-    node: MctsNode,
-    config: MctsTeacherConfig,
-    sequence: RandomSequencePort,
-    commandNamespace: string,
-    plyId: { value: number },
-  ): Promise<{ room: BattleRoom; terminal: boolean }> {
-    let current = node.room
-    let depth = node.depthPlies
-    let terminal = node.terminal
-
-    while (!terminal && depth < config.maxDepthPlies) {
-      const commandId = `${commandNamespace}:${String(plyId.value)}`
-      plyId.value += 1
-      const step = await this.advanceOnePly(current, commandId, sequence)
-      current = step.room
-      terminal = step.finished
-      depth += 1
-    }
-
-    return { room: current, terminal }
+    const step = await this.simulation.applyAction(room, mover, action, commandId, sequence)
+    return { ...step, actor: mover }
   }
 
   /**
@@ -422,8 +367,19 @@ export class MctsSearch {
    * empate (`winnerTeamLabel: null` en una sala YA `FINISHED`) reusa el mismo
    * valor neutral que "aun no terminal": ninguno de los dos favorece o
    * penaliza al actor raiz (decision v1, ver `docs/en-036-mcts-teacher.md`).
+   *
+   * P (§12 + fix del bug #3 de la revision de #80): se usa SIEMPRE
+   * `rootActorPower` (el seguimiento ply a ply de `simulateTrajectory`), NUNCA
+   * el Poder leido directamente de `room`: en una hoja terminal `room` ya paso
+   * por `restoreAllPower()` y mostraria Poder maximo sin importar cuanto se
+   * gasto de verdad.
    */
-  private evaluate(room: BattleRoom, rootActor: CombatantKey, terminal: boolean): number {
+  private evaluate(
+    room: BattleRoom,
+    rootActor: CombatantKey,
+    terminal: boolean,
+    rootActorPower: BattleUtilityActorVitals['power'],
+  ): number {
     let outcome: BattleUtilityOutcome
     if (!terminal) {
       outcome = 'NON_TERMINAL'
@@ -433,31 +389,30 @@ export class MctsSearch {
     }
 
     const { actor, enemies } = extractUtilityVitals(room, rootActor)
-    return evaluateBattleUtility(outcome, actor, enemies).utility
-  }
-
-  private backpropagate(path: readonly MctsNode[], utility: number): void {
-    for (const node of path) {
-      node.visits += 1
-      node.totalUtility += utility
-    }
+    const actorForEvaluation = { ...actor, power: rootActorPower }
+    return evaluateBattleUtility(outcome, actorForEvaluation, enemies).utility
   }
 
   private buildResult(
-    root: MctsNode,
+    stats: ReadonlyMap<string, RootCandidateStats>,
+    order: readonly string[],
     config: MctsTeacherConfig,
     simulationSeed: number,
   ): MctsTeacherResult {
-    const candidates: MctsCandidateResult[] = root.edgeOrder
+    const candidates: MctsCandidateResult[] = order
       .map((key) => {
-        const edge = root.edges.get(key)
-        if (edge?.action == null) {
-          throw new InvalidMctsConfigError('el nodo raiz no puede tener una arista END_TURN')
+        const candidate = stats.get(key)
+        if (candidate === undefined) {
+          throw new InvalidMctsConfigError('candidata ausente al construir el resultado')
         }
-        const action = edge.action
-        const visits = edge.child?.visits ?? 0
-        const meanUtility = visits === 0 ? 0 : (edge.child?.totalUtility ?? 0) / visits
-        return { action, actionIdentity: key, visits, meanUtility, probability: 0 }
+        const meanUtility = candidate.visits === 0 ? 0 : candidate.totalUtility / candidate.visits
+        return {
+          action: candidate.action,
+          actionIdentity: key,
+          visits: candidate.visits,
+          meanUtility,
+          probability: 0,
+        }
       })
       .sort(
         (left, right) =>
@@ -473,8 +428,9 @@ export class MctsSearch {
     )
 
     const [best] = withProbability
-    if (best === undefined)
+    if (best === undefined) {
       throw new InvalidMctsConfigError('la busqueda no genero ningun candidato')
+    }
 
     return Object.freeze({
       config,

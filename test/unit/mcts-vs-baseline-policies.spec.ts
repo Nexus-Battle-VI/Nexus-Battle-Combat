@@ -18,13 +18,13 @@ import { clock } from '../fixtures/battle'
  * basica entre el teacher MCTS y los dos "pisos" ya existentes (el fallback
  * productivo `RuleBasedPolicy` y el piso experimental `RandomPolicy` de
  * EN-035.3). No afirma que MCTS "juegue mejor" (séria un resultado
- * estadistico, no una aserción determinista) -- solo documenta la relacion
- * estructural: el espacio de candidatos que MCTS explora es EXACTAMENTE el
- * mismo que consultarian esos pisos, y la accion de `RuleBasedPolicy` (la
- * primera legal, determinista) siempre aparece entre los candidatos de MCTS.
+ * estadistico, no una aserción determinista) -- reporta, para el MISMO
+ * estado, que decision tomaria cada politica y que utilidad le asigna el
+ * teacher a esa MISMA decision (no solo que vean el mismo espacio de
+ * acciones, ampliacion pedida en la revision de PR#80).
  */
 describe('MctsSearch vs. RuleBasedPolicy/RandomPolicy (comparacion basica, EN-036.1)', () => {
-  it('el conjunto de candidatos de MCTS coincide con el espacio que ven RuleBasedPolicy/RandomPolicy, y la eleccion de RuleBasedPolicy siempre esta entre ellos', async () => {
+  it('reporta la decision y la utilidad del teacher para RuleBasedPolicy y RandomPolicy sobre el mismo estado', async () => {
     const room = battleWithSkills()
     const legalActionGenerator = new LegalActionGenerator()
     const legalActions = legalActionGenerator.generateAvailable(room)
@@ -55,13 +55,32 @@ describe('MctsSearch vs. RuleBasedPolicy/RandomPolicy (comparacion basica, EN-03
     // ni deja fuera ninguna accion que RuleBasedPolicy/RandomPolicy podrian elegir.
     expect(mctsCandidateIdentities).toEqual(legalIdentities)
 
-    // RuleBasedPolicy (el piso productivo real) siempre es una de las acciones
-    // que MCTS evaluo -- nunca algo fuera de su alcance.
-    expect(mctsCandidateIdentities.has(legalActionIdentity(ruleBasedChoice))).toBe(true)
-    // Lo mismo para RandomPolicy (el piso experimental de EN-035.3).
-    expect(mctsCandidateIdentities.has(legalActionIdentity(randomChoice))).toBe(true)
+    // Para CADA piso, el teacher tiene una opinion explicita (visits/meanUtility)
+    // sobre la MISMA decision que ese piso tomaria -- no solo "la vio", sino que
+    // la evaluo con rollouts reales y puede compararla con su propia eleccion.
+    const ruleBasedCandidate = teacherResult.candidates.find(
+      (c) => c.actionIdentity === legalActionIdentity(ruleBasedChoice),
+    )
+    const randomCandidate = teacherResult.candidates.find(
+      (c) => c.actionIdentity === legalActionIdentity(randomChoice),
+    )
+    const selectedCandidate = teacherResult.candidates.find(
+      (c) => c.actionIdentity === legalActionIdentity(teacherResult.selectedAction),
+    )
 
-    // La accion seleccionada por el teacher es, por construccion, una candidata real.
-    expect(legalIdentities.has(legalActionIdentity(teacherResult.selectedAction))).toBe(true)
+    expect(ruleBasedCandidate).toBeDefined()
+    expect(randomCandidate).toBeDefined()
+    expect(selectedCandidate).toBeDefined()
+
+    for (const candidate of [ruleBasedCandidate, randomCandidate, selectedCandidate]) {
+      expect(candidate?.visits).toBeGreaterThan(0)
+      expect(candidate?.meanUtility).toBeGreaterThanOrEqual(0)
+      expect(candidate?.meanUtility).toBeLessThanOrEqual(1)
+    }
+
+    // La accion que el teacher selecciona es la de MAS visitas (desempate
+    // determinista): nunca por debajo de las demas en ese mismo criterio.
+    const maxVisits = Math.max(...teacherResult.candidates.map((c) => c.visits))
+    expect(selectedCandidate?.visits).toBe(maxVisits)
   })
 })

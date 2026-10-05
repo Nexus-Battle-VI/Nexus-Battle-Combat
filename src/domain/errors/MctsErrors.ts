@@ -32,21 +32,3 @@ export class SimulationTransitionError extends DomainError {
     this.name = 'SimulationTransitionError'
   }
 }
-
-/**
- * `MctsPolicy.decide(state, legalActions)` existe solo para cumplir
- * `AiDecisionPort` por tipo: `BattleDecisionState` (el contrato de
- * `decide`) no alcanza para reconstruir una sala simulable fielmente (no
- * lleva snapshot, eventos ni cooldowns internos no expuestos). MCTS SIEMPRE
- * necesita el `BattleRoom` real, que solo `MctsPolicy.teach()` recibe. Esto
- * es deliberado (Management Task #565, auditoria previa, hallazgo A): nunca
- * se aproxima una busqueda con datos insuficientes.
- */
-export class MctsRoomContextRequiredError extends DomainError {
-  constructor() {
-    super(
-      'MctsPolicy.decide() no puede operar solo con BattleDecisionState: use MctsPolicy.teach(room, simulationSeed), que recibe el BattleRoom real.',
-    )
-    this.name = 'MctsRoomContextRequiredError'
-  }
-}
