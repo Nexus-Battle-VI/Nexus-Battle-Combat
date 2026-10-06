@@ -32,3 +32,22 @@ export class SimulationTransitionError extends DomainError {
     this.name = 'SimulationTransitionError'
   }
 }
+
+/**
+ * Existen acciones legales (Combat las permitiria), pero NINGUNA sobrevive
+ * `filterStrategicCandidates`/la interseccion con la rotacion de Mision: p.
+ * ej. un sanador cuya unica accion es una curacion y todos sus receptores ya
+ * estan por encima del umbral de la regla de salud (EN-036 #555). Nunca se
+ * reintroducen esas candidatas "desperdiciadas" solo para que el teacher
+ * tenga algo que etiquetar -- eso violaria la regla en vez de respetarla.
+ * Distinto de `NoLegalDecisionActionsError`: aqui SI hay acciones legales,
+ * ninguna es, con certeza estructural, una candidata ESTRATEGICA.
+ */
+export class NoStrategicMctsCandidatesError extends DomainError {
+  constructor() {
+    super(
+      'Hay acciones legales, pero ninguna es una candidata estrategica para el teacher MCTS (p. ej. las unicas opciones son curaciones ya innecesarias).',
+    )
+    this.name = 'NoStrategicMctsCandidatesError'
+  }
+}

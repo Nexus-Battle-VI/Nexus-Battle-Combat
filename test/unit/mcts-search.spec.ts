@@ -6,14 +6,27 @@ import {
   DecisionStateUnavailableError,
   NoLegalDecisionActionsError,
 } from '../../src/domain/errors/DecisionContractErrors'
-import { InvalidMctsConfigError } from '../../src/domain/errors/MctsErrors'
+import {
+  InvalidMctsConfigError,
+  NoStrategicMctsCandidatesError,
+} from '../../src/domain/errors/MctsErrors'
 import { InMemoryMctsSimulationAdapter } from '../../src/adapters/outbound/system/InMemoryMctsSimulationAdapter'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../src/adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
 import { CdfUniformIndexMapper } from '../../src/adapters/outbound/system/CdfUniformIndexMapper'
 import { MctsSearch, extractUtilityVitals } from '../../src/application/services/MctsSearch'
 import { LegalActionGenerator } from '../../src/application/services/LegalActionGenerator'
+import type { MissionRotationInput } from '../../src/application/services/MissionRotationConstraint'
 import { battleWithCombat, combatProfileFixture } from '../fixtures/basic-attack'
-import { battleWithSkills, AGONY, AGONY_ID } from '../fixtures/skills'
+import {
+  battleWithSkills,
+  AGONY,
+  AGONY_ID,
+  AGONY_FIXED,
+  AGONY_FIXED_ID,
+  STORM,
+  STORM_ID,
+  LIFE_TOUCH,
+} from '../fixtures/skills'
 import { clock, preparingRoom } from '../fixtures/battle'
 
 const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
@@ -191,6 +204,102 @@ describe('MctsSearch (teacher MCTS, EN-036.1)', () => {
     // D=1-0/44=1 (enemigo a 0 de Vida). U = 0.60*1+0.15*1+0.10*0+0.15*1 = 0.90.
     // Si el bug #3 siguiera presente, P se leeria como 1 y U daria 1.00.
     expect(agonyCandidate?.meanUtility).toBeCloseTo(0.9, 10)
+  })
+
+  it('M-14: el Poder de una hoja NO terminal incluye la regeneracion de +2 al abrirse el turno propio, no solo el gasto (bug #1 de la segunda revision de PR#80)', async () => {
+    // a1: 10 de Poder, AGONY_FIXED (dano directo FIJO de 7, sin resolucion de
+    // Ataque/Defensa ni dados). Se usa la variante FIJA deliberadamente: en
+    // Combat CUALQUIER habilidad que no sea curacion/dano-directo/revivir se
+    // resuelve como un "ataque mejorado" con su propia tirada (confirmado al
+    // depurar esta prueba con STORM: aunque sus efectos son autobuffs de
+    // Ataque/Dano, `SkillEffectPolicy` los clasifica igual como `kind:
+    // 'DAMAGE'`, que exige objetivo rival y SI inflige dano real). Con
+    // AGONY_FIXED la trayectoria entera queda 100% determinista.
+    // b1: sin Ataque/Dano/habilidades -- su turno SIEMPRE resuelve por
+    // END_TURN, sin dados, asi que el unico efecto observable de su turno es
+    // abrir el de a1 de nuevo (Combatant.openOwnTurn(), +2 de Poder, HU-11).
+    const room = battleWithCombat({
+      profiles: {
+        a1: combatProfileFixture({ maxPower: 10, abilities: [AGONY_FIXED] }),
+        b1: combatProfileFixture({ attack: null, damage: null }),
+      },
+    })
+
+    const result = await search().search(
+      room,
+      { ...MCTS_TEACHER_V1_CONFIG, rollouts: 4, maxDepthPlies: 2 },
+      SEED,
+    )
+
+    const agonyFixedCandidate = result.candidates.find(
+      (c) => c.action.kind === 'ABILITY' && c.action.abilityId === AGONY_FIXED_ID,
+    )
+    expect(agonyFixedCandidate).toBeDefined()
+
+    // Ply 1 (a1 lanza Agonia fija): Poder 10 -> 7, Vida de b1 44 -> 37 (-7,
+    // fijo, sin dados). Ply 2 (b1 sin acciones, END_TURN): cierra el turno de
+    // b1 y ABRE el de a1, que regenera +2 -> Poder 9. maxDepthPlies=2 corta
+    // justo ahi, sin terminar la batalla.
+    // W=0.5 (no terminal), H=1 (a1 nunca fue atacado), P=9/10=0.9 (NO 7/10=0.7,
+    // que seria el bug: quedarse solo con el gasto sin la regeneracion),
+    // D=1-37/44=7/44 (dano fijo, sin dados: el mismo valor en todos los
+    // rollouts que exploren esta candidata).
+    const expectedUtility = 0.6 * 0.5 + 0.15 * 1 + 0.1 * 0.9 + 0.15 * (7 / 44)
+    expect(agonyFixedCandidate?.meanUtility).toBeCloseTo(expectedUtility, 10)
+  })
+
+  it('M-15: si existen acciones legales pero ninguna es candidata estrategica, rechaza con NoStrategicMctsCandidatesError (bug #2 de la segunda revision de PR#80)', async () => {
+    // Sanador 2v1: la unica accion de a1 es curar a a2, que ya esta a Vida
+    // llena -- la regla de salud de EN-036 #555 dice que esa curacion NUNCA
+    // es candidata estrategica. No hay ninguna otra opcion legal.
+    const room = battleWithCombat({
+      teamSizes: [2, 1],
+      profiles: {
+        a1: combatProfileFixture({
+          attack: null,
+          damage: null,
+          maxPower: 10,
+          abilities: [LIFE_TOUCH],
+        }),
+      },
+      health: { 'A#1': 44 },
+    })
+
+    await expect(
+      search().search(room, { ...MCTS_TEACHER_V1_CONFIG, rollouts: 4 }, SEED),
+    ).rejects.toThrow(NoStrategicMctsCandidatesError)
+  })
+
+  it('M-16: en un contexto de Mision, restringe la raiz a la interseccion con MissionRotationConstraint', async () => {
+    const room = battleWithSkills() // a1 tiene SHIELD_STRIKE/EMBATE/STORM/LOTUS/STONE_HAND + BASIC_ATTACK
+    const legalActionGenerator = new LegalActionGenerator()
+    const legalActionsAll = legalActionGenerator.generateAvailable(room)
+    expect(legalActionsAll.length).toBeGreaterThan(1) // mas de una opcion real donde elegir
+
+    // La rotacion configurada SOLO ofrece SHIELD_STRIKE: ninguna otra
+    // habilidad ni el ataque basico deberian sobrevivir a la interseccion.
+    const rotationInput: MissionRotationInput = {
+      rotations: [{ priority: 'HIGH', steps: [{ kind: 'ABILITY', abilityId: STORM_ID }] }],
+      cursors: new Map(),
+      abilities: new Map([[STORM_ID, STORM]]),
+      cooldowns: new Map(),
+      power: 10,
+      health: 44,
+      maxHealth: 44,
+      enemyTarget: { scope: 'COMBATANT', combatant: { teamLabel: 'B', seat: 0 } },
+    }
+
+    const result = await search().search(
+      room,
+      { ...MCTS_TEACHER_V1_CONFIG, rollouts: 8 },
+      SEED,
+      rotationInput,
+    )
+
+    expect(result.candidates).toHaveLength(1)
+    expect(result.candidates[0]?.action).toEqual(
+      expect.objectContaining({ kind: 'ABILITY', abilityId: STORM_ID }),
+    )
   })
 
   it('completa 128 rollouts (configuracion v1 por defecto) en un tiempo razonable', async () => {

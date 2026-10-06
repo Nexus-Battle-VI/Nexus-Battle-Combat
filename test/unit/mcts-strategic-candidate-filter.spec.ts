@@ -102,7 +102,13 @@ describe('filterStrategicCandidates (regla de salud, EN-036 #555, fix de PR#80)'
     expect(filterStrategicCandidates(room, ROOT_ACTOR, legalActions)).toEqual(legalActions)
   })
 
-  it('si TODAS las candidatas fueran curaciones desperdiciadas, se devuelven tal cual (nunca vacio)', () => {
+  it('si TODAS las candidatas fueran curaciones desperdiciadas, el resultado queda VACIO (corregido tras la segunda revision de PR#80)', () => {
+    // La regla de salud de EN-036 #555 es categorica: si el unico receptor
+    // posible ya esta a Vida llena, esa curacion NO es una candidata
+    // estrategica, punto. Reintroducirla para que MCTS "tenga algo que
+    // explorar" violaria la regla en vez de respetarla; es responsabilidad
+    // de MctsSearch.search() decidir que hacer ante una lista vacia
+    // (NoStrategicMctsCandidatesError), no de este filtro.
     const room = battleWithCombat({
       teamSizes: [2, 1],
       profiles: { a1: combatProfileFixture({ maxPower: 10, abilities: [LIFE_TOUCH] }) },
@@ -110,6 +116,6 @@ describe('filterStrategicCandidates (regla de salud, EN-036 #555, fix de PR#80)'
     })
     const onlyHeal = [healAbilityOn(ALLY)]
 
-    expect(filterStrategicCandidates(room, ROOT_ACTOR, onlyHeal)).toEqual(onlyHeal)
+    expect(filterStrategicCandidates(room, ROOT_ACTOR, onlyHeal)).toEqual([])
   })
 })

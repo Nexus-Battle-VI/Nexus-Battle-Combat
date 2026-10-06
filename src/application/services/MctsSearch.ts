@@ -19,7 +19,10 @@ import {
   DecisionStateUnavailableError,
   NoLegalDecisionActionsError,
 } from '../../domain/errors/DecisionContractErrors'
-import { InvalidMctsConfigError } from '../../domain/errors/MctsErrors'
+import {
+  InvalidMctsConfigError,
+  NoStrategicMctsCandidatesError,
+} from '../../domain/errors/MctsErrors'
 import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import { RandomSeed } from '../../domain/value-objects/RandomSeed'
 import type { AiDecisionPort } from '../ports/AiDecisionPort'
@@ -29,6 +32,7 @@ import { RuleBasedPolicy } from '../policies/RuleBasedPolicy'
 import { BattleDecisionStateAssembler } from './BattleDecisionStateAssembler'
 import { LegalActionGenerator } from './LegalActionGenerator'
 import { filterStrategicCandidates } from './MctsStrategicCandidateFilter'
+import { MissionRotationConstraint, type MissionRotationInput } from './MissionRotationConstraint'
 
 /**
  * Extrae, de forma pura y SIN pasar por `BattleDecisionStateAssembler` (atado
@@ -171,6 +175,15 @@ export class MctsSearch {
     room: BattleRoom,
     config: MctsTeacherConfig,
     simulationSeed: number,
+    /**
+     * Presente SOLO en un contexto de Mision: restringe el conjunto de
+     * candidatas de la raiz a la interseccion con lo que
+     * `MissionRotationConstraint.evaluate(rotationInput)` permite, sin tocar
+     * la legalidad real de Combat (misma filosofia que
+     * `filterStrategicCandidates`). Nunca se usa durante el resto de la
+     * trayectoria (rollout fijo): solo restringe la decision de la raiz.
+     */
+    rotationInput?: MissionRotationInput,
   ): Promise<MctsTeacherResult> {
     this.validateConfig(config)
     RandomSeed.create(simulationSeed)
@@ -190,7 +203,15 @@ export class MctsSearch {
       throw new NoLegalDecisionActionsError()
     }
 
-    const strategicCandidates = filterStrategicCandidates(room, rootActor, legalActionsAll)
+    const rotationConstrained =
+      rotationInput === undefined
+        ? legalActionsAll
+        : this.intersectWithRotation(legalActionsAll, rotationInput)
+    const strategicCandidates = filterStrategicCandidates(room, rootActor, rotationConstrained)
+    if (strategicCandidates.length === 0) {
+      throw new NoStrategicMctsCandidatesError()
+    }
+
     const stats = new Map<string, RootCandidateStats>(
       strategicCandidates.map((action) => [
         legalActionIdentity(action),
@@ -198,7 +219,6 @@ export class MctsSearch {
       ]),
     )
     const order = [...stats.keys()].sort(compareEdgeKey)
-    const initialPower = extractUtilityVitals(room, rootActor).actor.power
 
     for (let i = 0; i < config.rollouts; i += 1) {
       const seed = deriveMctsRolloutSeed(simulationSeed, i)
@@ -215,7 +235,6 @@ export class MctsSearch {
         room,
         rootActor,
         chosen.action,
-        initialPower,
         config,
         sequence,
         `mcts:${String(i)}`,
@@ -241,6 +260,34 @@ export class MctsSearch {
         `explorationConstant invalido (${String(config.explorationConstant)}).`,
       )
     }
+  }
+
+  /**
+   * Interseccion por `legalActionIdentity` entre lo que Combat considera
+   * legal de verdad (`legalActionsAll`) y lo que la rotacion configurada
+   * permite ofrecer este turno (`MissionRotationConstraint.evaluate(...)`,
+   * el mismo filtro que ya usa `RuleBasedPolicy` en produccion para
+   * Misiones). Nunca llama a `.resolve(...)`: el teacher solo EVALUA
+   * candidatas, nunca "elige y compromete" el cursor de una rotacion real.
+   * Si la interseccion quedara vacia (desincronia entre el estado real de
+   * Combat y la rotacion, p. ej. un cooldown que una u otra no refleja
+   * igual) se devuelve `legalActionsAll` tal cual en vez de dejar al teacher
+   * sin nada que explorar: `MissionRotationConstraint` ya garantiza al menos
+   * un ataque basico de respaldo por diseño, asi que esto solo protege
+   * contra un desajuste real entre ambos lados, nunca sustituye la regla.
+   */
+  private intersectWithRotation(
+    legalActionsAll: readonly LegalAction[],
+    rotationInput: MissionRotationInput,
+  ): readonly LegalAction[] {
+    const allowed = new Set(
+      new MissionRotationConstraint()
+        .evaluate(rotationInput)
+        .legalActions.map((action) => legalActionIdentity(action)),
+    )
+    const intersected = legalActionsAll.filter((action) => allowed.has(legalActionIdentity(action)))
+
+    return intersected.length > 0 ? intersected : legalActionsAll
   }
 
   /** Primera visita (orden fijo) si queda alguna; si no, argmax UCT con desempate determinista. */
@@ -274,19 +321,30 @@ export class MctsSearch {
    * el resto de la trayectoria -- ambos lados, cuantos plies hagan falta --
    * via la politica de rollout fija, hasta terminal o `maxDepthPlies`.
    *
-   * Tambien sigue el Poder del actor raiz PLY A PLY, EMPEZANDO en
-   * `initialPower` (el de la sala raiz, el mismo para todos los rollouts):
-   * cada vez que el actor raiz protagoniza un evento con `power.after`
-   * (habilidad o epica), el seguimiento se actualiza a ese valor; cualquier
-   * otro ply (ataque basico, turno del rival, `END_TURN`) lo deja intacto.
-   * Es el UNICO dato fiable del Poder del actor raiz si la hoja final resulta
-   * terminal (ver cabecera de la clase).
+   * El Poder del actor raiz en la hoja final (`rootActorPower`) se calcula
+   * SEGUN si esa hoja es terminal o no (bug #1 de la segunda revision de
+   * #80, sobre la version anterior que solo seguia el gasto por evento y se
+   * perdia la regeneracion de `+2` que `BattleState.completeTurn` aplica via
+   * `Combatant.openOwnTurn()` CADA VEZ que se abre un turno, no solo cuando
+   * el actor raiz gasta Poder):
+   *
+   *  - Si NO es terminal, `current` (la sala resultante, todavia sin pasar
+   *    por `BattleRoom.finish()`) refleja YA, de verdad, tanto el gasto como
+   *    la regeneracion reales: se lee directamente de ahi.
+   *  - Si ES terminal, `current` ya paso por `restoreAllPower()` (HU-11) y
+   *    no sirve: se parte de `priorRoom` (la sala justo ANTES del ultimo
+   *    ply, que todavia no regenero ni se finalizo) y, SOLO si ese ultimo
+   *    ply lo protagonizo el actor raiz, se ajusta con `payload.power.after`
+   *    de su evento (el gasto de esa misma accion, que `priorRoom` aun no
+   *    reflejaba). Un ultimo ply del rival, o uno gratuito del actor raiz
+   *    (ataque basico), deja el Poder de `priorRoom` tal cual: nadie mas
+   *    pudo tocarlo ni regenerarlo entre medias (`finish()` corta la batalla
+   *    antes de que exista un siguiente turno que abrir).
    */
   private async simulateTrajectory(
     room: BattleRoom,
     rootActor: CombatantKey,
     firstAction: LegalAction,
-    initialPower: BattleUtilityActorVitals['power'],
     config: MctsTeacherConfig,
     sequence: RandomSequencePort,
     commandNamespace: string,
@@ -299,6 +357,7 @@ export class MctsSearch {
     const firstCommandId = `${commandNamespace}:0`
     plyId.value = 1
 
+    let priorRoom = room
     const first = await this.simulation.applyAction(
       room,
       rootActor,
@@ -309,31 +368,40 @@ export class MctsSearch {
 
     let current = first.room
     let terminal = first.finished
+    let lastActor = rootActor
+    let lastEvent = first.event
     let depth = 1
-    let rootActorPower = this.trackRootPower(initialPower, rootActor, rootActor, first.event)
 
     while (!terminal && depth < config.maxDepthPlies) {
       const commandId = `${commandNamespace}:${String(plyId.value)}`
       plyId.value += 1
+      priorRoom = current
       const step = await this.advanceOnePly(current, commandId, sequence)
-      rootActorPower = this.trackRootPower(rootActorPower, rootActor, step.actor, step.event)
       current = step.room
       terminal = step.finished
+      lastActor = step.actor
+      lastEvent = step.event
       depth += 1
     }
+
+    const rootActorPower = terminal
+      ? this.terminalPower(priorRoom, rootActor, lastActor, lastEvent)
+      : extractUtilityVitals(current, rootActor).actor.power
 
     return { room: current, terminal, rootActorPower }
   }
 
-  private trackRootPower(
-    current: BattleUtilityActorVitals['power'],
+  /** Poder del actor raiz justo ANTES de que `priorRoom` -> `current` terminara la batalla. */
+  private terminalPower(
+    priorRoom: BattleRoom,
     rootActor: CombatantKey,
-    mover: CombatantKey,
-    event: BattleEvent,
+    finishingActor: CombatantKey,
+    finishingEvent: BattleEvent,
   ): BattleUtilityActorVitals['power'] {
-    if (current === null || !sameCombatant(mover, rootActor)) return current
-    const after = powerAfterFromEvent(event)
-    return after === null ? current : { current: after, max: current.max }
+    const priorPower = extractUtilityVitals(priorRoom, rootActor).actor.power
+    if (priorPower === null || !sameCombatant(finishingActor, rootActor)) return priorPower
+    const after = powerAfterFromEvent(finishingEvent)
+    return after === null ? priorPower : { current: after, max: priorPower.max }
   }
 
   /** Resuelve UN ply (de quien sea el turno vigente) con la politica de rollout fija. */

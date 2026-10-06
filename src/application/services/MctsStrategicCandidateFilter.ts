@@ -78,20 +78,19 @@ const isWastefulHeal = (room: BattleRoom, actor: CombatantKey, action: LegalActi
  * solo se descarta cuando TODOS sus receptores posibles ya estan por encima
  * de `HEALING_STRATEGIC_THRESHOLD` (§ "Regla de salud", EN-036 #555).
  *
- * Nunca devuelve una lista vacia si `legalActions` no lo estaba: si TODAS las
- * opciones legales fueran curaciones desperdiciadas, filtrarlas todas dejaria
- * al teacher sin nada que explorar, lo que violaria "MCTS solo expande
- * acciones legales" (CA-01 de #565) de otra forma -- se devuelven tal cual en
- * ese caso extremo en vez de vaciar la busqueda.
+ * PUEDE devolver una lista vacia (corregido tras la segunda revision de
+ * PR#80): si TODAS las opciones legales son curaciones desperdiciadas, la
+ * regla de salud dice explicitamente que NINGUNA es candidata estrategica, y
+ * reintroducirlas para que el teacher tenga "algo que explorar" violaria esa
+ * regla en vez de respetarla. `MctsSearch.search()` es quien decide que
+ * hacer con una lista vacia (`NoStrategicMctsCandidatesError`): esta funcion
+ * no inventa un candidato de respaldo.
  */
 export const filterStrategicCandidates = (
   room: BattleRoom,
   actor: CombatantKey,
   legalActions: readonly LegalAction[],
-): readonly LegalAction[] => {
-  const strategic = legalActions.filter(
+): readonly LegalAction[] =>
+  legalActions.filter(
     (action) => !(isPrimarilyHealing(room, actor, action) && isWastefulHeal(room, actor, action)),
   )
-
-  return strategic.length > 0 ? strategic : legalActions
-}

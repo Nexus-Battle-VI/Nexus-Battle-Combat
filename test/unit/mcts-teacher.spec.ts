@@ -1,6 +1,7 @@
 import { MctsTeacher } from '../../src/application/services/MctsTeacher'
 import { MCTS_TEACHER_V1_CONFIG } from '../../src/domain/decision/MctsTeacherResult'
 import type { MctsSearch } from '../../src/application/services/MctsSearch'
+import type { MissionRotationInput } from '../../src/application/services/MissionRotationConstraint'
 import { battleWithCombat } from '../fixtures/basic-attack'
 
 describe('MctsTeacher (EN-036.1, nunca productiva)', () => {
@@ -12,7 +13,7 @@ describe('MctsTeacher (EN-036.1, nunca productiva)', () => {
 
     const result = await teacher.teach(room, 42)
 
-    expect(searchMock).toHaveBeenCalledWith(room, MCTS_TEACHER_V1_CONFIG, 42)
+    expect(searchMock).toHaveBeenCalledWith(room, MCTS_TEACHER_V1_CONFIG, 42, undefined)
     expect(result).toBe(expected)
   })
 
@@ -24,6 +25,17 @@ describe('MctsTeacher (EN-036.1, nunca productiva)', () => {
 
     await teacher.teach(room, 7)
 
-    expect(searchMock).toHaveBeenCalledWith(room, customConfig, 7)
+    expect(searchMock).toHaveBeenCalledWith(room, customConfig, 7, undefined)
+  })
+
+  it('reenvia rotationInput (contexto de Mision) a MctsSearch.search sin tocarlo', async () => {
+    const room = battleWithCombat()
+    const rotationInput = { rotations: [] } as unknown as MissionRotationInput
+    const searchMock = jest.fn().mockResolvedValue({})
+    const teacher = new MctsTeacher({ search: searchMock } as unknown as MctsSearch)
+
+    await teacher.teach(room, 7, rotationInput)
+
+    expect(searchMock).toHaveBeenCalledWith(room, MCTS_TEACHER_V1_CONFIG, 7, rotationInput)
   })
 })
