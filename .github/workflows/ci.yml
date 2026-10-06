@@ -103,11 +103,19 @@ jobs:
 
       # Version de uv fijada explicitamente (#566 §73): la misma resuelta y
       # validada localmente contra Python 3.13 (ver docs/en-036-ai-dataset-pipeline.md).
+      #
+      # Instalado con el script oficial en vez de `astral-sh/setup-uv`: el
+      # allowlist de Actions de la organizacion solo permite `actions/*`,
+      # `docker/*`, `github/codeql-action/*` o acciones propias de
+      # Nexus-Battle-VI, y una accion de terceros fuera de esa lista hace que
+      # GitHub rechace el workflow ENTERO antes de programar ningun job
+      # (`startup_failure`, cero jobs, sin logs que lo expliquen).
       - name: Instalar uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: '0.9.17'
-          working-directory: ai
+        env:
+          UV_VERSION: '0.9.17'
+        run: |
+          curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Instalar dependencias (uv.lock, frozen)
         working-directory: ai
