@@ -1,0 +1,30 @@
+{
+  "counts": {
+    "battles": 4,
+    "candidates": 9,
+    "decisions": 6,
+    "testBattles": 0,
+    "testDecisions": 0,
+    "trainBattles": 3,
+    "trainDecisions": 5,
+    "validationBattles": 1,
+    "validationDecisions": 1
+  },
+  "cutoff": "2027-01-01T00:00:00Z",
+  "datasetSeed": 42,
+  "decisionStateSchemaVersion": 1,
+  "exclusions": {
+    "endTurn": 1,
+    "missingLabel": 0
+  },
+  "featureDimension": 72,
+  "featureSchemaVersion": "feature-schema-v1",
+  "inputFingerprint": "3200007f7c37bb355038b87fefe5107a45d6fe64049072b9ad6a3a9b4b403f5e",
+  "labelSchemaVersion": "teacher-label-fixture-v1",
+  "manifestVersion": "dataset-manifest-v1",
+  "outputFingerprint": "e6c1df2442e365e49bcb2fd89c69c51a30de397807467ed15abd5ecfba752b36",
+  "sourceCommit": "123e77439334fe9999f25ef00e02833881ce551c",
+  "splitStrategyVersion": "battle-hash-split-v1",
+  "teacherVersion": "mcts-teacher-v1",
+  "utilityVersion": "pve-utility-v1"
+}

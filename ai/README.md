@@ -1,0 +1,122 @@
+# nexus-combat-ai
+
+Pipeline reproducible de dataset para la IA de Combat (Management
+[EN-036.2 #566](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/566),
+hijo de [EN-036 #555](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/555)).
+
+**Offline, nunca productivo.** `ai/` no es un microservicio: no expone HTTP,
+no corre dentro del request path de Combat, y nada en el Node runtime lo
+importa. Es tooling de dataset/entrenamiento, pensado para ejecutarse a mano
+o en CI, nunca desde `ExecuteAiTurn` ni ningun handler HTTP/WS.
+
+Ver también: [`docs/en-036-ai-dataset-pipeline.md`](../docs/en-036-ai-dataset-pipeline.md)
+(el documento completo: contratos auditados, gap de teacher labels en vivo,
+`feature-schema-v1`, split, reproducibilidad).
+
+## Que hace esta Task (y que NO)
+
+Deja listo:
+
+- Entorno Python 3.13 + `uv` reproducible desde `uv.lock`.
+- Lectura de `CombatDecisionEvent` (+ `TeacherLabelRecord`, ver limitación
+  abajo) desde JSONL/fixtures o Mongo real (solo decision events).
+- `FeatureEncoder` (`feature-schema-v1`) versionado y documentado.
+- `DecisionSample` + `torch.utils.data.Dataset`/`DataLoader` con candidatos
+  de longitud variable.
+- Split determinista 80/10/10 por `battleId` (`battle-hash-split-v1`).
+- Manifiesto reproducible (`dataset-manifest-v1`) con fingerprints.
+
+**NO** entrena la MLP final, **NO** exporta ONNX, **NO** activa
+`NeuralPolicy`: eso es #567/#568.
+
+## Limitación conocida: no existe persistencia real de teacher labels
+
+Auditado contra `develop@123e774` (2026-10-06): `MctsTeacher.teach()`
+(EN-036.1, #565) nunca se invoca en producción, y no existe ningún puerto,
+repositorio, migración ni colección Mongo para `MctsTeacherResult`. La
+decisión "labels en vivo" (formalizada en `MctsTeacher.ts`) describe CÓMO
+deben generarse esos labels, pero esa pieza todavía no está construida.
+
+Por eso:
+
+- `JsonlDatasetSource` es la única fuente completa (decision events +
+  teacher labels), usada en todos los tests y en los fixtures de
+  `tests/fixtures/`.
+- `MongoCombatDatasetSource` lee `CombatDecisionEvent` REALES de
+  `combat-decision-events` (solo lectura), pero `teacher_labels()` levanta
+  `TeacherLabelSourceNotAvailableError` de forma explícita: no inventa datos
+  ni devuelve una lista vacía silenciosa.
+- `teacher-label-fixture-v1` (en `contracts/teacher_label.py`) es el
+  envoltorio de unión que **este paquete** define para sus fixtures/tests,
+  **no** un contrato oficial de Combat todavía.
+
+## Instalación
+
+```bash
+cd ai
+uv sync --frozen
+```
+
+Requiere Python 3.13 (`.python-version` lo fija) y `uv` (versión usada en
+CI: `0.9.17`). PyTorch se resuelve CPU-only desde el índice oficial
+`https://download.pytorch.org/whl/cpu` (ver `pyproject.toml`,
+`[tool.uv.sources]`).
+
+## Pruebas
+
+```bash
+uv run pytest -q
+uv run ruff check .
+uv run ruff format --check .
+```
+
+## Construir el dataset de fixtures
+
+```bash
+uv run nexus-combat-dataset build \
+  --source jsonl \
+  --events tests/fixtures/decision-events.jsonl \
+  --labels tests/fixtures/teacher-labels.jsonl \
+  --output ./out \
+  --cutoff 2027-01-01T00:00:00Z \
+  --source-commit "$(git -C .. rev-parse HEAD)" \
+  --seed 42
+```
+
+Produce `out/{train,validation,test}.jsonl` + `out/manifest.json`. Correr el
+mismo comando dos veces (en directorios distintos) produce los MISMOS cuatro
+archivos byte a byte (`tests/test_manifest.py::test_reproducibility_byte_for_byte`
+lo prueba).
+
+Contra Mongo real (solo decision events; sin `--labels` no hay forma de
+pedir teacher labels reales todavía -- ver limitación arriba):
+
+```bash
+MONGODB_URI="mongodb://localhost:27017/combat" \
+uv run nexus-combat-dataset build \
+  --source mongo \
+  --output ./out \
+  --cutoff 2027-01-01T00:00:00Z \
+  --seed 42
+```
+
+## Regenerar los fixtures/golden vectors
+
+Los fixtures de `tests/fixtures/*.jsonl` y los golden vectors de
+`tests/fixtures/golden-*.json` se generan con:
+
+```bash
+uv run python scripts/generate_fixtures.py
+uv run python scripts/generate_golden_vectors.py
+```
+
+Ambos scripts reutilizan los contratos reales (`contracts/`, `features/`)
+para garantizar que cada fixture es válido -- nunca se escriben a mano.
+
+## Para #568 (NeuralPolicy en TypeScript/Node)
+
+`feature-schema-v1` (`src/nexus_combat_ai/features/schema.py`) es el
+contrato que `#568` deberá reproducir EXACTAMENTE en TypeScript:
+`feature_schema_manifest()` expone la definición completa (orden, nombre,
+normalización, vocabularios), y `tests/fixtures/golden-*.json` fija vectores
+exactos para verificar paridad Python ↔ TypeScript.

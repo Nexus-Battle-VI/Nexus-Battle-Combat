@@ -38,3 +38,15 @@ Thumbs.db
 logs/
 *.log
 npm-debug.log*
+
+# ai/ (EN-036.2, Python/uv): entorno y artefactos locales, nunca dataset/modelo real
+ai/.venv/
+ai/.pytest_cache/
+ai/.ruff_cache/
+ai/out/
+ai/data/raw/
+ai/data/processed/
+ai/artifacts/
+ai/**/__pycache__/
+*.pt
+*.onnx
