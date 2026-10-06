@@ -25,6 +25,10 @@ import { ResolveAttack } from './ResolveAttack'
 import type { PersistVersusDropDecision } from '../services/PersistVersusDropDecision'
 import type { CombatDecisionRecorder } from '../services/CombatDecisionRecorder'
 import type { CombatDecisionEvent } from '../../domain/decision/CombatDecisionEvent'
+import type {
+  LiveMctsTeacherLabeler,
+  PendingMctsTeacherLabel,
+} from '../services/LiveMctsTeacherLabeler'
 
 export interface ExecuteBasicAttackInput {
   readonly roomId: string
@@ -128,6 +132,13 @@ export class ExecuteBasicAttack {
     private readonly resolveAttack: ResolveAttack = new ResolveAttack(),
     private readonly versusDrop: PersistVersusDropDecision | null = null,
     private readonly decisionRecorder: CombatDecisionRecorder | null = null,
+    /**
+     * EN-036.2 (#566, correccion de alcance sobre PR#81): genera el teacher
+     * label MCTS en vivo. Fail-open y nunca esperado en el camino de
+     * respuesta (ver `LiveMctsTeacherLabeler`); `null` lo desactiva (p. ej.
+     * en tests que no necesitan construirlo).
+     */
+    private readonly liveTeacherLabeler: LiveMctsTeacherLabeler | null = null,
   ) {}
 
   execute(input: ExecuteBasicAttackInput): Promise<ExecuteBasicAttackResult> {
@@ -170,8 +181,9 @@ export class ExecuteBasicAttack {
       kind: 'BASIC_ATTACK',
       target: { scope: 'COMBATANT', combatant: input.target },
     })
+    const pendingLabel = this.liveTeacherLabeler?.prepare(room, decision) ?? null
 
-    return this.resolveAndPersist(room, plan, input, decision)
+    return this.resolveAndPersist(room, plan, input, decision, pendingLabel)
   }
 
   /**
@@ -192,7 +204,7 @@ export class ExecuteBasicAttack {
 
     const plan = room.planBasicAttackForActor(input.actor, input.target)
 
-    return this.resolveAndPersist(room, plan, input, null)
+    return this.resolveAndPersist(room, plan, input, null, null)
   }
 
   private async resolveAndPersist(
@@ -203,6 +215,7 @@ export class ExecuteBasicAttack {
       'roomId' | 'commandId' | 'target' | 'degradedFrom'
     >,
     decision: CombatDecisionEvent | null | undefined,
+    pendingLabel: PendingMctsTeacherLabel | null,
   ): Promise<ExecuteBasicAttackResult> {
     // A partir de aqui se consume la secuencia: todo lo que puede fallar por el perfil
     // ya se comprobo (planBasicAttack) o se comprueba en `prepare`, que no sortea.
@@ -230,7 +243,10 @@ export class ExecuteBasicAttack {
         throw new DomainError('El ataque se guardo sin su evento.')
       }
 
-      if (decision !== undefined && decision !== null) await this.decisionRecorder?.record(decision)
+      if (decision !== undefined && decision !== null) {
+        await this.decisionRecorder?.record(decision)
+        void this.liveTeacherLabeler?.persist(pendingLabel)
+      }
 
       return {
         event,

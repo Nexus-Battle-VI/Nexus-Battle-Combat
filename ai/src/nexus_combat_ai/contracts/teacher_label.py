@@ -1,23 +1,26 @@
-"""Espejo Python de `src/domain/decision/MctsTeacherResult.ts` (EN-036.1, #565),
-mas el envoltorio de union con la decision real que #566 necesita para poder
-leer un teacher label junto a su `CombatDecisionEvent`.
+"""Espejo Python del contrato OFICIAL de teacher label en vivo (EN-036.1 #565 +
+EN-036.2 #566, correccion de alcance sobre PR#81):
 
-GAP AUDITADO (ver tambien `docs/en-036-ai-dataset-pipeline.md`): a 2026-10-06,
-`develop@123e774` NO tiene ningun wiring de produccion que llame a
-`MctsTeacher.teach()` ni ninguna persistencia (puerto, repositorio, migracion
-o coleccion Mongo) para su resultado. `MctsTeacherResult` (TypeScript) tampoco
-declara ningun campo de union (`eventId`/`battleId`/`decisionSequence`): la
-decision "labels en vivo" formalizada en `MctsTeacher.ts` describe COMO deben
-generarse esos labels en el futuro, pero no existe todavia el codigo que lo
-haga.
+- `src/domain/decision/MctsTeacherResult.ts` (`MctsTeacherResult`, ya existia).
+- `src/domain/decision/MctsTeacherLabel.ts` (`MctsTeacherLabel`, el envoltorio
+  de union oficial: `schemaVersion`, `eventId`, `battleId`, `decisionSequence`,
+  `origin`, `mode`, `result`, `generatedAt`).
 
-Por tanto `TEACHER_LABEL_FIXTURE_SCHEMA_VERSION` ("teacher-label-fixture-v1")
-NO es un contrato oficial de Combat: es el envoltorio de union que este
-paquete define para sus propios fixtures/tests mientras esa pieza no exista.
-Reutiliza exactamente los mismos join keys que `CombatDecisionEvent` ya
-expone (`eventId`, o `battleId` + `decisionSequence`) para que, el dia que la
-persistencia real exista, el unico cambio esperado en este modulo sea
-reemplazar el origen de los datos -- nunca el join ni el feature schema.
+Auditado en `develop` tras la correccion de alcance: `MctsTeacher.teach()`
+ahora SI se invoca en produccion (`LiveMctsTeacherLabeler`, wired en
+`ExecuteBasicAttack`/`UseSkill`/`UseEpic`/`ExecuteAiTurn`), y el resultado se
+persiste append-only en la coleccion Mongo `mcts-teacher-labels`
+(migracion `025-mcts-teacher-labels.ts`), ligado por `eventId` al
+`CombatDecisionEvent` que lo origino. `MongoCombatDatasetSource.teacher_labels()`
+lee esa coleccion real (ver `dataset/source.py`).
+
+**Limitacion que sigue vigente**: el origen `MISSION` nunca produce un
+`MctsTeacherLabel`, porque `RunMissionSimulation` resuelve la mision ENTERA
+con `MissionSimulation.ts` (motor aproximado propio, sin `BattleRoom`) antes
+de preparar su `CombatDecisionEvent` retroactivamente -- no existe ninguna
+sala PRE-ACCION que pasarle a `MctsTeacher.teach()` con fidelidad. El dataset
+contabiliza esas decisiones como `missingLabel`, nunca como un error (ver
+`dataset/join.py`).
 """
 
 from __future__ import annotations
@@ -36,7 +39,10 @@ MCTS_TEACHER_V1_VERSION = "mcts-teacher-v1"
 UTILITY_VERSION_PVE_V1 = "pve-utility-v1"
 MCTS_TEACHER_STATE_SCHEMA_VERSION = 1
 
-TEACHER_LABEL_FIXTURE_SCHEMA_VERSION = "teacher-label-fixture-v1"
+MCTS_TEACHER_LABEL_SCHEMA_VERSION = 1
+"""`MCTS_TEACHER_LABEL_SCHEMA_VERSION` (`MctsTeacherLabel.ts`): entero, NO el
+string `"teacher-label-fixture-v1"` que usaba la version anterior (fixture-only)
+de este modulo, previa a la correccion de alcance sobre PR#81."""
 
 _PROBABILITY_SUM_TOLERANCE = 1e-6
 
@@ -173,30 +179,46 @@ class MctsTeacherResult:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class TeacherLabelRecord:
-    """Envoltorio de union FIXTURE-ONLY (ver docstring del modulo): liga un
-    `MctsTeacherResult` a la decision real mediante `event_id` (preferido) o
-    `battle_id` + `decision_sequence`."""
+_ORIGINS = frozenset(("ONLINE", "MISSION", "TOURNAMENT"))
+_MODES = frozenset(("PVP", "PVE"))
 
-    schema_version: str
+
+@dataclass(frozen=True, slots=True)
+class MctsTeacherLabel:
+    """`MctsTeacherLabel` (`MctsTeacherLabel.ts`, contrato OFICIAL): liga un
+    `MctsTeacherResult` a la decision real mediante `event_id` (join key
+    primaria), con `battle_id`/`decision_sequence` redundantes para validar
+    la relacion sin decodificar el `event_id` opaco."""
+
+    schema_version: int
     event_id: str
     battle_id: str
     decision_sequence: int
+    origin: str
+    mode: str
     result: MctsTeacherResult
+    generated_at: str
 
     @staticmethod
-    def from_json(obj: dict[str, Any], path: str = "teacherLabel") -> TeacherLabelRecord:
-        schema_version = _str_field(obj, "schemaVersion", path)
-        if schema_version != TEACHER_LABEL_FIXTURE_SCHEMA_VERSION:
+    def from_json(obj: dict[str, Any], path: str = "mctsTeacherLabel") -> MctsTeacherLabel:
+        schema_version = _int_field(obj, "schemaVersion", path)
+        if schema_version != MCTS_TEACHER_LABEL_SCHEMA_VERSION:
             raise IncompatibleSchemaError(
-                f'"{path}.schemaVersion" = "{schema_version}" no soportada '
-                f'(solo se soporta "{TEACHER_LABEL_FIXTURE_SCHEMA_VERSION}").'
+                f'"{path}.schemaVersion" = {schema_version} no soportada '
+                f"(solo se soporta {MCTS_TEACHER_LABEL_SCHEMA_VERSION})."
             )
-        return TeacherLabelRecord(
+        origin = _str_field(obj, "origin", path)
+        _require(origin in _ORIGINS, f'"{path}.origin" = "{origin}" no es un valor reconocido.')
+        mode = _str_field(obj, "mode", path)
+        _require(mode in _MODES, f'"{path}.mode" = "{mode}" no es un valor reconocido.')
+
+        return MctsTeacherLabel(
             schema_version=schema_version,
             event_id=_str_field(obj, "eventId", path),
             battle_id=_str_field(obj, "battleId", path),
             decision_sequence=_int_field(obj, "decisionSequence", path),
+            origin=origin,
+            mode=mode,
             result=MctsTeacherResult.from_json(_field(obj, "result", path), f"{path}.result"),
+            generated_at=_str_field(obj, "generatedAt", path),
         )

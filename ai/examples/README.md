@@ -17,6 +17,6 @@ uv run nexus-combat-dataset build \
   --labels tests/fixtures/teacher-labels.jsonl \
   --output /tmp/manifest-example-gen \
   --cutoff 2027-01-01T00:00:00Z \
-  --source-commit 123e77439334fe9999f25ef00e02833881ce551c \
+  --source-commit 8e7f4faa6c3f69c8afebd4a4de5e42e49fc771c0 \
   --seed 42
 ```

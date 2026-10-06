@@ -17,52 +17,55 @@ que transforma `CombatDecisionEvent` + teacher labels MCTS en un dataset
 `NeuralPolicy`**: eso es #567/#568. Termina justo antes: dataset listo +
 tensores listos + `DataLoader` listo.
 
-## 2. Auditoría previa (obligatoria antes de diseñar Python)
+## 2. Auditoría previa y wiring real (correccion de alcance sobre PR#81)
 
-Auditado contra `develop@123e774` (2026-10-06), commit en el que se mergeó
-EN-036.1 (#565, PR
-[Combat#80](https://github.com/Nexus-Battle-VI/Nexus-Battle-Combat/pull/80)):
+Auditado contra `develop@123e774` (2026-10-06, EN-036.1/#565 ya mergeada):
+`MctsTeacher.teach()` NO se invocaba en producción y no existía persistencia
+para `MctsTeacherResult`. Esa auditoría se reportó al usuario (sección "si
+falta una relación necesaria... detente y reporta el contrato faltante" del
+encargo), que decidió explícitamente: implementar el wiring real AHORA,
+dentro del mismo PR#81, en vez de abrir una Task separada.
 
-| Pregunta                                   | Respuesta real                                                                                                                                          |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ¿Dónde se genera el teacher label en vivo? | **En ningún sitio todavía.** `MctsTeacher.teach()` no se invoca desde `ExecuteAiTurn`, `RunMissionSimulation` ni ningún otro caso de uso de producción. |
-| ¿Dónde se persiste?                        | No existe puerto/repositorio/migración/colección Mongo para `MctsTeacherResult`.                                                                        |
-| ¿Es append-only?                           | N/A: no hay persistencia que auditar.                                                                                                                   |
-| Identificador estable del label            | No existe: `MctsTeacherResult` (TS) no declara `eventId`/`battleId`/`decisionSequence`.                                                                 |
-| Relación con `CombatDecisionEvent`         | Solo documentada como intención ("labels en vivo", docstring de `MctsTeacher.ts`), nunca implementada.                                                  |
+**Estado actual (post-corrección):**
 
-`CombatDecisionEvent` **sí** es real y se persiste de verdad:
+| Pregunta                                   | Respuesta real                                                                                                                                                             |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ¿Dónde se genera el teacher label en vivo? | `LiveMctsTeacherLabeler` (`src/application/services/LiveMctsTeacherLabeler.ts`), wired en `ExecuteBasicAttack`/`UseSkill`/`UseEpic`/`ExecuteAiTurn`.                       |
+| ¿Dónde se persiste?                        | Colección Mongo `mcts-teacher-labels` (migración `025-mcts-teacher-labels.ts`), vía `MctsTeacherLabelRepositoryPort` → `MongoMctsTeacherLabelRepository`, append-only.     |
+| ¿Es append-only?                           | Sí: `_id = eventId`; mismo contenido repetido es idempotente, contenido distinto lanza `MctsTeacherLabelConflictError`.                                                    |
+| Identificador estable del label            | `MctsTeacherLabel.eventId` (contrato oficial, `src/domain/decision/MctsTeacherLabel.ts`), con `battleId`/`decisionSequence` redundantes para validar la relación.          |
+| Relación con `CombatDecisionEvent`         | 1:1 por `eventId`; `result.candidates` es SIEMPRE subconjunto de `legalActions` (nunca igualdad exigida: el filtrado estratégico/de rotación puede descartar opciones).    |
+| Activación en producción                   | Desactivado por defecto (`MCTS_LIVE_TEACHER_LABELING_ENABLED=false`): un despliegue lo activa explícitamente (ver `env.ts`; costo real de CPU por decisión, 128 rollouts). |
 
-- Entidad: `src/domain/decision/CombatDecisionEvent.ts`.
-- Persistencia: `CombatDecisionRecorder` → `CombatDecisionTelemetryRepositoryPort`
-  → `MongoCombatDecisionTelemetryRepository`, colección `combat-decision-events`
-  (migraciones `023`/`024`), append-only.
-- Join keys reales: `eventId` (preferido), o `battleId` + `decisionSequence`.
-- `schemaVersion = 2` + `selectedAction.kind = 'END_TURN'` + `legalActions = []`
-  es el cierre técnico sin candidatas: se excluye SIEMPRE del dataset de
-  candidate-scoring (§17 del encargo).
+`CombatDecisionEvent` sigue igual que antes: entidad en
+`src/domain/decision/CombatDecisionEvent.ts`, persistida vía
+`CombatDecisionRecorder` → `MongoCombatDecisionTelemetryRepository`,
+colección `combat-decision-events` (migraciones `023`/`024`), append-only.
+`schemaVersion = 2` + `selectedAction.kind = 'END_TURN'` + `legalActions = []`
+es el cierre técnico sin candidatas: se excluye SIEMPRE del dataset de
+candidate-scoring (§17 del encargo), y `LiveMctsTeacherLabeler` nunca lo
+etiqueta (§21).
 
-**Consecuencia de diseño (regla del propio encargo: "si falta una relación
-necesaria... detente y reporta el contrato faltante"):** esta Task NO inventa
-un wiring de producción ni un contrato de persistencia de teacher labels.
-En su lugar:
+**Limitación que SIGUE vigente: `MISSION` nunca produce labels.**
+`RunMissionSimulation` resuelve la misión ENTERA con `MissionSimulation.ts`
+(motor aproximado propio, sin `BattleRoom`) antes de preparar su
+`CombatDecisionEvent` retroactivamente — no existe ninguna sala PRE-ACCIÓN
+que pasarle a `MctsTeacher.teach()` con fidelidad. Fabricar una sala
+aproximada violaría "el teacher usa el motor real"; en vez de eso, el
+dataset distingue explícitamente (`dataset/join.py`):
 
-1. Define una interfaz (`DatasetSource`) que abstrae de dónde vienen decision
-   events y teacher labels.
-2. Implementa `MongoCombatDatasetSource` para `CombatDecisionEvent` **real**
-   (solo lectura, colección real, orden explícito).
-3. Implementa `JsonlDatasetSource`, la fuente completa y determinista usada
-   en TODOS los tests, con fixtures validados contra los contratos reales.
-4. Documenta `teacher-label-fixture-v1` como el envoltorio de unión que
-   **este paquete** define (no un contrato oficial de Combat) mientras la
-   persistencia real no exista — ver `MongoCombatDatasetSource.teacher_labels()`,
-   que levanta `TeacherLabelSourceNotAvailableError` en vez de simular datos.
+- `missingLabelExpected`: decisión `MISSION` sin label — estructural, nunca
+  un error.
+- `missingLabelUnexpected`: decisión `ONLINE`/`TOURNAMENT` sin label — con
+  el wiring real activo, se esperaba uno; por defecto hace FALLAR el build
+  (`MissingTeacherLabelError`, fail-closed, #566 §31) salvo
+  `--allow-missing-labels` explícito.
 
-Cuando exista esa pieza (una futura Management Task: wiring de `teach()` en
-paralelo a la decisión real + persistencia), el único cambio esperado en
-este paquete es la implementación de `teacher_labels()` en
-`MongoCombatDatasetSource` — el join, el split, el encoder y el dataset
-PyTorch no deberían cambiar.
+El único cambio esperado en Python para una futura integración de labels
+`MISSION` (si algún día existe un `BattleRoom` simulable fiel para Misión)
+sería que `MongoCombatDatasetSource.teacher_labels()` empezara a devolver
+también esos labels — el join, el split, el encoder y el dataset PyTorch no
+cambiarían.
 
 ## 3. Arquitectura del paquete
 
@@ -73,7 +76,7 @@ ai/
     errors.py             # jerarquia fail-closed
     contracts/
       decision_event.py   # espejo de BattleDecisionState/LegalAction/CombatDecisionEvent (TS)
-      teacher_label.py    # espejo de MctsTeacherResult (TS) + envoltorio fixture
+      teacher_label.py    # espejo OFICIAL de MctsTeacherResult + MctsTeacherLabel (TS)
     features/
       schema.py           # feature-schema-v1: nombres/orden/normalizacion/vocabularios
       encoder.py           # FeatureEncoder.encode(state, candidate) -> np.float32[F]
@@ -154,9 +157,12 @@ Pruebas S-01..S-07 en `tests/test_split.py`.
 
 ## 7. Reproducibilidad
 
-- `--cutoff` (ISO-8601 UTC) se aplica a `CombatDecisionEvent.occurredAt`
-  (el único de los dos contratos con timestamp propio — `MctsTeacherResult`
-  no tiene uno; ver limitación de §2).
+- `--cutoff` (ISO-8601 UTC) se aplica a AMBAS fuentes (#566 §45):
+  `CombatDecisionEvent.occurredAt` y `MctsTeacherLabel.generatedAt` (el
+  wiring real añadió este ultimo campo; antes de la correccion de alcance,
+  el contrato fixture-only no lo tenia). Un label generado DESPUES del
+  corte (posible por el fire-and-forget de `LiveMctsTeacherLabeler.persist`)
+  nunca se cuela.
 - `--source-commit` (o `git rev-parse HEAD` si se omite) y `--seed` quedan en
   el manifiesto.
 - `inputFingerprint`: SHA-256 sobre la representación canónica (claves
@@ -188,7 +194,9 @@ silencioso.
 - #568: reimplementar `FeatureEncoder` en TypeScript contra el mismo
   `feature-schema-v1` (usando los golden vectors como prueba de paridad), y
   conectar `NeuralPolicy` a `DecisionPolicySelector`.
-- Una futura Task (no creada todavía): wiring real de `MctsTeacher.teach()`
-  en paralelo a las decisiones de producción + persistencia de
-  `MctsTeacherResult` — ver §2. Sin esto, `MongoCombatDatasetSource` sigue
-  limitado a `CombatDecisionEvent`.
+- Labels `MISSION`: solo si en el futuro existe un `BattleRoom` simulable
+  fiel para Misión (ver limitación de §2); nadie debe fabricar una sala
+  aproximada para "resolver" esto antes de tiempo.
+- Activar `MCTS_LIVE_TEACHER_LABELING_ENABLED=true` en un entorno real para
+  empezar a acumular labels de verdad es una decisión operativa de
+  despliegue, no de este paquete.

@@ -11,6 +11,13 @@ import type { BattleRoomRepositoryPort } from '../../src/application/ports/Battl
 import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasicAttack'
 import { UseSkill, type UseSkillInput } from '../../src/application/use-cases/UseSkill'
 import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
+import { LiveMctsTeacherLabeler } from '../../src/application/services/LiveMctsTeacherLabeler'
+import { MctsSearch } from '../../src/application/services/MctsSearch'
+import { MctsTeacher } from '../../src/application/services/MctsTeacher'
+import { InMemoryMctsTeacherLabelRepository } from '../../src/adapters/outbound/persistence/InMemoryMctsTeacherLabelRepository'
+import { InMemoryMctsSimulationAdapter } from '../../src/adapters/outbound/system/InMemoryMctsSimulationAdapter'
+import { Mt19937BoxMullerRandomSequenceFactory } from '../../src/adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
+import { CdfUniformIndexMapper } from '../../src/adapters/outbound/system/CdfUniformIndexMapper'
 import { BattleEventType } from '../../src/domain/entities/BattleEvent'
 import {
   InvalidTargetError,
@@ -762,5 +769,51 @@ describe('UseSkill — el turno siguiente (regeneracion y recarga a traves del c
       (await viewOf(room, 'A')).skills.find((skill) => skill.abilityId === EMBATE_ID)
         ?.cooldownRemaining,
     ).toBe(2)
+  })
+})
+
+describe('UseSkill — teacher label en vivo (EN-036.2 #566, correccion de alcance sobre PR#81)', () => {
+  it('persiste un MctsTeacherLabel ligado por eventId a la decision ABILITY real', async () => {
+    const inner = new InMemoryBattleRoomRepository()
+    await inner.save(battleWithSkills(), 0)
+    const telemetry = new InMemoryCombatDecisionTelemetryRepository()
+    const recorder = new CombatDecisionRecorder(
+      telemetry,
+      clock,
+      { error: jest.fn() },
+      new Sha256CommandIdFingerprint(),
+    )
+    const labelRepo = new InMemoryMctsTeacherLabelRepository()
+    const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
+    const teacher = new MctsTeacher(
+      new MctsSearch(new InMemoryMctsSimulationAdapter(clock), factory),
+    )
+    const labeler = new LiveMctsTeacherLabeler(teacher, labelRepo, clock, { error: jest.fn() })
+    const persistSpy = jest.spyOn(labeler, 'persist')
+    const lock = new ChannelLock()
+    const basicAttack = new ExecuteBasicAttack(inner, clock, scriptedSequence([]), lock)
+    const useCase = new UseSkill(
+      inner,
+      clock,
+      scriptedSequence([attackDie(5), effect(RandomEffectType.Damage), heroDamageDie(4)]),
+      lock,
+      basicAttack,
+      null,
+      undefined,
+      null,
+      recorder,
+      labeler,
+    )
+
+    await useCase.execute(command())
+    await persistSpy.mock.results[0]?.value
+
+    const [decision] = await telemetry.listDecisionsByBattle('ONLINE', ROOM_ID)
+    expect(decision).toMatchObject({
+      selectedAction: { kind: 'ABILITY', abilityId: SHIELD_STRIKE_ID },
+    })
+    const label = await labelRepo.findByEventId(decision!.eventId)
+    expect(label).not.toBeNull()
+    expect(label?.result.candidates.length).toBeGreaterThan(0)
   })
 })

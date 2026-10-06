@@ -7,7 +7,7 @@ import copy
 import pytest
 
 from nexus_combat_ai.contracts.decision_event import CombatDecisionEvent, LegalAction
-from nexus_combat_ai.contracts.teacher_label import MctsTeacherResult, TeacherLabelRecord
+from nexus_combat_ai.contracts.teacher_label import MctsTeacherLabel, MctsTeacherResult
 from nexus_combat_ai.errors import (
     ContractValidationError,
     IncompatibleSchemaError,
@@ -178,27 +178,38 @@ def test_teacher_result_mean_utility_out_of_range_fails() -> None:
         MctsTeacherResult.from_json(raw)
 
 
-def test_teacher_label_record_round_trips() -> None:
-    label = TeacherLabelRecord.from_json(
-        {
-            "schemaVersion": "teacher-label-fixture-v1",
-            "eventId": "decision:ONLINE:7:abc123",
-            "battleId": "battle-1",
-            "decisionSequence": 0,
-            "result": _teacher_result(),
-        }
-    )
+def _teacher_label(**overrides) -> dict:
+    base = {
+        "schemaVersion": 1,
+        "eventId": "decision:ONLINE:7:abc123",
+        "battleId": "battle-1",
+        "decisionSequence": 0,
+        "origin": "ONLINE",
+        "mode": "PVE",
+        "result": _teacher_result(),
+        "generatedAt": "2026-10-06T00:00:01.000Z",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_mcts_teacher_label_round_trips() -> None:
+    label = MctsTeacherLabel.from_json(_teacher_label())
     assert label.event_id == "decision:ONLINE:7:abc123"
+    assert label.origin == "ONLINE"
+    assert label.mode == "PVE"
 
 
-def test_teacher_label_record_unsupported_schema_fails() -> None:
+def test_mcts_teacher_label_unsupported_schema_fails() -> None:
     with pytest.raises(IncompatibleSchemaError):
-        TeacherLabelRecord.from_json(
-            {
-                "schemaVersion": "teacher-label-fixture-v2",
-                "eventId": "x",
-                "battleId": "battle-1",
-                "decisionSequence": 0,
-                "result": _teacher_result(),
-            }
-        )
+        MctsTeacherLabel.from_json(_teacher_label(schemaVersion=2))
+
+
+def test_mcts_teacher_label_unknown_origin_fails() -> None:
+    with pytest.raises(ContractValidationError):
+        MctsTeacherLabel.from_json(_teacher_label(origin="GHOST"))
+
+
+def test_mcts_teacher_label_unknown_mode_fails() -> None:
+    with pytest.raises(ContractValidationError):
+        MctsTeacherLabel.from_json(_teacher_label(mode="RANKED"))

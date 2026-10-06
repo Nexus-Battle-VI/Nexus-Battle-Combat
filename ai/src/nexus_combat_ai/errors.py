@@ -37,7 +37,10 @@ class DuplicateTeacherLabelError(NexusCombatAiError):
 
 
 class MissingTeacherLabelError(NexusCombatAiError):
-    """Una decision que el contrato actual exige etiquetar no tiene teacher label."""
+    """Una decision ONLINE/TOURNAMENT sin `MctsTeacherLabel` (categoria B de
+    #566 §16): con `LiveMctsTeacherLabeler` wired en produccion, se esperaba
+    uno. Fail-closed por defecto (`DatasetBuildConfig.allow_missing_labels`
+    controla la excepcion explicita, #566 §31)."""
 
 
 class InvalidTeacherLabelError(ContractValidationError):
@@ -47,13 +50,3 @@ class InvalidTeacherLabelError(ContractValidationError):
 
 class DatasetBuildError(NexusCombatAiError):
     """Error irrecuperable al construir el dataset (cutoff, fuente, manifest)."""
-
-
-class TeacherLabelSourceNotAvailableError(NexusCombatAiError):
-    """No existe todavia persistencia real de teacher labels en Combat.
-
-    Auditado en `develop@123e774` (2026-10-06): `MctsTeacher.teach()` nunca se
-    invoca en produccion y no hay puerto/repositorio/migracion/coleccion
-    Mongo para `MctsTeacherResult`. Usa `JsonlDatasetSource` con fixtures
-    (`teacher-label-fixture-v1`) hasta que esa pieza exista. Ver
-    `docs/en-036-ai-dataset-pipeline.md`."""

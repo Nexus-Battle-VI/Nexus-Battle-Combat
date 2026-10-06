@@ -18,8 +18,8 @@ Ver también: [`docs/en-036-ai-dataset-pipeline.md`](../docs/en-036-ai-dataset-p
 Deja listo:
 
 - Entorno Python 3.13 + `uv` reproducible desde `uv.lock`.
-- Lectura de `CombatDecisionEvent` (+ `TeacherLabelRecord`, ver limitación
-  abajo) desde JSONL/fixtures o Mongo real (solo decision events).
+- Lectura de `CombatDecisionEvent` + `MctsTeacherLabel` REALES desde Mongo
+  (`combat-decision-events` + `mcts-teacher-labels`) o JSONL/fixtures.
 - `FeatureEncoder` (`feature-schema-v1`) versionado y documentado.
 - `DecisionSample` + `torch.utils.data.Dataset`/`DataLoader` con candidatos
   de longitud variable.
@@ -29,26 +29,30 @@ Deja listo:
 **NO** entrena la MLP final, **NO** exporta ONNX, **NO** activa
 `NeuralPolicy`: eso es #567/#568.
 
-## Limitación conocida: no existe persistencia real de teacher labels
+## Teacher labels en vivo: wiring real (EN-036.2, correccion de alcance sobre PR#81)
 
-Auditado contra `develop@123e774` (2026-10-06): `MctsTeacher.teach()`
-(EN-036.1, #565) nunca se invoca en producción, y no existe ningún puerto,
-repositorio, migración ni colección Mongo para `MctsTeacherResult`. La
-decisión "labels en vivo" (formalizada en `MctsTeacher.ts`) describe CÓMO
-deben generarse esos labels, pero esa pieza todavía no está construida.
+`MctsTeacher.teach()` SI se invoca en produccion: `LiveMctsTeacherLabeler`
+(`src/application/services/LiveMctsTeacherLabeler.ts`) esta wired en
+`ExecuteBasicAttack`/`UseSkill`/`UseEpic`/`ExecuteAiTurn`, fail-open (un fallo
+de MCTS o de persistencia nunca afecta la accion real) y nunca esperado en el
+camino de respuesta. El resultado se persiste append-only en la coleccion
+Mongo `mcts-teacher-labels` (migracion `025-mcts-teacher-labels.ts`), ligado
+por `eventId` al `CombatDecisionEvent` real. Desactivado por defecto
+(`MCTS_LIVE_TEACHER_LABELING_ENABLED=false`): un despliegue que quiera
+alimentar el dataset de #566 lo activa explicitamente (ver `env.ts` -- cada
+decision etiquetada corre una busqueda MCTS completa, `rollouts: 128`, con
+costo real de CPU).
 
-Por eso:
+`MongoCombatDatasetSource` lee AMBAS colecciones reales, solo lectura.
 
-- `JsonlDatasetSource` es la única fuente completa (decision events +
-  teacher labels), usada en todos los tests y en los fixtures de
-  `tests/fixtures/`.
-- `MongoCombatDatasetSource` lee `CombatDecisionEvent` REALES de
-  `combat-decision-events` (solo lectura), pero `teacher_labels()` levanta
-  `TeacherLabelSourceNotAvailableError` de forma explícita: no inventa datos
-  ni devuelve una lista vacía silenciosa.
-- `teacher-label-fixture-v1` (en `contracts/teacher_label.py`) es el
-  envoltorio de unión que **este paquete** define para sus fixtures/tests,
-  **no** un contrato oficial de Combat todavía.
+**Limitacion que sigue vigente: `MISSION` nunca produce labels.**
+`RunMissionSimulation` resuelve la mision ENTERA con `MissionSimulation.ts`
+(motor aproximado propio, sin `BattleRoom`) antes de preparar su
+`CombatDecisionEvent` retroactivamente -- no existe ninguna sala PRE-ACCION
+que pasarle a `MctsTeacher.teach()` con fidelidad. El dataset contabiliza esas
+decisiones como `missingLabelExpected` (nunca un error); una decision
+ONLINE/TOURNAMENT sin label SI hace fallar el build por defecto
+(`missingLabelUnexpected`, ver `--allow-missing-labels`).
 
 ## Instalación
 
@@ -88,8 +92,7 @@ mismo comando dos veces (en directorios distintos) produce los MISMOS cuatro
 archivos byte a byte (`tests/test_manifest.py::test_reproducibility_byte_for_byte`
 lo prueba).
 
-Contra Mongo real (solo decision events; sin `--labels` no hay forma de
-pedir teacher labels reales todavía -- ver limitación arriba):
+Contra Mongo real (decision events + teacher labels, ambos reales):
 
 ```bash
 MONGODB_URI="mongodb://localhost:27017/combat" \
@@ -98,6 +101,8 @@ uv run nexus-combat-dataset build \
   --output ./out \
   --cutoff 2027-01-01T00:00:00Z \
   --seed 42
+  # --allow-missing-labels si hay decisiones ONLINE/TOURNAMENT conocidas sin
+  # label (p. ej. un periodo con MCTS_LIVE_TEACHER_LABELING_ENABLED apagado)
 ```
 
 ## Regenerar los fixtures/golden vectors

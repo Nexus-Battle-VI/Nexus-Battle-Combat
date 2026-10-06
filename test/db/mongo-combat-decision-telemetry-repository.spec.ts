@@ -61,8 +61,11 @@ describe('MongoCombatDecisionTelemetryRepository', () => {
       target: { scope: 'COMBATANT', combatant: { teamLabel: 'B', seat: 0 } },
     })
 
-  it('registers migration 024 after the frozen migration history', () => {
-    expect(MIGRATIONS.at(-1)?.name).toBe('024-combat-decision-events-end-turn')
+  it('registers migration 024 right after the frozen migration history (025 adds mcts-teacher-labels on top, EN-036.2 #566)', () => {
+    expect(MIGRATIONS.map((migration) => migration.name)).toContain(
+      '024-combat-decision-events-end-turn',
+    )
+    expect(MIGRATIONS.at(-2)?.name).toBe('024-combat-decision-events-end-turn')
   })
 
   it('accepts a SYSTEM END_TURN event under schemaVersion 2 while keeping v1 strict', async () => {

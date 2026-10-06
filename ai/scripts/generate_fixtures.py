@@ -79,10 +79,13 @@ def add_pair(
     )
     labels.append(
         {
-            "schemaVersion": "teacher-label-fixture-v1",
+            "schemaVersion": 1,
             "eventId": event_id,
             "battleId": battle_id,
             "decisionSequence": decision_sequence,
+            "origin": origin,
+            "mode": mode,
+            "generatedAt": occurred_at,
             "result": {
                 "config": {
                     "teacherVersion": "mcts-teacher-v1",

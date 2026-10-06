@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from nexus_combat_ai.contracts.decision_event import CombatDecisionEvent
-from nexus_combat_ai.contracts.teacher_label import TeacherLabelRecord
+from nexus_combat_ai.contracts.teacher_label import MctsTeacherLabel
 from nexus_combat_ai.dataset.join import JoinedDecision
 from nexus_combat_ai.dataset.pytorch_dataset import CombatDecisionDataset, collate_decision_samples
 from nexus_combat_ai.dataset.sample import build_decision_sample, decision_sample_from_jsonl_dict
@@ -47,12 +47,15 @@ def _event(legal_actions, selected_action, event_id: str = "e1") -> CombatDecisi
 
 def _label_with_candidates(
     candidates_raw: list[dict], selected_action: dict, event_id: str = "e1"
-) -> TeacherLabelRecord:
+) -> MctsTeacherLabel:
     raw = {
-        "schemaVersion": "teacher-label-fixture-v1",
+        "schemaVersion": 1,
         "eventId": event_id,
         "battleId": "battle-1",
         "decisionSequence": 0,
+        "origin": "ONLINE",
+        "mode": "PVE",
+        "generatedAt": "2026-10-06T00:00:01.000Z",
         "result": {
             "config": {
                 "teacherVersion": "mcts-teacher-v1",
@@ -68,7 +71,7 @@ def _label_with_candidates(
             "candidates": candidates_raw,
         },
     }
-    return TeacherLabelRecord.from_json(raw)
+    return MctsTeacherLabel.from_json(raw)
 
 
 def _three_candidates() -> tuple[list[dict], dict]:

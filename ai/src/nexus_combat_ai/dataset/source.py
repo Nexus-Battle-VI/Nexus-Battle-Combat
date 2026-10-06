@@ -1,15 +1,15 @@
 """`DatasetSource` (#566 §13): abstrae de donde vienen `CombatDecisionEvent` y
-`TeacherLabelRecord`, para que `FeatureEncoder`/`builder.py` nunca conozcan
+`MctsTeacherLabel`, para que `FeatureEncoder`/`builder.py` nunca conozcan
 Mongo. Dos implementaciones:
 
 - `JsonlDatasetSource`: fixtures/export JSONL deterministas (la unica fuente
   usada en tests).
-- `MongoCombatDatasetSource`: lee `CombatDecisionEvent` REALES de la propia
-  base de Combat (coleccion `combat-decision-events`, solo lectura, orden
-  explicito por `battleId`+`decisionSequence`). `teacher_labels()` levanta
-  `TeacherLabelSourceNotAvailableError`: no existe todavia esa persistencia
-  en Combat (ver auditoria en `docs/en-036-ai-dataset-pipeline.md` y
-  `errors.TeacherLabelSourceNotAvailableError`).
+- `MongoCombatDatasetSource`: lee AMBOS, reales, de la propia base de Combat
+  (solo lectura, orden explicito): `CombatDecisionEvent` de
+  `combat-decision-events`, y `MctsTeacherLabel` de `mcts-teacher-labels`
+  (EN-036.2 #566, correccion de alcance sobre PR#81 -- antes de esa
+  correccion, esta segunda coleccion no existia; ver
+  `docs/en-036-ai-dataset-pipeline.md`).
 """
 
 from __future__ import annotations
@@ -21,17 +21,18 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from nexus_combat_ai.contracts.decision_event import CombatDecisionEvent
-from nexus_combat_ai.contracts.teacher_label import TeacherLabelRecord
-from nexus_combat_ai.errors import DatasetBuildError, TeacherLabelSourceNotAvailableError
+from nexus_combat_ai.contracts.teacher_label import MctsTeacherLabel
+from nexus_combat_ai.errors import DatasetBuildError
 
 COMBAT_DECISION_EVENTS_COLLECTION = "combat-decision-events"
+MCTS_TEACHER_LABELS_COLLECTION = "mcts-teacher-labels"
 DEFAULT_COMBAT_DATABASE_NAME = "combat"
 
 
 class DatasetSource(Protocol):
     def decision_events(self) -> Iterator[CombatDecisionEvent]: ...
 
-    def teacher_labels(self) -> Iterator[TeacherLabelRecord]: ...
+    def teacher_labels(self) -> Iterator[MctsTeacherLabel]: ...
 
 
 def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
@@ -62,9 +63,14 @@ class JsonlDatasetSource:
         for i, raw in enumerate(_read_jsonl(self._events_path)):
             yield CombatDecisionEvent.from_json(raw, f"{self._events_path.name}[{i}]")
 
-    def teacher_labels(self) -> Iterator[TeacherLabelRecord]:
+    def teacher_labels(self) -> Iterator[MctsTeacherLabel]:
         for i, raw in enumerate(_read_jsonl(self._labels_path)):
-            yield TeacherLabelRecord.from_json(raw, f"{self._labels_path.name}[{i}]")
+            yield MctsTeacherLabel.from_json(raw, f"{self._labels_path.name}[{i}]")
+
+
+def _datetime_to_iso_z(value: datetime) -> str:
+    as_utc = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return as_utc.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 def _mongo_document_to_decision_event_json(document: dict[str, Any]) -> dict[str, Any]:
@@ -76,8 +82,18 @@ def _mongo_document_to_decision_event_json(document: dict[str, Any]) -> dict[str
     event_id = payload.pop("_id")
     occurred_at = payload.get("occurredAt")
     if isinstance(occurred_at, datetime):
-        as_utc = occurred_at if occurred_at.tzinfo is not None else occurred_at.replace(tzinfo=UTC)
-        payload["occurredAt"] = as_utc.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        payload["occurredAt"] = _datetime_to_iso_z(occurred_at)
+    return {"eventId": event_id, **payload}
+
+
+def _mongo_document_to_teacher_label_json(document: dict[str, Any]) -> dict[str, Any]:
+    """Mismo criterio que `_mongo_document_to_decision_event_json`, para
+    `mcts-teacher-labels` (`_id` -> `eventId`, `generatedAt` BSON -> ISO-8601)."""
+    payload = dict(document)
+    event_id = payload.pop("_id")
+    generated_at = payload.get("generatedAt")
+    if isinstance(generated_at, datetime):
+        payload["generatedAt"] = _datetime_to_iso_z(generated_at)
     return {"eventId": event_id, **payload}
 
 
@@ -110,11 +126,9 @@ class MongoCombatDatasetSource:
             raw = _mongo_document_to_decision_event_json(document)
             yield CombatDecisionEvent.from_json(raw, f"mongo:{COMBAT_DECISION_EVENTS_COLLECTION}")
 
-    def teacher_labels(self) -> Iterator[TeacherLabelRecord]:
-        raise TeacherLabelSourceNotAvailableError(
-            "No existe persistencia real de teacher labels en Combat todavia "
-            "(MctsTeacher.teach() nunca se invoca en produccion, sin puerto/"
-            "repositorio/migracion/coleccion Mongo). Usa JsonlDatasetSource "
-            "con fixtures mientras tanto -- ver docs/en-036-ai-dataset-pipeline.md."
-        )
-        yield  # pragma: no cover - nunca alcanzable; documenta la forma de generador.
+    def teacher_labels(self) -> Iterator[MctsTeacherLabel]:
+        collection = self._db[MCTS_TEACHER_LABELS_COLLECTION]
+        cursor = collection.find({}).sort([("battleId", 1), ("decisionSequence", 1)])
+        for document in cursor:
+            raw = _mongo_document_to_teacher_label_json(document)
+            yield MctsTeacherLabel.from_json(raw, f"mongo:{MCTS_TEACHER_LABELS_COLLECTION}")

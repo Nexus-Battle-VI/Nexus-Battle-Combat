@@ -37,7 +37,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     build.add_argument("--source", choices=["jsonl", "mongo"], required=True)
     build.add_argument("--events", type=Path, help="JSONL de CombatDecisionEvent (fuente jsonl).")
-    build.add_argument("--labels", type=Path, help="JSONL de TeacherLabelRecord (fuente jsonl).")
+    build.add_argument("--labels", type=Path, help="JSONL de MctsTeacherLabel (fuente jsonl).")
     build.add_argument(
         "--database", default=DEFAULT_COMBAT_DATABASE_NAME, help="Base de Mongo (fuente mongo)."
     )
@@ -49,6 +49,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "Si se omite, se intenta `git rev-parse HEAD`; si tampoco hay git, falla.",
     )
     build.add_argument("--seed", type=int, required=True)
+    build.add_argument(
+        "--allow-missing-labels",
+        action="store_true",
+        help="Permite decisiones ONLINE/TOURNAMENT sin MctsTeacherLabel (por defecto, "
+        "fail-closed: #566 §31).",
+    )
 
     return parser
 
@@ -88,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         source_commit=source_commit,
         seed=args.seed,
         output_dir=args.output,
+        allow_missing_labels=args.allow_missing_labels,
     )
 
     result = build_dataset(source, config)

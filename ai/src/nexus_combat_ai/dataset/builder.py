@@ -14,7 +14,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from nexus_combat_ai.contracts.decision_event import BATTLE_DECISION_STATE_SCHEMA_VERSION
-from nexus_combat_ai.contracts.teacher_label import MCTS_TEACHER_V1_VERSION, UTILITY_VERSION_PVE_V1
+from nexus_combat_ai.contracts.teacher_label import (
+    MCTS_TEACHER_LABEL_SCHEMA_VERSION,
+    MCTS_TEACHER_V1_VERSION,
+    UTILITY_VERSION_PVE_V1,
+)
 from nexus_combat_ai.dataset.join import join_decisions_with_labels
 from nexus_combat_ai.dataset.manifest import (
     DatasetCounts,
@@ -29,7 +33,6 @@ from nexus_combat_ai.dataset.split import SPLIT_STRATEGY_VERSION, Split, split_f
 from nexus_combat_ai.errors import DatasetBuildError
 from nexus_combat_ai.features.schema import FEATURE_DIMENSION, FEATURE_SCHEMA_VERSION
 
-_TEACHER_LABEL_FIXTURE_SCHEMA_VERSION = "teacher-label-fixture-v1"
 _SPLIT_ORDER: tuple[Split, ...] = ("TRAIN", "VALIDATION", "TEST")
 
 
@@ -48,6 +51,9 @@ class DatasetBuildConfig:
     source_commit: str
     seed: int
     output_dir: Path
+    # Fail-closed por defecto (#566 §31): una decision ONLINE/TOURNAMENT sin
+    # MctsTeacherLabel hace fallar el build salvo que se permita explicitamente.
+    allow_missing_labels: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,9 +82,16 @@ def build_dataset(source: DatasetSource, config: DatasetBuildConfig) -> DatasetB
         return parse_iso8601_utc(occurred_at) <= cutoff_dt
 
     events = [e for e in source.decision_events() if before_cutoff(e.occurred_at)]
-    labels = list(source.teacher_labels())
+    # `MctsTeacherLabel.generatedAt` es real desde la correccion de alcance
+    # sobre PR#81 (antes, el contrato fixture-only no tenia timestamp propio):
+    # el cutoff se aplica a AMBAS fuentes (#566 §45), nunca solo a los
+    # decision events, para que un label generado DESPUES del corte (posible
+    # por el fire-and-forget de `LiveMctsTeacherLabeler.persist`) no se cuele.
+    labels = [la for la in source.teacher_labels() if before_cutoff(la.generated_at)]
 
-    joined, join_stats = join_decisions_with_labels(events, labels)
+    joined, join_stats = join_decisions_with_labels(
+        events, labels, allow_missing_labels=config.allow_missing_labels
+    )
     samples = [build_decision_sample(jd) for jd in joined]
 
     # Orden canonico ESTABLE, independiente del orden de la fuente (#566 §70):
@@ -116,7 +129,8 @@ def build_dataset(source: DatasetSource, config: DatasetBuildConfig) -> DatasetB
     )
     exclusions = DatasetExclusions(
         end_turn=join_stats.excluded_end_turn,
-        missing_label=join_stats.missing_label,
+        missing_label_expected=join_stats.missing_label_expected,
+        missing_label_unexpected=join_stats.missing_label_unexpected,
     )
 
     manifest = build_manifest(
@@ -125,7 +139,7 @@ def build_dataset(source: DatasetSource, config: DatasetBuildConfig) -> DatasetB
         decision_state_schema_version=BATTLE_DECISION_STATE_SCHEMA_VERSION,
         teacher_version=MCTS_TEACHER_V1_VERSION,
         utility_version=UTILITY_VERSION_PVE_V1,
-        label_schema_version=_TEACHER_LABEL_FIXTURE_SCHEMA_VERSION,
+        label_schema_version=str(MCTS_TEACHER_LABEL_SCHEMA_VERSION),
         split_strategy_version=SPLIT_STRATEGY_VERSION,
         cutoff=config.cutoff,
         source_commit=config.source_commit,

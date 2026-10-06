@@ -35,7 +35,8 @@ def test_manifest_counts_are_correct(tmp_path: Path) -> None:
     assert counts["trainBattles"] + counts["validationBattles"] + counts["testBattles"] == 4
     assert counts["trainDecisions"] + counts["validationDecisions"] + counts["testDecisions"] == 6
     assert result.manifest["exclusions"]["endTurn"] == 1
-    assert result.manifest["exclusions"]["missingLabel"] == 0
+    assert result.manifest["exclusions"]["missingLabelExpected"] == 0
+    assert result.manifest["exclusions"]["missingLabelUnexpected"] == 0
 
 
 def test_manifest_declares_versions() -> None:

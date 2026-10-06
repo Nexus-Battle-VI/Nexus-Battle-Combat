@@ -1,5 +1,9 @@
 import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
 import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persistence/InMemoryBattleRoomRepository'
+import { InMemoryMctsTeacherLabelRepository } from '../../src/adapters/outbound/persistence/InMemoryMctsTeacherLabelRepository'
+import { InMemoryMctsSimulationAdapter } from '../../src/adapters/outbound/system/InMemoryMctsSimulationAdapter'
+import { Mt19937BoxMullerRandomSequenceFactory } from '../../src/adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
+import { CdfUniformIndexMapper } from '../../src/adapters/outbound/system/CdfUniformIndexMapper'
 import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import { ChannelLock } from '../../src/adapters/inbound/ws/ChannelLock'
 import type { CombatDecisionTelemetryRepositoryPort } from '../../src/application/ports/CombatDecisionTelemetryRepositoryPort'
@@ -7,6 +11,9 @@ import { CombatDecisionTelemetryConflictError } from '../../src/application/port
 import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
 import { BattleDecisionStateAssembler } from '../../src/application/services/BattleDecisionStateAssembler'
 import { LegalActionGenerator } from '../../src/application/services/LegalActionGenerator'
+import { LiveMctsTeacherLabeler } from '../../src/application/services/LiveMctsTeacherLabeler'
+import { MctsSearch } from '../../src/application/services/MctsSearch'
+import { MctsTeacher } from '../../src/application/services/MctsTeacher'
 import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasicAttack'
 import { battleWithCombat, indexForFace } from '../fixtures/basic-attack'
 import { clock, NOW, ROOM_ID, scriptedSequence } from '../fixtures/battle'
@@ -289,6 +296,99 @@ describe('CombatDecisionRecorder e in-memory telemetry', () => {
     })
     expect(logError).toHaveBeenCalledWith(
       'combat_decision_telemetry_append_failed',
+      expect.any(Object),
+    )
+  })
+})
+
+describe('ExecuteBasicAttack — teacher label en vivo (EN-036.2 #566, correccion de alcance sobre PR#81)', () => {
+  const realLabeler = (): {
+    labeler: LiveMctsTeacherLabeler
+    repo: InMemoryMctsTeacherLabelRepository
+  } => {
+    const repo = new InMemoryMctsTeacherLabelRepository()
+    const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
+    const teacher = new MctsTeacher(
+      new MctsSearch(new InMemoryMctsSimulationAdapter(clock), factory),
+    )
+    const labeler = new LiveMctsTeacherLabeler(teacher, repo, fixedClock, silentLogger)
+    return { labeler, repo }
+  }
+
+  it('persiste un MctsTeacherLabel ligado por eventId a la decision real, SOLO despues de confirmarla', async () => {
+    const rooms = new InMemoryBattleRoomRepository()
+    await rooms.save(battleWithCombat(), 0)
+    const telemetry = new InMemoryCombatDecisionTelemetryRepository()
+    const recorder = new CombatDecisionRecorder(telemetry, fixedClock, silentLogger, commandIds)
+    const { labeler, repo } = realLabeler()
+    const persistSpy = jest.spyOn(labeler, 'persist')
+    const attack = new ExecuteBasicAttack(
+      rooms,
+      clock,
+      scriptedSequence([indexForFace(1, 6)]),
+      new ChannelLock(),
+      null,
+      undefined,
+      null,
+      recorder,
+      labeler,
+    )
+
+    await attack.execute({
+      roomId: ROOM_ID,
+      requesterId: 'a1',
+      commandId: 'cmd-live-label',
+      target,
+    })
+    await persistSpy.mock.results[0]?.value
+
+    const [decision] = await telemetry.listDecisionsByBattle('ONLINE', ROOM_ID)
+    expect(decision).toBeDefined()
+    const label = await repo.findByEventId(decision!.eventId)
+    expect(label).not.toBeNull()
+    expect(label?.battleId).toBe(ROOM_ID)
+    expect(label?.decisionSequence).toBe(decision!.decisionSequence)
+  })
+
+  it('fail-open: un MctsTeacher que rechaza nunca afecta el resultado de la accion real ni queda sin manejar', async () => {
+    const rooms = new InMemoryBattleRoomRepository()
+    await rooms.save(battleWithCombat(), 0)
+    const telemetry = new InMemoryCombatDecisionTelemetryRepository()
+    const recorder = new CombatDecisionRecorder(telemetry, fixedClock, silentLogger, commandIds)
+    const repo = new InMemoryMctsTeacherLabelRepository()
+    const brokenTeacher = {
+      teach: jest.fn().mockRejectedValue(new Error('motor MCTS simulado caido')),
+    } as unknown as MctsTeacher
+    const errorLog = jest.fn()
+    const labeler = new LiveMctsTeacherLabeler(brokenTeacher, repo, fixedClock, { error: errorLog })
+    const persistSpy = jest.spyOn(labeler, 'persist')
+    const attack = new ExecuteBasicAttack(
+      rooms,
+      clock,
+      scriptedSequence([indexForFace(1, 6)]),
+      new ChannelLock(),
+      null,
+      undefined,
+      null,
+      recorder,
+      labeler,
+    )
+
+    await expect(
+      attack.execute({
+        roomId: ROOM_ID,
+        requesterId: 'a1',
+        commandId: 'cmd-broken-teacher',
+        target,
+      }),
+    ).resolves.toMatchObject({ replayed: false })
+    // El propio try/catch interno de `persist` ya garantiza que nunca
+    // propaga ni queda como "unhandled rejection": esperar su promesa
+    // (fire-and-forget en produccion, pero awaitable aqui) solo confirma que
+    // en efecto se resuelve, nunca se rechaza.
+    await expect(persistSpy.mock.results[0]?.value).resolves.toBeUndefined()
+    expect(errorLog).toHaveBeenCalledWith(
+      'mcts_teacher_label_generation_failed',
       expect.any(Object),
     )
   })

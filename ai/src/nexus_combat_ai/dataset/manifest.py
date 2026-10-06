@@ -53,10 +53,15 @@ class DatasetCounts:
 @dataclass(frozen=True, slots=True)
 class DatasetExclusions:
     end_turn: int
-    missing_label: int
+    missing_label_expected: int
+    missing_label_unexpected: int
 
     def as_dict(self) -> dict[str, int]:
-        return {"endTurn": self.end_turn, "missingLabel": self.missing_label}
+        return {
+            "endTurn": self.end_turn,
+            "missingLabelExpected": self.missing_label_expected,
+            "missingLabelUnexpected": self.missing_label_unexpected,
+        }
 
 
 def build_manifest(
