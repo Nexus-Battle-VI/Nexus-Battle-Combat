@@ -1,7 +1,7 @@
 [project]
 name = "nexus-combat-ai"
 version = "0.1.0"
-description = "EN-036.2: pipeline de dataset y entrenamiento en Python/PyTorch para la IA de Combat (offline, nunca productivo)."
+description = "EN-036.2/EN-036.3: pipeline de dataset, entrenamiento y exportacion ONNX en Python/PyTorch para la IA de Combat (offline, nunca productivo)."
 readme = "README.md"
 authors = [
     { name = "josemora09052025", email = "josedavid.morap@gmail.com" }
@@ -11,10 +11,17 @@ dependencies = [
     "torch>=2.0",
     "numpy>=2.0",
     "pymongo>=4.9",
+    "onnx>=1.17",
+    # Requerido realmente por el exportador de torch.onnx.export en esta
+    # version de PyTorch (spike #567 §43/§45): sin el, `torch.onnx.export`
+    # falla con `ModuleNotFoundError: onnxscript`, incluso pasando
+    # `opset_version` explicito.
+    "onnxscript>=0.1",
 ]
 
 [project.scripts]
 nexus-combat-dataset = "nexus_combat_ai.cli.build_dataset:main"
+nexus-combat-train = "nexus_combat_ai.cli.train_model:main"
 
 [dependency-groups]
 dev = [
