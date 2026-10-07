@@ -1,0 +1,386 @@
+{
+  "candidates": {
+    "ability": {
+      "action": {
+        "abilityId": "ability-storm",
+        "kind": "ABILITY",
+        "target": {
+          "combatant": {
+            "seat": 0,
+            "teamLabel": "B"
+          },
+          "scope": "COMBATANT"
+        }
+      },
+      "expectedFeatures": {
+        "actor.abilities_count_norm": 0.10000000149011612,
+        "actor.active_effects_count_norm": 0.0,
+        "actor.attack_norm": 0.11999999731779099,
+        "actor.attack_present": 1.0,
+        "actor.cooldowns_count_norm": 0.0,
+        "actor.damage_memory_amount_norm": 0.0,
+        "actor.damage_memory_present": 0.0,
+        "actor.damage_mode_dice": 1.0,
+        "actor.damage_mode_fixed": 0.0,
+        "actor.damage_mode_percentage": 0.0,
+        "actor.damage_present": 1.0,
+        "actor.damage_value_norm": 0.07000000029802322,
+        "actor.defense_norm": 0.10000000149011612,
+        "actor.epic_cooldown_ratio": 0.3333333432674408,
+        "actor.epic_power_cost_norm": 0.0,
+        "actor.epic_present": 1.0,
+        "actor.health_ratio": 1.0,
+        "actor.level_norm": 0.0,
+        "actor.power_present": 1.0,
+        "actor.power_ratio": 1.0,
+        "allies.active_effects_count_mean_norm": 0.0,
+        "allies.alive_count_norm": 0.0,
+        "allies.attack_norm_mean": 0.0,
+        "allies.count_norm": 0.0,
+        "allies.defense_norm_mean": 0.0,
+        "allies.health_ratio_mean": 1.0,
+        "allies.health_ratio_min": 1.0,
+        "allies.power_presence_ratio": 0.0,
+        "allies.power_ratio_mean": 0.0,
+        "candidate.charge_or_cooldown_total_norm": 0.05000000074505806,
+        "candidate.cooldown_ratio": 0.0,
+        "candidate.effect_count_norm": 0.20000000298023224,
+        "candidate.effect_has_buff_self": 1.0,
+        "candidate.effect_has_damage": 1.0,
+        "candidate.effect_has_debuff_opponent": 0.0,
+        "candidate.effect_has_healing": 0.0,
+        "candidate.effect_has_immunity": 0.0,
+        "candidate.has_power_cost": 1.0,
+        "candidate.kind_ability": 1.0,
+        "candidate.kind_basic_attack": 0.0,
+        "candidate.kind_epic": 0.0,
+        "candidate.power_cost_mode_all_available": 0.0,
+        "candidate.power_cost_mode_fixed": 1.0,
+        "candidate.power_cost_norm": 0.30000001192092896,
+        "candidate.primary_effect_mode_dice": 1.0,
+        "candidate.primary_effect_mode_fixed": 0.0,
+        "candidate.primary_effect_mode_percentage": 0.0,
+        "candidate.primary_effect_value_norm": 0.20999999344348907,
+        "candidate.target_health_ratio": 1.0,
+        "candidate.target_is_alive": 1.0,
+        "candidate.target_is_group": 0.0,
+        "candidate.target_power_present": 1.0,
+        "candidate.target_power_ratio": 1.0,
+        "candidate.target_relation_ally": 0.0,
+        "candidate.target_relation_enemy": 1.0,
+        "candidate.target_relation_self": 0.0,
+        "candidate.target_scope_allied_group": 0.0,
+        "candidate.target_scope_combatant": 1.0,
+        "candidate.target_scope_self": 0.0,
+        "enemies.active_effects_count_mean_norm": 0.0,
+        "enemies.alive_count_norm": 0.20000000298023224,
+        "enemies.attack_norm_mean": 0.11999999731779099,
+        "enemies.count_norm": 0.20000000298023224,
+        "enemies.defense_norm_mean": 0.10000000149011612,
+        "enemies.health_ratio_mean": 1.0,
+        "enemies.health_ratio_min": 1.0,
+        "enemies.power_presence_ratio": 1.0,
+        "enemies.power_ratio_mean": 1.0,
+        "state.mode_pve": 0.0,
+        "state.mode_pvp": 1.0,
+        "state.round_norm": 0.019999999552965164,
+        "state.turns_completed_norm": 0.0
+      }
+    },
+    "basicAttack": {
+      "action": {
+        "kind": "BASIC_ATTACK",
+        "target": {
+          "combatant": {
+            "seat": 0,
+            "teamLabel": "B"
+          },
+          "scope": "COMBATANT"
+        }
+      },
+      "expectedFeatures": {
+        "actor.abilities_count_norm": 0.10000000149011612,
+        "actor.active_effects_count_norm": 0.0,
+        "actor.attack_norm": 0.11999999731779099,
+        "actor.attack_present": 1.0,
+        "actor.cooldowns_count_norm": 0.0,
+        "actor.damage_memory_amount_norm": 0.0,
+        "actor.damage_memory_present": 0.0,
+        "actor.damage_mode_dice": 1.0,
+        "actor.damage_mode_fixed": 0.0,
+        "actor.damage_mode_percentage": 0.0,
+        "actor.damage_present": 1.0,
+        "actor.damage_value_norm": 0.07000000029802322,
+        "actor.defense_norm": 0.10000000149011612,
+        "actor.epic_cooldown_ratio": 0.3333333432674408,
+        "actor.epic_power_cost_norm": 0.0,
+        "actor.epic_present": 1.0,
+        "actor.health_ratio": 1.0,
+        "actor.level_norm": 0.0,
+        "actor.power_present": 1.0,
+        "actor.power_ratio": 1.0,
+        "allies.active_effects_count_mean_norm": 0.0,
+        "allies.alive_count_norm": 0.0,
+        "allies.attack_norm_mean": 0.0,
+        "allies.count_norm": 0.0,
+        "allies.defense_norm_mean": 0.0,
+        "allies.health_ratio_mean": 1.0,
+        "allies.health_ratio_min": 1.0,
+        "allies.power_presence_ratio": 0.0,
+        "allies.power_ratio_mean": 0.0,
+        "candidate.charge_or_cooldown_total_norm": 0.0,
+        "candidate.cooldown_ratio": 0.0,
+        "candidate.effect_count_norm": 0.0,
+        "candidate.effect_has_buff_self": 0.0,
+        "candidate.effect_has_damage": 0.0,
+        "candidate.effect_has_debuff_opponent": 0.0,
+        "candidate.effect_has_healing": 0.0,
+        "candidate.effect_has_immunity": 0.0,
+        "candidate.has_power_cost": 0.0,
+        "candidate.kind_ability": 0.0,
+        "candidate.kind_basic_attack": 1.0,
+        "candidate.kind_epic": 0.0,
+        "candidate.power_cost_mode_all_available": 0.0,
+        "candidate.power_cost_mode_fixed": 0.0,
+        "candidate.power_cost_norm": 0.0,
+        "candidate.primary_effect_mode_dice": 0.0,
+        "candidate.primary_effect_mode_fixed": 0.0,
+        "candidate.primary_effect_mode_percentage": 0.0,
+        "candidate.primary_effect_value_norm": 0.0,
+        "candidate.target_health_ratio": 1.0,
+        "candidate.target_is_alive": 1.0,
+        "candidate.target_is_group": 0.0,
+        "candidate.target_power_present": 1.0,
+        "candidate.target_power_ratio": 1.0,
+        "candidate.target_relation_ally": 0.0,
+        "candidate.target_relation_enemy": 1.0,
+        "candidate.target_relation_self": 0.0,
+        "candidate.target_scope_allied_group": 0.0,
+        "candidate.target_scope_combatant": 1.0,
+        "candidate.target_scope_self": 0.0,
+        "enemies.active_effects_count_mean_norm": 0.0,
+        "enemies.alive_count_norm": 0.20000000298023224,
+        "enemies.attack_norm_mean": 0.11999999731779099,
+        "enemies.count_norm": 0.20000000298023224,
+        "enemies.defense_norm_mean": 0.10000000149011612,
+        "enemies.health_ratio_mean": 1.0,
+        "enemies.health_ratio_min": 1.0,
+        "enemies.power_presence_ratio": 1.0,
+        "enemies.power_ratio_mean": 1.0,
+        "state.mode_pve": 0.0,
+        "state.mode_pvp": 1.0,
+        "state.round_norm": 0.019999999552965164,
+        "state.turns_completed_norm": 0.0
+      }
+    },
+    "epic": {
+      "action": {
+        "epicId": "epic-overdrive",
+        "kind": "EPIC",
+        "target": {
+          "combatant": {
+            "seat": 0,
+            "teamLabel": "B"
+          },
+          "scope": "COMBATANT"
+        }
+      },
+      "expectedFeatures": {
+        "actor.abilities_count_norm": 0.10000000149011612,
+        "actor.active_effects_count_norm": 0.0,
+        "actor.attack_norm": 0.11999999731779099,
+        "actor.attack_present": 1.0,
+        "actor.cooldowns_count_norm": 0.0,
+        "actor.damage_memory_amount_norm": 0.0,
+        "actor.damage_memory_present": 0.0,
+        "actor.damage_mode_dice": 1.0,
+        "actor.damage_mode_fixed": 0.0,
+        "actor.damage_mode_percentage": 0.0,
+        "actor.damage_present": 1.0,
+        "actor.damage_value_norm": 0.07000000029802322,
+        "actor.defense_norm": 0.10000000149011612,
+        "actor.epic_cooldown_ratio": 0.3333333432674408,
+        "actor.epic_power_cost_norm": 0.0,
+        "actor.epic_present": 1.0,
+        "actor.health_ratio": 1.0,
+        "actor.level_norm": 0.0,
+        "actor.power_present": 1.0,
+        "actor.power_ratio": 1.0,
+        "allies.active_effects_count_mean_norm": 0.0,
+        "allies.alive_count_norm": 0.0,
+        "allies.attack_norm_mean": 0.0,
+        "allies.count_norm": 0.0,
+        "allies.defense_norm_mean": 0.0,
+        "allies.health_ratio_mean": 1.0,
+        "allies.health_ratio_min": 1.0,
+        "allies.power_presence_ratio": 0.0,
+        "allies.power_ratio_mean": 0.0,
+        "candidate.charge_or_cooldown_total_norm": 0.15000000596046448,
+        "candidate.cooldown_ratio": 0.3333333432674408,
+        "candidate.effect_count_norm": 0.10000000149011612,
+        "candidate.effect_has_buff_self": 0.0,
+        "candidate.effect_has_damage": 1.0,
+        "candidate.effect_has_debuff_opponent": 0.0,
+        "candidate.effect_has_healing": 0.0,
+        "candidate.effect_has_immunity": 0.0,
+        "candidate.has_power_cost": 1.0,
+        "candidate.kind_ability": 0.0,
+        "candidate.kind_basic_attack": 0.0,
+        "candidate.kind_epic": 1.0,
+        "candidate.power_cost_mode_all_available": 0.0,
+        "candidate.power_cost_mode_fixed": 1.0,
+        "candidate.power_cost_norm": 0.0,
+        "candidate.primary_effect_mode_dice": 0.0,
+        "candidate.primary_effect_mode_fixed": 1.0,
+        "candidate.primary_effect_mode_percentage": 0.0,
+        "candidate.primary_effect_value_norm": 0.23999999463558197,
+        "candidate.target_health_ratio": 1.0,
+        "candidate.target_is_alive": 1.0,
+        "candidate.target_is_group": 0.0,
+        "candidate.target_power_present": 1.0,
+        "candidate.target_power_ratio": 1.0,
+        "candidate.target_relation_ally": 0.0,
+        "candidate.target_relation_enemy": 1.0,
+        "candidate.target_relation_self": 0.0,
+        "candidate.target_scope_allied_group": 0.0,
+        "candidate.target_scope_combatant": 1.0,
+        "candidate.target_scope_self": 0.0,
+        "enemies.active_effects_count_mean_norm": 0.0,
+        "enemies.alive_count_norm": 0.20000000298023224,
+        "enemies.attack_norm_mean": 0.11999999731779099,
+        "enemies.count_norm": 0.20000000298023224,
+        "enemies.defense_norm_mean": 0.10000000149011612,
+        "enemies.health_ratio_mean": 1.0,
+        "enemies.health_ratio_min": 1.0,
+        "enemies.power_presence_ratio": 1.0,
+        "enemies.power_ratio_mean": 1.0,
+        "state.mode_pve": 0.0,
+        "state.mode_pvp": 1.0,
+        "state.round_norm": 0.019999999552965164,
+        "state.turns_completed_norm": 0.0
+      }
+    }
+  },
+  "description": "feature-schema-v1: UNA decision con tres candidatos de kinds distintos (BASIC_ATTACK, ABILITY con STAT_MODIFIER de Ataque+Dano, EPIC con DIRECT_DAMAGE), mismo state, para validar alineacion candidate-a-candidate.",
+  "featureSchemaVersion": "feature-schema-v1",
+  "state": {
+    "actor": {
+      "abilities": [
+        {
+          "abilityId": "ability-storm",
+          "chargeTurns": 1,
+          "effects": [
+            {
+              "hasActivationCondition": false,
+              "kind": "STAT_MODIFIER",
+              "magnitude": {
+                "count": 3,
+                "mode": "DICE",
+                "sides": 6
+              },
+              "operation": "INCREASE",
+              "statistic": "ATTACK",
+              "target": "SELF"
+            },
+            {
+              "hasActivationCondition": false,
+              "kind": "STAT_MODIFIER",
+              "magnitude": {
+                "amount": 2,
+                "mode": "FIXED"
+              },
+              "operation": "INCREASE",
+              "statistic": "DAMAGE",
+              "target": "SELF"
+            }
+          ],
+          "powerCost": {
+            "amount": 6,
+            "mode": "FIXED"
+          }
+        }
+      ],
+      "activeEffects": [],
+      "attack": 12,
+      "cooldowns": [],
+      "damage": {
+        "count": 1,
+        "mode": "DICE",
+        "sides": 6
+      },
+      "damageMemory": null,
+      "defense": 10,
+      "epic": {
+        "cooldownRemaining": 1,
+        "cooldownTurns": 3,
+        "effects": [
+          {
+            "hasActivationCondition": false,
+            "kind": "DAMAGE",
+            "magnitude": {
+              "amount": 12,
+              "mode": "FIXED"
+            },
+            "target": "OPPONENT"
+          }
+        ],
+        "epicId": "epic-overdrive",
+        "powerCost": 0
+      },
+      "health": {
+        "current": 50,
+        "max": 50
+      },
+      "heroSubtype": "GUERRERO_ARMAS",
+      "identity": {
+        "seat": 0,
+        "teamLabel": "A"
+      },
+      "kind": "HUMAN",
+      "level": 1,
+      "power": {
+        "current": 8,
+        "max": 8
+      }
+    },
+    "allies": [],
+    "context": {
+      "battleId": "golden-battle-2",
+      "mode": "PVP",
+      "round": 1,
+      "turnsCompleted": 0
+    },
+    "enemies": [
+      {
+        "abilities": [],
+        "activeEffects": [],
+        "attack": 12,
+        "cooldowns": [],
+        "damage": {
+          "count": 1,
+          "mode": "DICE",
+          "sides": 6
+        },
+        "damageMemory": null,
+        "defense": 10,
+        "epic": null,
+        "health": {
+          "current": 50,
+          "max": 50
+        },
+        "heroSubtype": "GUERRERO_ARMAS",
+        "identity": {
+          "seat": 0,
+          "teamLabel": "B"
+        },
+        "kind": "HUMAN",
+        "level": 1,
+        "power": {
+          "current": 8,
+          "max": 8
+        }
+      }
+    ],
+    "schemaVersion": 1
+  }
+}

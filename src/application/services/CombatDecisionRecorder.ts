@@ -206,11 +206,20 @@ export class CombatDecisionRecorder {
     }
   }
 
-  async record(event: CombatDecisionTelemetryEvent): Promise<void> {
+  /**
+   * Fail-open para el gameplay: un fallo de persistencia NUNCA se propaga.
+   * Devuelve si el evento quedo realmente persistido (o el append idempotente
+   * fue aceptado) para que un llamador que condiciona otra escritura al suyo
+   * (p. ej. `LiveMctsTeacherLabeler.persist`, EN-036.2 #566) no la dispare
+   * sobre una decision que en realidad no se guardo.
+   */
+  async record(event: CombatDecisionTelemetryEvent): Promise<boolean> {
     try {
       await this.repository.append(event)
+      return true
     } catch (error: unknown) {
       this.logFailure(event, error)
+      return false
     }
   }
 

@@ -13,6 +13,10 @@ import { BattleDecisionStateAssembler } from '../services/BattleDecisionStateAss
 import { LegalActionGenerator } from '../services/LegalActionGenerator'
 import type { DecisionPolicySelector } from '../services/DecisionPolicySelector'
 import type { CombatDecisionRecorder } from '../services/CombatDecisionRecorder'
+import type {
+  LiveMctsTeacherLabeler,
+  PendingMctsTeacherLabel,
+} from '../services/LiveMctsTeacherLabeler'
 import type { BattleFinalizer } from '../services/BattleFinalizer'
 import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
 import type { ExecuteBasicAttack, ExecuteBasicAttackResult } from './ExecuteBasicAttack'
@@ -31,6 +35,7 @@ interface ExecutedAiTurn {
   readonly commandId: string
   readonly result: ActionResult
   readonly decision: CombatDecisionEvent | null
+  readonly pendingLabel: PendingMctsTeacherLabel | null
 }
 
 const actionTarget = (action: LegalAction): CombatantKey | undefined =>
@@ -60,6 +65,8 @@ export class ExecuteAiTurn {
     private readonly settler: BattleDeadlineSettler | null = null,
     private readonly states: BattleDecisionStateAssembler = new BattleDecisionStateAssembler(),
     private readonly actions: LegalActionGenerator = new LegalActionGenerator(),
+    /** EN-036.2 (#566, correccion de alcance sobre PR#81): ver `ExecuteBasicAttack`. */
+    private readonly liveTeacherLabeler: LiveMctsTeacherLabeler | null = null,
   ) {}
 
   async execute(roomId: string): Promise<boolean> {
@@ -76,7 +83,15 @@ export class ExecuteAiTurn {
         // Persistido antes de difundir; `resume` recupera cualquier evento perdido.
       }
 
-      if (executed.decision !== null) await this.recorder.record(executed.decision)
+      if (executed.decision !== null) {
+        // Correccion de alcance sobre PR#81: ver `ExecuteBasicAttack` -- sin
+        // esto un fallo fail-open de `record()` dejaria un `MctsTeacherLabel`
+        // huerfano, ligado a un `CombatDecisionEvent` que nunca existio.
+        const recorded = await this.recorder.record(executed.decision)
+        if (recorded) {
+          void this.liveTeacherLabeler?.persist(executed.pendingLabel)
+        }
+      }
       if (result.finished !== null) this.finalizer.afterFinished(result.finished)
     }
 
@@ -101,6 +116,9 @@ export class ExecuteAiTurn {
     )
 
     if (legalActions.length === 0) {
+      // SYSTEM END_TURN (§21, correccion de alcance sobre PR#81): nunca es
+      // una decision de politica, nunca llama a MctsTeacher, nunca genera
+      // teacher label.
       const decision = this.recorder.tryPrepareOnline({
         commandId,
         battleId: room.id,
@@ -123,6 +141,7 @@ export class ExecuteAiTurn {
         roomId: room.id,
         commandId,
         decision,
+        pendingLabel: null,
         result: {
           event: completed.event,
           replayed: completed.replayed,
@@ -145,9 +164,13 @@ export class ExecuteAiTurn {
       legalActions,
       selectedAction: selected.action,
     })
+    // El teacher genera SU PROPIA seleccion/distribucion de forma
+    // independiente (§20): nunca reutiliza `selected.action` (la eleccion
+    // real de RuleBased/Neural/etc.) como si fuera la recomendacion MCTS.
+    const pendingLabel = this.liveTeacherLabeler?.prepare(room, decision) ?? null
     const result = await this.executeAction(room.id, actor, commandId, selected.action)
 
-    return { roomId: room.id, commandId, result, decision }
+    return { roomId: room.id, commandId, result, decision, pendingLabel }
   }
 
   private executeAction(

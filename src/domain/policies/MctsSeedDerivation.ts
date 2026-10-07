@@ -39,3 +39,37 @@ export const deriveMctsRolloutSeed = (rootSeed: number, rolloutIndex: number): R
   const indexComponent = mixUint32(rolloutIndex + 0x9e3779b1)
   return RandomSeed.create(mixUint32(rootComponent ^ indexComponent))
 }
+
+/**
+ * FNV-1a de 32 bits (dominio publico, sin `node:crypto`: misma restriccion de
+ * capas que `mixUint32` de arriba). Pliega una cadena arbitraria a un unico
+ * entero de 32 bits; no es criptografico, solo necesita evitar colisiones
+ * triviales entre `eventId` distintos, que es exactamente lo que FNV-1a
+ * garantiza para este uso.
+ */
+const fnv1a32 = (text: string): number => {
+  let hash = 0x811c9dc5
+
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+
+  return hash >>> 0
+}
+
+/**
+ * Deriva la `simulationSeed` RAIZ del teacher label en vivo (EN-036.2 #566,
+ * correccion de alcance sobre PR#81, §13) a partir del `eventId` de la
+ * decision real -- NUNCA de `BATTLE_RANDOM_SEQUENCE`, `Math.random`,
+ * `Date.now` ni `crypto.randomInt`. El mismo `eventId` produce SIEMPRE la
+ * misma semilla (reproducibilidad del label); esto no es RNG productivo, no
+ * mueve ningun cursor de batalla ni de ninguna otra simulacion.
+ *
+ * Devuelve el entero crudo (no `RandomSeed`): `MctsTeacher.teach(room,
+ * simulationSeed: number, ...)` lo valida el mismo con `RandomSeed.create`
+ * internamente; `RandomSeed.create` se llama aqui solo para confirmar, con
+ * el mismo contrato, que `mixUint32` nunca produce un valor fuera de rango.
+ */
+export const deriveLiveTeacherSeed = (eventId: string): number =>
+  RandomSeed.create(mixUint32(fnv1a32(eventId))).value

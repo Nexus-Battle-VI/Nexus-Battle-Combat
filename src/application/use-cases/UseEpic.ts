@@ -25,6 +25,10 @@ import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
 import type { PersistVersusDropDecision } from '../services/PersistVersusDropDecision'
 import type { CombatDecisionEvent } from '../../domain/decision/CombatDecisionEvent'
 import type { CombatDecisionRecorder } from '../services/CombatDecisionRecorder'
+import type {
+  LiveMctsTeacherLabeler,
+  PendingMctsTeacherLabel,
+} from '../services/LiveMctsTeacherLabeler'
 
 /**
  * `plan.attackerEntry`/`plan.targetEntry`/`recipient.entry` son `TurnOrderEntry` (HU-17):
@@ -100,6 +104,8 @@ export class UseEpic {
     private readonly settler: BattleDeadlineSettler | null = null,
     private readonly versusDrop: PersistVersusDropDecision | null = null,
     private readonly decisionRecorder: CombatDecisionRecorder | null = null,
+    /** EN-036.2 (#566, correccion de alcance sobre PR#81): ver `ExecuteBasicAttack`. */
+    private readonly liveTeacherLabeler: LiveMctsTeacherLabeler | null = null,
   ) {}
 
   execute(input: UseEpicInput): Promise<UseEpicResult> {
@@ -145,8 +151,9 @@ export class UseEpic {
                   },
                 },
     })
+    const pendingLabel = this.liveTeacherLabeler?.prepare(room, decision) ?? null
 
-    return this.resolveAndPersist(room, plan, input, decision)
+    return this.resolveAndPersist(room, plan, input, decision, pendingLabel)
   }
 
   /** Ruta interna sin lock; el orquestador AI ya serializa la sala. */
@@ -162,7 +169,7 @@ export class UseEpic {
 
     const plan = room.planEpicForActor(input.actor, input.target)
 
-    return this.resolveAndPersist(room, plan, input, null)
+    return this.resolveAndPersist(room, plan, input, null, null)
   }
 
   private resolveAndPersist(
@@ -170,12 +177,13 @@ export class UseEpic {
     plan: EpicReadyPlan,
     input: Pick<UseEpicForActorInput, 'roomId' | 'commandId' | 'target'>,
     decision: CombatDecisionEvent | null | undefined,
+    pendingLabel: PendingMctsTeacherLabel | null,
   ): Promise<UseEpicResult> {
     const outcome = this.resolve(plan)
     const actionSeq = room.lastSeq + 1
     const next = room.applyEpic(plan, outcome, input.commandId, this.clock.now())
 
-    return this.persist(room, next, actionSeq, input, decision)
+    return this.persist(room, next, actionSeq, input, decision, pendingLabel)
   }
 
   /** Tira los dados de cada efecto UNA sola vez; nunca vuelve a sortear tras un conflicto. */
@@ -277,6 +285,7 @@ export class UseEpic {
     actionSeq: number,
     input: Pick<UseEpicInput, 'roomId' | 'commandId'>,
     decision: CombatDecisionEvent | null | undefined,
+    pendingLabel: PendingMctsTeacherLabel | null,
   ): Promise<UseEpicResult> {
     try {
       const resolved =
@@ -288,7 +297,15 @@ export class UseEpic {
         throw new DomainError('La epica se guardo sin su evento.')
       }
 
-      if (decision !== undefined && decision !== null) await this.decisionRecorder?.record(decision)
+      if (decision !== undefined && decision !== null) {
+        // Correccion de alcance sobre PR#81: ver `ExecuteBasicAttack` -- sin
+        // esto un fallo fail-open de `record()` dejaria un `MctsTeacherLabel`
+        // huerfano, ligado a un `CombatDecisionEvent` que nunca existio.
+        const recorded = (await this.decisionRecorder?.record(decision)) ?? false
+        if (recorded) {
+          void this.liveTeacherLabeler?.persist(pendingLabel)
+        }
+      }
 
       return {
         event,

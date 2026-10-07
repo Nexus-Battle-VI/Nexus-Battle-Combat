@@ -26,6 +26,10 @@ import type { ClockPort } from '../ports/ClockPort'
 import type { RandomSequencePort } from '../ports/RandomSequencePort'
 import type { RoomCommandLockPort } from '../ports/RoomCommandLockPort'
 import type { BattleDeadlineSettler } from '../services/BattleDeadlineSettler'
+import type {
+  LiveMctsTeacherLabeler,
+  PendingMctsTeacherLabel,
+} from '../services/LiveMctsTeacherLabeler'
 import type { ExecuteBasicAttack } from './ExecuteBasicAttack'
 import { prepareAttack, type AttackParticipant } from './PrepareAttack'
 import { ResolveAttack } from './ResolveAttack'
@@ -125,6 +129,8 @@ export class UseSkill {
     private readonly resolveAttack: ResolveAttack = new ResolveAttack(),
     private readonly versusDrop: PersistVersusDropDecision | null = null,
     private readonly decisionRecorder: CombatDecisionRecorder | null = null,
+    /** EN-036.2 (#566, correccion de alcance sobre PR#81): ver `ExecuteBasicAttack`. */
+    private readonly liveTeacherLabeler: LiveMctsTeacherLabeler | null = null,
   ) {}
 
   execute(input: UseSkillInput): Promise<UseSkillResult> {
@@ -162,8 +168,9 @@ export class UseSkill {
           ? { scope: 'ALLIED_GROUP' }
           : { scope: 'COMBATANT', combatant: input.target },
     })
+    const pendingLabel = this.liveTeacherLabeler?.prepare(room, decision) ?? null
 
-    return this.executePlan(room, plan, input, decision)
+    return this.executePlan(room, plan, input, decision, pendingLabel)
   }
 
   /** Ruta interna sin lock; el orquestador AI ya serializa la sala. */
@@ -179,7 +186,7 @@ export class UseSkill {
 
     const plan = room.planSkillForActor(input.actor, input.abilityId, input.target)
 
-    return this.executePlan(room, plan, input, null)
+    return this.executePlan(room, plan, input, null, null)
   }
 
   private executePlan(
@@ -187,6 +194,7 @@ export class UseSkill {
     plan: Exclude<ReturnType<BattleRoom['planSkillForActor']>, { readonly kind: 'replay' }>,
     input: SkillExecutionInput,
     decision: CombatDecisionEvent | null | undefined,
+    pendingLabel: PendingMctsTeacherLabel | null,
   ): Promise<UseSkillResult> {
     if (plan.kind === 'degraded') {
       if (input.target === undefined) {
@@ -224,7 +232,7 @@ export class UseSkill {
       const actionSeq = room.lastSeq + 1
       const next = room.applyHealSkill(plan, input.commandId, this.clock.now())
 
-      return this.persist(room, next, actionSeq, input, decision)
+      return this.persist(room, next, actionSeq, input, decision, pendingLabel)
     }
 
     if (plan.kind === 'healingSkill') {
@@ -235,7 +243,7 @@ export class UseSkill {
       const actionSeq = room.lastSeq + 1
       const next = room.applyHealingSkill(plan, outcome, input.commandId, this.clock.now())
 
-      return this.persist(room, next, actionSeq, input, decision)
+      return this.persist(room, next, actionSeq, input, decision, pendingLabel)
     }
 
     if (plan.kind === 'directDamageSkill') {
@@ -245,7 +253,7 @@ export class UseSkill {
       const actionSeq = room.lastSeq + 1
       const next = room.applyDirectDamageSkill(plan, outcome, input.commandId, this.clock.now())
 
-      return this.persist(room, next, actionSeq, input, decision)
+      return this.persist(room, next, actionSeq, input, decision, pendingLabel)
     }
 
     // A partir de aqui se consume la secuencia: todo lo que puede fallar por el perfil ya se
@@ -257,7 +265,7 @@ export class UseSkill {
     const actionSeq = room.lastSeq + 1
     const next = room.applySkill(plan, outcome, input.commandId, this.clock.now())
 
-    return this.persist(room, next, actionSeq, input, decision)
+    return this.persist(room, next, actionSeq, input, decision, pendingLabel)
   }
 
   /** HU-19 v2 (contrato §3): magnitud del dano directo, con su dado si lo trae. */
@@ -314,6 +322,7 @@ export class UseSkill {
     actionSeq: number,
     input: Pick<UseSkillInput, 'roomId' | 'commandId'>,
     decision: CombatDecisionEvent | null | undefined,
+    pendingLabel: PendingMctsTeacherLabel | null,
   ): Promise<UseSkillResult> {
     try {
       const resolved =
@@ -325,7 +334,15 @@ export class UseSkill {
         throw new DomainError('La habilidad se guardo sin su evento.')
       }
 
-      if (decision !== undefined && decision !== null) await this.decisionRecorder?.record(decision)
+      if (decision !== undefined && decision !== null) {
+        // Correccion de alcance sobre PR#81: ver `ExecuteBasicAttack` -- sin
+        // esto un fallo fail-open de `record()` dejaria un `MctsTeacherLabel`
+        // huerfano, ligado a un `CombatDecisionEvent` que nunca existio.
+        const recorded = (await this.decisionRecorder?.record(decision)) ?? false
+        if (recorded) {
+          void this.liveTeacherLabeler?.persist(pendingLabel)
+        }
+      }
 
       return {
         event,

@@ -1,0 +1,155 @@
+{
+  "candidate": {
+    "kind": "BASIC_ATTACK",
+    "target": {
+      "combatant": {
+        "seat": 0,
+        "teamLabel": "B"
+      },
+      "scope": "COMBATANT"
+    }
+  },
+  "description": "feature-schema-v1: BASIC_ATTACK de un guerrero (33/44 Vida, 6/10 Poder) contra un goblin (15/30 Vida, sin Poder). Un solo candidato, sin aliados.",
+  "expectedFeatures": {
+    "actor.abilities_count_norm": 0.0,
+    "actor.active_effects_count_norm": 0.0,
+    "actor.attack_norm": 0.10000000149011612,
+    "actor.attack_present": 1.0,
+    "actor.cooldowns_count_norm": 0.0,
+    "actor.damage_memory_amount_norm": 0.0,
+    "actor.damage_memory_present": 0.0,
+    "actor.damage_mode_dice": 1.0,
+    "actor.damage_mode_fixed": 0.0,
+    "actor.damage_mode_percentage": 0.0,
+    "actor.damage_present": 1.0,
+    "actor.damage_value_norm": 0.07000000029802322,
+    "actor.defense_norm": 0.10999999940395355,
+    "actor.epic_cooldown_ratio": 0.0,
+    "actor.epic_power_cost_norm": 0.0,
+    "actor.epic_present": 0.0,
+    "actor.health_ratio": 0.75,
+    "actor.level_norm": 0.0,
+    "actor.power_present": 1.0,
+    "actor.power_ratio": 0.6000000238418579,
+    "allies.active_effects_count_mean_norm": 0.0,
+    "allies.alive_count_norm": 0.0,
+    "allies.attack_norm_mean": 0.0,
+    "allies.count_norm": 0.0,
+    "allies.defense_norm_mean": 0.0,
+    "allies.health_ratio_mean": 1.0,
+    "allies.health_ratio_min": 1.0,
+    "allies.power_presence_ratio": 0.0,
+    "allies.power_ratio_mean": 0.0,
+    "candidate.charge_or_cooldown_total_norm": 0.0,
+    "candidate.cooldown_ratio": 0.0,
+    "candidate.effect_count_norm": 0.0,
+    "candidate.effect_has_buff_self": 0.0,
+    "candidate.effect_has_damage": 0.0,
+    "candidate.effect_has_debuff_opponent": 0.0,
+    "candidate.effect_has_healing": 0.0,
+    "candidate.effect_has_immunity": 0.0,
+    "candidate.has_power_cost": 0.0,
+    "candidate.kind_ability": 0.0,
+    "candidate.kind_basic_attack": 1.0,
+    "candidate.kind_epic": 0.0,
+    "candidate.power_cost_mode_all_available": 0.0,
+    "candidate.power_cost_mode_fixed": 0.0,
+    "candidate.power_cost_norm": 0.0,
+    "candidate.primary_effect_mode_dice": 0.0,
+    "candidate.primary_effect_mode_fixed": 0.0,
+    "candidate.primary_effect_mode_percentage": 0.0,
+    "candidate.primary_effect_value_norm": 0.0,
+    "candidate.target_health_ratio": 0.5,
+    "candidate.target_is_alive": 1.0,
+    "candidate.target_is_group": 0.0,
+    "candidate.target_power_present": 0.0,
+    "candidate.target_power_ratio": 0.0,
+    "candidate.target_relation_ally": 0.0,
+    "candidate.target_relation_enemy": 1.0,
+    "candidate.target_relation_self": 0.0,
+    "candidate.target_scope_allied_group": 0.0,
+    "candidate.target_scope_combatant": 1.0,
+    "candidate.target_scope_self": 0.0,
+    "enemies.active_effects_count_mean_norm": 0.0,
+    "enemies.alive_count_norm": 0.20000000298023224,
+    "enemies.attack_norm_mean": 0.05999999865889549,
+    "enemies.count_norm": 0.20000000298023224,
+    "enemies.defense_norm_mean": 0.05000000074505806,
+    "enemies.health_ratio_mean": 0.5,
+    "enemies.health_ratio_min": 0.5,
+    "enemies.power_presence_ratio": 0.0,
+    "enemies.power_ratio_mean": 0.0,
+    "state.mode_pve": 1.0,
+    "state.mode_pvp": 0.0,
+    "state.round_norm": 0.03999999910593033,
+    "state.turns_completed_norm": 0.029999999329447746
+  },
+  "featureSchemaVersion": "feature-schema-v1",
+  "state": {
+    "actor": {
+      "abilities": [],
+      "activeEffects": [],
+      "attack": 10,
+      "cooldowns": [],
+      "damage": {
+        "count": 1,
+        "mode": "DICE",
+        "sides": 6
+      },
+      "damageMemory": null,
+      "defense": 11,
+      "epic": null,
+      "health": {
+        "current": 33,
+        "max": 44
+      },
+      "heroSubtype": "GUERRERO_ARMAS",
+      "identity": {
+        "seat": 0,
+        "teamLabel": "A"
+      },
+      "kind": "HUMAN",
+      "level": 1,
+      "power": {
+        "current": 6,
+        "max": 10
+      }
+    },
+    "allies": [],
+    "context": {
+      "battleId": "golden-battle-1",
+      "mode": "PVE",
+      "round": 2,
+      "turnsCompleted": 3
+    },
+    "enemies": [
+      {
+        "abilities": [],
+        "activeEffects": [],
+        "attack": 6,
+        "cooldowns": [],
+        "damage": {
+          "count": 1,
+          "mode": "DICE",
+          "sides": 4
+        },
+        "damageMemory": null,
+        "defense": 5,
+        "epic": null,
+        "health": {
+          "current": 15,
+          "max": 30
+        },
+        "heroSubtype": "GUERRERO_ARMAS",
+        "identity": {
+          "seat": 0,
+          "teamLabel": "B"
+        },
+        "kind": "HUMAN",
+        "level": 1,
+        "power": null
+      }
+    ],
+    "schemaVersion": 1
+  }
+}

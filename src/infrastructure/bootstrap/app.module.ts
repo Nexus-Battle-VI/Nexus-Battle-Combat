@@ -101,12 +101,14 @@ import { InMemoryRewardWorkflowRepository } from '../../adapters/outbound/persis
 import { InMemoryExperienceRollRepository } from '../../adapters/outbound/persistence/InMemoryExperienceRollRepository'
 import { InMemoryMissionSimulationIntakeRepository } from '../../adapters/outbound/persistence/InMemoryMissionSimulationIntakeRepository'
 import { InMemoryCombatDecisionTelemetryRepository } from '../../adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
+import { InMemoryMctsTeacherLabelRepository } from '../../adapters/outbound/persistence/InMemoryMctsTeacherLabelRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
 import { MongoChatMessageRepository } from '../../adapters/outbound/persistence/MongoChatMessageRepository'
 import { MongoRewardWorkflowRepository } from '../../adapters/outbound/persistence/MongoRewardWorkflowRepository'
 import { MongoExperienceRollRepository } from '../../adapters/outbound/persistence/MongoExperienceRollRepository'
 import { MongoMissionSimulationIntakeRepository } from '../../adapters/outbound/persistence/MongoMissionSimulationIntakeRepository'
 import { MongoCombatDecisionTelemetryRepository } from '../../adapters/outbound/persistence/MongoCombatDecisionTelemetryRepository'
+import { MongoMctsTeacherLabelRepository } from '../../adapters/outbound/persistence/MongoMctsTeacherLabelRepository'
 import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
@@ -126,6 +128,7 @@ import {
 } from '../../adapters/outbound/system/IntervalStakeScheduler'
 import { RewardWorkflowResultPublisher } from '../../adapters/outbound/system/RewardWorkflowResultPublisher'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
+import { InMemoryMctsSimulationAdapter } from '../../adapters/outbound/system/InMemoryMctsSimulationAdapter'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
 import { UuidGenerator } from '../../adapters/outbound/system/UuidGenerator'
 import {
@@ -189,6 +192,10 @@ import {
   COMBAT_DECISION_TELEMETRY_REPOSITORY,
   type CombatDecisionTelemetryRepositoryPort,
 } from '../../application/ports/CombatDecisionTelemetryRepositoryPort'
+import {
+  MCTS_TEACHER_LABEL_REPOSITORY,
+  type MctsTeacherLabelRepositoryPort,
+} from '../../application/ports/MctsTeacherLabelRepositoryPort'
 import { WALLET_STAKE_PORT, type WalletStakePort } from '../../application/ports/WalletStakePort'
 import {
   RANDOM_SEQUENCE_FACTORY,
@@ -214,6 +221,9 @@ import { createBoundedRandom } from '../../application/services/BoundedRandom'
 import { BattleDeadlineSettler } from '../../application/services/BattleDeadlineSettler'
 import { BattleFinalizer } from '../../application/services/BattleFinalizer'
 import { CombatDecisionRecorder } from '../../application/services/CombatDecisionRecorder'
+import { LiveMctsTeacherLabeler } from '../../application/services/LiveMctsTeacherLabeler'
+import { MctsSearch } from '../../application/services/MctsSearch'
+import { MctsTeacher } from '../../application/services/MctsTeacher'
 import { PersistVersusDropDecision } from '../../application/services/PersistVersusDropDecision'
 import { BotParticipantFactory } from '../../application/services/BotParticipantFactory'
 import { StakeReleaser } from '../../application/services/StakeReleaser'
@@ -561,6 +571,51 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       ): CombatDecisionRecorder =>
         new CombatDecisionRecorder(repository, clock, logger, new Sha256CommandIdFingerprint()),
       inject: [COMBAT_DECISION_TELEMETRY_REPOSITORY, CLOCK, LOGGER],
+    },
+    // EN-036.2 (#566, correccion de alcance sobre PR#81): persistencia append-only
+    // del teacher label MCTS en vivo. Misma coleccion/base propia de Combat que
+    // `combat-decision-events`, nunca otra base ni otro servicio.
+    {
+      provide: MCTS_TEACHER_LABEL_REPOSITORY,
+      useFactory: (db: Db | null): MctsTeacherLabelRepositoryPort =>
+        db === null
+          ? new InMemoryMctsTeacherLabelRepository()
+          : new MongoMctsTeacherLabelRepository(db),
+      inject: [DATABASE],
+    },
+    // EN-036.1 (#565): el teacher MCTS nunca comparte el RNG productivo. Reutiliza
+    // el MISMO `RANDOM_SEQUENCE_FACTORY` sin estado (crea una secuencia aislada
+    // por rollout, ver `MctsSearch`), nunca `BATTLE_RANDOM_SEQUENCE` (el cursor
+    // continuo de proceso de HU-17/HU-24).
+    {
+      provide: MctsSearch,
+      useFactory: (factory: RandomSequenceFactoryPort, clock: ClockPort): MctsSearch =>
+        new MctsSearch(new InMemoryMctsSimulationAdapter(clock), factory),
+      inject: [RANDOM_SEQUENCE_FACTORY, CLOCK],
+    },
+    {
+      provide: MctsTeacher,
+      useFactory: (search: MctsSearch): MctsTeacher => new MctsTeacher(search),
+      inject: [MctsSearch],
+    },
+    // EN-036.2 (#566, correccion de alcance sobre PR#81): fail-open (§15) y
+    // nunca esperado en el camino de respuesta -- ver `LiveMctsTeacherLabeler`.
+    // `null` mientras `MCTS_LIVE_TEACHER_LABELING_ENABLED` no este activo
+    // (por defecto, ver `env.ts`): los 4 casos de uso ya tratan `null` como
+    // "desactivado" via `?.`, igual que `decisionRecorder`.
+    {
+      provide: LiveMctsTeacherLabeler,
+      useFactory: (
+        config: AppConfig,
+        teacher: MctsTeacher,
+        repository: MctsTeacherLabelRepositoryPort,
+        clock: ClockPort,
+        logger: Logger,
+      ): LiveMctsTeacherLabeler | null =>
+        config.mctsLiveTeacherLabelingEnabled
+          ? new LiveMctsTeacherLabeler(teacher, repository, clock, logger)
+          : null,
+      inject: [APP_CONFIG, MctsTeacher, MCTS_TEACHER_LABEL_REPOSITORY, CLOCK, LOGGER],
     },
     {
       provide: CREATE_BATTLE_ROOM,
@@ -1457,6 +1512,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         settler: BattleDeadlineSettler,
         versusDrop: PersistVersusDropDecision,
         decisions: CombatDecisionRecorder,
+        liveTeacherLabeler: LiveMctsTeacherLabeler,
       ): ExecuteBasicAttack =>
         new ExecuteBasicAttack(
           rooms,
@@ -1467,6 +1523,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           undefined,
           versusDrop,
           decisions,
+          liveTeacherLabeler,
         ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
@@ -1476,6 +1533,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_DEADLINE_SETTLER,
         PersistVersusDropDecision,
         CombatDecisionRecorder,
+        LiveMctsTeacherLabeler,
       ],
     },
     {
@@ -1503,6 +1561,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         settler: BattleDeadlineSettler,
         versusDrop: PersistVersusDropDecision,
         decisions: CombatDecisionRecorder,
+        liveTeacherLabeler: LiveMctsTeacherLabeler,
       ): UseSkill =>
         new UseSkill(
           rooms,
@@ -1514,6 +1573,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           undefined,
           versusDrop,
           decisions,
+          liveTeacherLabeler,
         ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
@@ -1524,6 +1584,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_DEADLINE_SETTLER,
         PersistVersusDropDecision,
         CombatDecisionRecorder,
+        LiveMctsTeacherLabeler,
       ],
     },
     {
@@ -1550,7 +1611,18 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         settler: BattleDeadlineSettler,
         versusDrop: PersistVersusDropDecision,
         decisions: CombatDecisionRecorder,
-      ): UseEpic => new UseEpic(rooms, clock, sequence, lock, settler, versusDrop, decisions),
+        liveTeacherLabeler: LiveMctsTeacherLabeler,
+      ): UseEpic =>
+        new UseEpic(
+          rooms,
+          clock,
+          sequence,
+          lock,
+          settler,
+          versusDrop,
+          decisions,
+          liveTeacherLabeler,
+        ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
@@ -1559,6 +1631,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_DEADLINE_SETTLER,
         PersistVersusDropDecision,
         CombatDecisionRecorder,
+        LiveMctsTeacherLabeler,
       ],
     },
     {
@@ -1596,6 +1669,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         publisher: BattleEventPublisherPort,
         finalizer: BattleFinalizer,
         settler: BattleDeadlineSettler,
+        liveTeacherLabeler: LiveMctsTeacherLabeler,
       ): ExecuteAiTurn =>
         new ExecuteAiTurn(
           rooms,
@@ -1610,6 +1684,9 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           finalizer,
           new Sha256CommandIdFingerprint(),
           settler,
+          undefined,
+          undefined,
+          liveTeacherLabeler,
         ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
@@ -1623,6 +1700,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_EVENT_PUBLISHER,
         BATTLE_FINALIZER,
         BATTLE_DEADLINE_SETTLER,
+        LiveMctsTeacherLabeler,
       ],
     },
     {

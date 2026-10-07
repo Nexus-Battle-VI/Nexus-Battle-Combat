@@ -51,3 +51,32 @@ export class NoStrategicMctsCandidatesError extends DomainError {
     this.name = 'NoStrategicMctsCandidatesError'
   }
 }
+
+/**
+ * Ya existe un `MctsTeacherLabel` persistido para `eventId` con contenido
+ * DISTINTO del que se intenta anadir (EN-036.2 #566, correccion de alcance
+ * sobre PR#81). El mismo label repetido byte a byte es idempotente (no es
+ * error); esto solo salta ante una inconsistencia real -- nunca se
+ * sobrescribe en silencio.
+ */
+export class MctsTeacherLabelConflictError extends DomainError {
+  constructor(readonly eventId: string) {
+    super(`Ya existe un MctsTeacherLabel distinto para eventId="${eventId}".`)
+    this.name = 'MctsTeacherLabelConflictError'
+  }
+}
+
+/**
+ * El `MctsTeacherResult` que acaba de producir `MctsTeacher.teach()` no
+ * cumple la relacion exigida con su `CombatDecisionEvent` (§5 de la
+ * correccion de alcance sobre PR#81): `stateSchemaVersion` no coincide, o
+ * algun candidato no pertenece a `legalActions`. Nunca se persiste un label
+ * en este estado; se trata como cualquier otro fallo fail-open de
+ * `LiveMctsTeacherLabeler`.
+ */
+export class MctsTeacherLabelValidationError extends DomainError {
+  constructor(reason: string) {
+    super(`MctsTeacherLabel invalido: ${reason}`)
+    this.name = 'MctsTeacherLabelValidationError'
+  }
+}

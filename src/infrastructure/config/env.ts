@@ -84,6 +84,17 @@ export interface AppConfig {
    * ver `docs/hu-17-turn-order.md`.
    */
   readonly randomSeed: number
+  /**
+   * EN-036.2 (#566, correccion de alcance sobre PR#81): activa `LiveMctsTeacherLabeler`
+   * (teacher label MCTS en vivo sobre cada decision HUMAN/AI real). Deshabilitado
+   * por defecto: cada decision etiquetada corre una busqueda MCTS completa
+   * (`rollouts: 128`) en segundo plano, con costo real de CPU que compite por
+   * el MISMO event loop que el resto de Combat -- un despliegue que lo
+   * necesite para alimentar el dataset de #566 lo activa explicitamente,
+   * igual criterio que `PERSISTENCE_DRIVER`/`AUTH_MODE` (nunca un riesgo
+   * nuevo por defecto silencioso).
+   */
+  readonly mctsLiveTeacherLabelingEnabled: boolean
 }
 
 /** Semilla de referencia validada por HU-26 (Management #362-#364). */
@@ -294,5 +305,6 @@ export const loadConfig = (env: RawEnv): AppConfig => {
       historyLimit: readInteger(env, 'CHAT_HISTORY_LIMIT', 50, 1, 200),
     },
     randomSeed: readInteger(env, 'COMBAT_RANDOM_SEED', DEFAULT_RANDOM_SEED, 0, 4_294_967_295),
+    mctsLiveTeacherLabelingEnabled: readBoolean(env, 'MCTS_LIVE_TEACHER_LABELING_ENABLED', false),
   }
 }

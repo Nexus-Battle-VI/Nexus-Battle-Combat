@@ -86,6 +86,72 @@ jobs:
       - name: Compilar el servicio
         run: npm run build
 
+  ai-pipeline:
+    name: Pipeline de dataset IA (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Independiente del job `quality` (Node): ai/ es un paquete Python aislado
+    # (EN-036.2, Management #566) que no comparte dependencias ni build con el
+    # servicio Node. No entrena nada aqui (#566 §74): solo install/lint/tests/
+    # smoke de construccion del dataset de fixtures + import de PyTorch.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Version de uv fijada explicitamente (#566 §73): la misma resuelta y
+      # validada localmente contra Python 3.13 (ver docs/en-036-ai-dataset-pipeline.md).
+      #
+      # Instalado con el script oficial en vez de `astral-sh/setup-uv`: el
+      # allowlist de Actions de la organizacion solo permite `actions/*`,
+      # `docker/*`, `github/codeql-action/*` o acciones propias de
+      # Nexus-Battle-VI, y una accion de terceros fuera de esa lista hace que
+      # GitHub rechace el workflow ENTERO antes de programar ningun job
+      # (`startup_failure`, cero jobs, sin logs que lo expliquen).
+      - name: Instalar uv
+        env:
+          UV_VERSION: '0.9.17'
+        run: |
+          curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Instalar dependencias (uv.lock, frozen)
+        working-directory: ai
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        working-directory: ai
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Pruebas Python
+        working-directory: ai
+        run: uv run pytest -q
+
+      - name: Smoke de construccion del dataset (fixtures, nunca datos reales)
+        working-directory: ai
+        run: |
+          uv run nexus-combat-dataset build \
+            --source jsonl \
+            --events tests/fixtures/decision-events.jsonl \
+            --labels tests/fixtures/teacher-labels.jsonl \
+            --output /tmp/ai-dataset-ci \
+            --cutoff 2027-01-01T00:00:00Z \
+            --source-commit "${{ github.sha }}" \
+            --seed 42
+
+      - name: Smoke de PyTorch (import + DataLoader, sin entrenar)
+        working-directory: ai
+        run: |
+          uv run python -c "
+          import torch, numpy
+          print('torch', torch.__version__, 'cuda:', torch.cuda.is_available())
+          print('numpy', numpy.__version__)
+          "
+
   docker:
     name: Imagen del servicio
     runs-on: ubuntu-latest
