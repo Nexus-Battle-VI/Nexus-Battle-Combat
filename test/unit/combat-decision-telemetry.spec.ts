@@ -440,9 +440,7 @@ describe('ExecuteBasicAttack — teacher label en vivo (EN-036.2 #566, correccio
       battle: { turnsCompleted: 1 },
     })
     // CombatDecisionEvent: no existe (el stub de telemetry nunca lo acepto).
-    await expect(
-      unavailable.listDecisionsByBattle('ONLINE', ROOM_ID),
-    ).resolves.toHaveLength(0)
+    await expect(unavailable.listDecisionsByBattle('ONLINE', ROOM_ID)).resolves.toHaveLength(0)
     // MctsTeacherLabel: `persist()` NUNCA se invoco -- `record()` devolvio
     // `false` y el llamador no disparo el label. Sin esto el label se
     // persistiria igual, huerfano, ligado a un `CombatDecisionEvent` que
