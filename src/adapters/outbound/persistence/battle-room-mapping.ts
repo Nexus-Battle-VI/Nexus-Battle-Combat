@@ -135,6 +135,10 @@ export interface BattleRoomDocument {
     readonly tournamentId: string
     readonly encounterId: string
     readonly requestHash: string
+    readonly mode?: 'SOLO' | 'DUO' | 'TRIO'
+    readonly teamSize?: number
+    readonly contractVersion?: 3
+    readonly requestHashVersion?: 2
   } | null
 }
 

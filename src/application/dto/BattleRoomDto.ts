@@ -59,6 +59,12 @@ export interface BattleRoomDto {
    * `0` cuando no hay ninguna.
    */
   readonly stakePool: { readonly total: number }
+  /** Modalidad de Tournament, distinta del modo PVP del motor. Aditivo para v3. */
+  readonly tournament?: {
+    readonly contractVersion: 3
+    readonly mode: 'SOLO' | 'DUO' | 'TRIO'
+    readonly teamSize: number
+  }
 }
 
 /**
@@ -84,6 +90,15 @@ export const toBattleRoomDto = (
     lastSeq: room.lastSeq,
     battle: room.battleView(),
     result: room.result,
+    ...(room.tournament?.mode === undefined
+      ? {}
+      : {
+          tournament: {
+            contractVersion: 3 as const,
+            mode: room.tournament.mode,
+            teamSize: room.teams[0].capacity,
+          },
+        }),
     stakePool: {
       total: room
         .stakesAtRisk()

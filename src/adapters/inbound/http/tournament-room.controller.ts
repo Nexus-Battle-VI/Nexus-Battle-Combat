@@ -48,11 +48,11 @@ import type { TournamentRoomRecordDto } from '../../../application/dto/Tournamen
 import type { CreateTournamentRoom } from '../../../application/use-cases/CreateTournamentRoom'
 import type { StartTournamentRoom } from '../../../application/use-cases/StartTournamentRoom'
 import type { GetTournamentRoomRecord } from '../../../application/use-cases/GetTournamentRoomRecord'
-import { canonicalBodyHash } from '../../outbound/identity/internal-signature'
 import { InternalOnly, InternalServices } from './auth/decorators'
 import {
   tournamentRoomAfterSeqOf,
   tournamentRoomCreateRequestOf,
+  tournamentRoomIntentOf,
   tournamentRoomStartRequestOf,
 } from './tournament-room-request'
 import { CREATE_TOURNAMENT_ROOM, GET_TOURNAMENT_ROOM_RECORD, START_TOURNAMENT_ROOM } from './tokens'
@@ -86,11 +86,12 @@ export class TournamentRoomController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
-    summary: 'Reserva la sala de combate de una justa (roster fijo de 4 jugadores humanos)',
+    summary: 'Reserva una justa SOLO/DUO/TRIO con 2/4/6 humanos',
     description:
-      'Idempotente por `operationId`: el mismo operationId con el mismo cuerpo devuelve ' +
-      'siempre la misma sala; con un cuerpo distinto responde 409. Resuelve displayName ' +
-      '(Account) y heroe equipado (Player-Inventory) de cada uno de los 4 jugadores contra los ' +
+      'Contrato v3: mode y teamSize (contractVersion=3 opcional); sin ellos conserva DUO historico. ' +
+      'Idempotente por operationId e intencion normalizada v3 (cuerpo original historico). ' +
+      'Una intencion distinta responde 409. Resuelve displayName ' +
+      '(Account) y heroe equipado (Player-Inventory) de cada humano contra los ' +
       'mismos puertos que usa el lobby publico. La sala nace PREPARING, fuera del listado ' +
       'publico y sin admitir join/leave/cancel del lobby.',
   })
@@ -104,16 +105,16 @@ export class TournamentRoomController {
   @ApiResponse({
     status: 422,
     description:
-      'Roster invalido (no son 2 equipos de 2, o un jugador duplicado) o un jugador sin heroe ' +
+      'Roster invalido (tamano incorrecto para la modalidad o humano repetido) o sin heroe ' +
       'equipado',
   })
   @ApiResponse({ status: 503, description: 'Account o Player-Inventory no respondieron' })
   async create(@Body() body: unknown): Promise<BattleRoomDto> {
     try {
       const request = tournamentRoomCreateRequestOf(body)
-      const requestHash = canonicalBodyHash(body)
+      const intent = tournamentRoomIntentOf(body, request)
 
-      return await this.createRoom.execute(request, requestHash)
+      return await this.createRoom.execute(request, intent.hash, intent.version)
     } catch (error: unknown) {
       throw TournamentRoomController.translate(error)
     }
