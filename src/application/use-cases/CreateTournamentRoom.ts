@@ -20,10 +20,14 @@ export interface TournamentRoomTeamRequest {
   readonly memberIds: readonly string[]
 }
 
+export type TournamentRoomMode = 'SOLO' | 'DUO' | 'TRIO'
+
 export interface CreateTournamentRoomRequest {
   readonly operationId: string
   readonly tournamentId: string
   readonly encounterId: string
+  /** Omitido en el contrato histórico: equivale a DUO. */
+  readonly mode?: TournamentRoomMode
   readonly teams: readonly [TournamentRoomTeamRequest, TournamentRoomTeamRequest]
 }
 
@@ -79,7 +83,7 @@ export class CreateTournamentRoom {
       return CreateTournamentRoom.replayOf(existing, request.operationId, requestHash)
     }
 
-    assertRosterCardinality(request.teams)
+    assertRosterCardinality(request.teams, request.mode ?? 'DUO')
 
     const [teamA, teamB] = await Promise.all([
       this.resolveTeam(request.teams[0]),
@@ -91,6 +95,7 @@ export class CreateTournamentRoom {
       tournamentId: request.tournamentId,
       encounterId: request.encounterId,
       requestHash,
+      mode: request.mode ?? 'DUO',
       teams: [teamA, teamB],
     }
 
@@ -159,10 +164,15 @@ export class CreateTournamentRoom {
 }
 
 /** Antes de cualquier llamada upstream: un roster mal formado no debe costar lecturas a Account ni a Player/Inventory. */
-const assertRosterCardinality = (teams: readonly TournamentRoomTeamRequest[]): void => {
-  if (teams.some((team) => team.memberIds.length !== 2)) {
+const assertRosterCardinality = (
+  teams: readonly TournamentRoomTeamRequest[],
+  mode: TournamentRoomMode,
+): void => {
+  const expected = mode === 'SOLO' ? 1 : mode === 'TRIO' ? 3 : 2
+
+  if (teams.some((team) => team.memberIds.length !== expected)) {
     throw new InvalidTournamentRosterError(
-      'Cada equipo de torneo necesita exactamente 2 jugadores.',
+      `Cada equipo ${mode} necesita exactamente ${String(expected)} jugador(es).`,
     )
   }
 }

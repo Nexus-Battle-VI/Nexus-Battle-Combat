@@ -1,6 +1,7 @@
 import { InvalidTournamentRoomRequestError } from '../../../application/errors/TournamentRoomErrors'
 import type {
   CreateTournamentRoomRequest,
+  TournamentRoomMode,
   TournamentRoomTeamRequest,
 } from '../../../application/use-cases/CreateTournamentRoom'
 import type { StartTournamentRoomRequest } from '../../../application/use-cases/StartTournamentRoom'
@@ -42,6 +43,11 @@ export const tournamentRoomCreateRequestOf = (body: unknown): CreateTournamentRo
   const operationId = textAt(request.operationId, 'operationId', 300)
   const tournamentId = textAt(request.tournamentId, 'tournamentId', 300)
   const encounterId = textAt(request.encounterId, 'encounterId', 300)
+  const mode = request.mode === undefined ? undefined : request.mode
+
+  if (mode !== undefined && mode !== 'SOLO' && mode !== 'DUO' && mode !== 'TRIO') {
+    invalid('mode')
+  }
 
   if (!Array.isArray(request.teams) || request.teams.length !== 2) {
     invalid('teams')
@@ -68,7 +74,13 @@ export const tournamentRoomCreateRequestOf = (body: unknown): CreateTournamentRo
     parseTeam(rawTeams[1], 1),
   ]
 
-  return { operationId, tournamentId, encounterId, teams }
+  return {
+    operationId,
+    tournamentId,
+    encounterId,
+    mode: mode as TournamentRoomMode | undefined,
+    teams,
+  }
 }
 
 /** Cuerpo de `POST /internal/v1/combat/tournament-rooms/:roomId/start` (Management#517). */

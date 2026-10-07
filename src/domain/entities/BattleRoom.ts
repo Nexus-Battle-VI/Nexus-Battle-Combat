@@ -363,6 +363,7 @@ export interface TournamentRoomMetadata {
   readonly tournamentId: string
   readonly encounterId: string
   readonly requestHash: string
+  readonly mode?: 'SOLO' | 'DUO' | 'TRIO'
 }
 
 /** Un jugador humano ya resuelto (Account + Player-Inventory) por `CreateTournamentRoom`. */
@@ -384,6 +385,8 @@ export interface CreateTournamentRoomInput {
   readonly tournamentId: string
   readonly encounterId: string
   readonly requestHash: string
+  /** Modalidad de Tournament; ausente en snapshots/contratos antiguos = DUO. */
+  readonly mode?: 'SOLO' | 'DUO' | 'TRIO'
   /**
    * Longitud fija 2, igual que `CreateBattleRoomInput.teamConfigs`: se recibe
    * como arreglo (no tupla) porque procede de una peticion HTTP externa, y la
@@ -690,9 +693,11 @@ export class BattleRoom {
         throw new InvalidTournamentRosterError('Cada equipo de torneo necesita un identificador.')
       }
 
-      if (teamInput.members.length !== 2) {
+      const expected = input.mode === 'SOLO' ? 1 : input.mode === 'TRIO' ? 3 : 2
+
+      if (teamInput.members.length !== expected) {
         throw new InvalidTournamentRosterError(
-          `El equipo "${teamInput.teamId}" necesita exactamente 2 jugadores humanos (se recibieron ${String(teamInput.members.length)}).`,
+          `El equipo "${teamInput.teamId}" necesita exactamente ${String(expected)} jugadores humanos (se recibieron ${String(teamInput.members.length)}).`,
         )
       }
     }
@@ -710,8 +715,9 @@ export class BattleRoom {
         displayName: member.displayName,
       }))
 
-    const teamA = Team.create(teamInputA.teamId.trim(), 2, toParticipants(teamInputA), at)
-    const teamB = Team.create(teamInputB.teamId.trim(), 2, toParticipants(teamInputB), at)
+    const capacity = input.mode === 'SOLO' ? 1 : input.mode === 'TRIO' ? 3 : 2
+    const teamA = Team.create(teamInputA.teamId.trim(), capacity, toParticipants(teamInputA), at)
+    const teamB = Team.create(teamInputB.teamId.trim(), capacity, toParticipants(teamInputB), at)
     const teams: readonly [Team, Team] = [teamA, teamB]
 
     // Reutiliza EXACTAMENTE la misma comprobacion de composicion que `create()`
@@ -740,6 +746,7 @@ export class BattleRoom {
           tournamentId: input.tournamentId,
           encounterId: input.encounterId,
           requestHash: input.requestHash,
+          ...(input.mode === undefined ? {} : { mode: input.mode }),
         },
       },
     )
