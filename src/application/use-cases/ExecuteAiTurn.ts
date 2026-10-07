@@ -84,8 +84,13 @@ export class ExecuteAiTurn {
       }
 
       if (executed.decision !== null) {
-        await this.recorder.record(executed.decision)
-        void this.liveTeacherLabeler?.persist(executed.pendingLabel)
+        // Correccion de alcance sobre PR#81: ver `ExecuteBasicAttack` -- sin
+        // esto un fallo fail-open de `record()` dejaria un `MctsTeacherLabel`
+        // huerfano, ligado a un `CombatDecisionEvent` que nunca existio.
+        const recorded = await this.recorder.record(executed.decision)
+        if (recorded) {
+          void this.liveTeacherLabeler?.persist(executed.pendingLabel)
+        }
       }
       if (result.finished !== null) this.finalizer.afterFinished(result.finished)
     }

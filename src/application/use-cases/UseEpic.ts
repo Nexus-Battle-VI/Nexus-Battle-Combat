@@ -298,8 +298,13 @@ export class UseEpic {
       }
 
       if (decision !== undefined && decision !== null) {
-        await this.decisionRecorder?.record(decision)
-        void this.liveTeacherLabeler?.persist(pendingLabel)
+        // Correccion de alcance sobre PR#81: ver `ExecuteBasicAttack` -- sin
+        // esto un fallo fail-open de `record()` dejaria un `MctsTeacherLabel`
+        // huerfano, ligado a un `CombatDecisionEvent` que nunca existio.
+        const recorded = (await this.decisionRecorder?.record(decision)) ?? false
+        if (recorded) {
+          void this.liveTeacherLabeler?.persist(pendingLabel)
+        }
       }
 
       return {

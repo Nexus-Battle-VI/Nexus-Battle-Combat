@@ -176,7 +176,7 @@ describe('CombatDecisionRecorder e in-memory telemetry', () => {
       target: { scope: 'COMBATANT', combatant: target },
     })
 
-    await expect(recorder.record(event)).resolves.toBeUndefined()
+    await expect(recorder.record(event)).resolves.toBe(false)
     expect(logError).toHaveBeenCalledWith(
       'combat_decision_telemetry_append_failed',
       expect.objectContaining({
@@ -389,6 +389,69 @@ describe('ExecuteBasicAttack — teacher label en vivo (EN-036.2 #566, correccio
     await expect(persistSpy.mock.results[0]?.value).resolves.toBeUndefined()
     expect(errorLog).toHaveBeenCalledWith(
       'mcts_teacher_label_generation_failed',
+      expect.any(Object),
+    )
+  })
+
+  it('fallo de telemetry: la accion real se guarda igual, pero el label MCTS NUNCA se persiste (sin huerfanos)', async () => {
+    const rooms = new InMemoryBattleRoomRepository()
+    await rooms.save(battleWithCombat(), 0)
+    const unavailable: CombatDecisionTelemetryRepositoryPort = {
+      append: () => Promise.reject(new Error('mongo unavailable')),
+      appendMany: () => Promise.reject(new Error('mongo unavailable')),
+      listDecisionsByBattle: () => Promise.resolve([]),
+      findOutcome: () => Promise.resolve(null),
+    }
+    const recorder = new CombatDecisionRecorder(unavailable, fixedClock, silentLogger, commandIds)
+    const { labeler, repo } = realLabeler()
+    const persistSpy = jest.spyOn(labeler, 'persist')
+    const repoAppendSpy = jest.spyOn(repo, 'append')
+    // El eventId es determinista a partir de (origin, battleId, commandId): se
+    // puede calcular de antemano sobre la MISMA sala inicial sin persistir
+    // nada, para despues verificar que ese eventId en concreto JAMAS gano un
+    // label, no solo que `repo` quedo vacio por casualidad.
+    const expectedEventId = recorder.prepareHumanDecision(battleWithCombat(), 'cmd-orphan-guard', {
+      kind: 'BASIC_ATTACK',
+      target: { scope: 'COMBATANT', combatant: target },
+    }).eventId
+    const attack = new ExecuteBasicAttack(
+      rooms,
+      clock,
+      scriptedSequence([indexForFace(1, 6)]),
+      new ChannelLock(),
+      null,
+      undefined,
+      null,
+      recorder,
+      labeler,
+    )
+
+    await expect(
+      attack.execute({
+        roomId: ROOM_ID,
+        requesterId: 'a1',
+        commandId: 'cmd-orphan-guard',
+        target,
+      }),
+    ).resolves.toMatchObject({ replayed: false })
+
+    // Gameplay: la accion real se guardo pese al fallo de telemetry.
+    await expect(rooms.findById(ROOM_ID)).resolves.toMatchObject({
+      battle: { turnsCompleted: 1 },
+    })
+    // CombatDecisionEvent: no existe (el stub de telemetry nunca lo acepto).
+    await expect(
+      unavailable.listDecisionsByBattle('ONLINE', ROOM_ID),
+    ).resolves.toHaveLength(0)
+    // MctsTeacherLabel: `persist()` NUNCA se invoco -- `record()` devolvio
+    // `false` y el llamador no disparo el label. Sin esto el label se
+    // persistiria igual, huerfano, ligado a un `CombatDecisionEvent` que
+    // nunca existio.
+    expect(persistSpy).not.toHaveBeenCalled()
+    expect(repoAppendSpy).not.toHaveBeenCalled()
+    await expect(repo.findByEventId(expectedEventId)).resolves.toBeNull()
+    expect(logError).toHaveBeenCalledWith(
+      'combat_decision_telemetry_append_failed',
       expect.any(Object),
     )
   })

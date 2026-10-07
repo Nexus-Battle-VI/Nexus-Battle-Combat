@@ -4,6 +4,7 @@ import { InMemoryCombatDecisionTelemetryRepository } from '../../src/adapters/ou
 import { Sha256CommandIdFingerprint } from '../../src/adapters/outbound/system/Sha256CommandIdFingerprint'
 import type { BattleEventPublisherPort } from '../../src/application/ports/BattleEventPublisherPort'
 import type { AiDecisionPort } from '../../src/application/ports/AiDecisionPort'
+import type { CombatDecisionTelemetryRepositoryPort } from '../../src/application/ports/CombatDecisionTelemetryRepositoryPort'
 import { CombatDecisionRecorder } from '../../src/application/services/CombatDecisionRecorder'
 import { LiveMctsTeacherLabeler } from '../../src/application/services/LiveMctsTeacherLabeler'
 import { MctsSearch } from '../../src/application/services/MctsSearch'
@@ -101,6 +102,7 @@ const setup = (
   overrides: {
     readonly primary?: DecisionPolicyBinding | null
     readonly liveTeacherLabeler?: LiveMctsTeacherLabeler | null
+    readonly telemetry?: CombatDecisionTelemetryRepositoryPort
   } = {},
 ) => {
   const rooms = new InMemoryBattleRoomRepository()
@@ -115,7 +117,7 @@ const setup = (
   const skill = new UseSkill(rooms, clock, sequence, lock, attack)
   const epic = new UseEpic(rooms, clock, sequence, lock)
   const completeTurn = new CompleteBattleTurn(rooms, clock, { publish: () => undefined })
-  const telemetry = new InMemoryCombatDecisionTelemetryRepository()
+  const telemetry = overrides.telemetry ?? new InMemoryCombatDecisionTelemetryRepository()
   const decisions = new CombatDecisionRecorder(
     telemetry,
     clock,
@@ -383,5 +385,35 @@ describe('ExecuteAiTurn — teacher label en vivo (EN-036.2 #566, correccion de 
     const [decision] = await telemetry.listDecisionsByBattle('ONLINE', ROOM_ID)
     expect(decision?.selectedAction).toEqual({ kind: 'END_TURN' })
     expect(await repo.findByEventId(decision!.eventId)).toBeNull()
+  })
+
+  it('fallo de telemetry: el turno de la IA se completa igual, pero el label MCTS NUNCA se persiste (sin huerfanos)', async () => {
+    const room = aiVsHumanRoom({ aiProfile: combatProfileFixture({ attack: 12, defense: 0 }) })
+    const { labeler, repo } = realLabeler()
+    const persistSpy = jest.spyOn(labeler, 'persist')
+    const repoAppendSpy = jest.spyOn(repo, 'append')
+    const unavailable: CombatDecisionTelemetryRepositoryPort = {
+      append: () => Promise.reject(new Error('mongo unavailable')),
+      appendMany: () => Promise.reject(new Error('mongo unavailable')),
+      listDecisionsByBattle: () => Promise.resolve([]),
+      findOutcome: () => Promise.resolve(null),
+    }
+    const { aiTurn, currentRoom } = setup(room, {
+      liveTeacherLabeler: labeler,
+      telemetry: unavailable,
+    })
+
+    const executed = await aiTurn.execute(ROOM_ID)
+
+    expect(executed).toBe(true)
+    // Gameplay: el turno se completo pese al fallo de telemetry.
+    const after = await currentRoom()
+    expect(after.battle?.turnsCompleted).toBe(1)
+    // MctsTeacherLabel: `record()` devolvio `false` (telemetry rechazo el
+    // append), asi que `persist()` nunca se invoco -- sin esto el label se
+    // persistiria igual, huerfano, ligado a un `CombatDecisionEvent` que
+    // nunca existio.
+    expect(persistSpy).not.toHaveBeenCalled()
+    expect(repoAppendSpy).not.toHaveBeenCalled()
   })
 })

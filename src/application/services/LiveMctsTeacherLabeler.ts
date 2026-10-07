@@ -54,8 +54,14 @@ export interface PendingMctsTeacherLabel {
  * const pendingLabel = this.liveTeacherLabeler?.prepare(room, decision) ?? null
  * // ... se resuelve y persiste la accion REAL (puede tardar, puede fallar) ...
  * if (decision !== undefined && decision !== null) {
- *   await this.decisionRecorder?.record(decision)       // YA existia
- *   void this.liveTeacherLabeler?.persist(pendingLabel)  // NUNCA se espera
+ *   // `record()` informa si el CombatDecisionEvent realmente quedo
+ *   // persistido (fail-open: un `false` NUNCA se propaga al gameplay).
+ *   // Persistir el label sin este chequeo lo dejaria huerfano -- ligado por
+ *   // `eventId` a una decision que en realidad nunca se guardo.
+ *   const recorded = (await this.decisionRecorder?.record(decision)) ?? false
+ *   if (recorded) {
+ *     void this.liveTeacherLabeler?.persist(pendingLabel)  // NUNCA se espera
+ *   }
  * }
  * ```
  *

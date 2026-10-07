@@ -244,8 +244,14 @@ export class ExecuteBasicAttack {
       }
 
       if (decision !== undefined && decision !== null) {
-        await this.decisionRecorder?.record(decision)
-        void this.liveTeacherLabeler?.persist(pendingLabel)
+        // Correccion de alcance sobre PR#81: `record()` puede haber atrapado
+        // un fallo de Mongo internamente (fail-open). Persistir el label de
+        // todas formas dejaria un `MctsTeacherLabel` huerfano -- ligado por
+        // `eventId` a un `CombatDecisionEvent` que nunca existio.
+        const recorded = (await this.decisionRecorder?.record(decision)) ?? false
+        if (recorded) {
+          void this.liveTeacherLabeler?.persist(pendingLabel)
+        }
       }
 
       return {
