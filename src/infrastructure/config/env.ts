@@ -95,6 +95,30 @@ export interface AppConfig {
    * nuevo por defecto silencioso).
    */
   readonly mctsLiveTeacherLabelingEnabled: boolean
+  /**
+   * EN-036.4 (#568): activa `NeuralPolicy` como primaria de
+   * `DecisionPolicySelector`. Deshabilitado por defecto -- el deploy actual
+   * sigue `RuleBasedPolicy` sin cambios, no exige un modelo al arrancar, y
+   * esta Task no activa accidentalmente el artefacto SMOKE_TEST de #567
+   * (ver `neuralAllowSmokeModel`). Mismo criterio que
+   * `mctsLiveTeacherLabelingEnabled`/`PERSISTENCE_DRIVER`/`AUTH_MODE`: nunca
+   * un riesgo nuevo por defecto silencioso.
+   */
+  readonly neuralPolicyEnabled: boolean
+  /** Ruta local a `model.onnx` (#568 §36, §70, §80): file-based explicito,
+   * nunca descarga automatica ni model registry (eso es EN-037). */
+  readonly neuralModelOnnxPath: string | null
+  /** Ruta local a `training-manifest.json` del mismo artefacto. */
+  readonly neuralModelManifestPath: string | null
+  /** Timeout de la inferencia UNICAMENTE (#568 §34, §145), nunca del
+   * encoding ni de la carga del modelo (ya precargada en bootstrap). */
+  readonly neuralInferenceTimeoutMs: number
+  /**
+   * Permite cargar un artefacto `artifactPurpose=SMOKE_TEST` (#567) fuera de
+   * produccion (#568 §38, §73). `NODE_ENV=production` SIEMPRE rechaza
+   * SMOKE_TEST sin importar este valor -- nunca hay excepcion.
+   */
+  readonly neuralAllowSmokeModel: boolean
 }
 
 /** Semilla de referencia validada por HU-26 (Management #362-#364). */
@@ -243,6 +267,8 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   )
   const walletServiceBaseUrl = readString(env, 'WALLET_SERVICE_BASE_URL', '')
   const notificationsServiceBaseUrl = readString(env, 'NOTIFICATIONS_SERVICE_BASE_URL', '')
+  const neuralModelOnnxPath = readString(env, 'NEURAL_MODEL_ONNX_PATH', '')
+  const neuralModelManifestPath = readString(env, 'NEURAL_MODEL_MANIFEST_PATH', '')
 
   // Igual que AUTH_MODE/PERSISTENCE_DRIVER: en produccion, HU-15.2 no puede
   // arrancar sin poder resolver displayName/heroId -- lo contrario dejaria
@@ -306,5 +332,14 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     },
     randomSeed: readInteger(env, 'COMBAT_RANDOM_SEED', DEFAULT_RANDOM_SEED, 0, 4_294_967_295),
     mctsLiveTeacherLabelingEnabled: readBoolean(env, 'MCTS_LIVE_TEACHER_LABELING_ENABLED', false),
+    neuralPolicyEnabled: readBoolean(env, 'NEURAL_POLICY_ENABLED', false),
+    neuralModelOnnxPath: neuralModelOnnxPath === '' ? null : neuralModelOnnxPath,
+    neuralModelManifestPath: neuralModelManifestPath === '' ? null : neuralModelManifestPath,
+    // 100 ms es un margen generoso, no un valor de memoria: el spike real
+    // (EN-036.4 #568, host Node 24 y contenedor objetivo) midio p50=0ms/
+    // p95=1ms para esta MLP de 6785 parametros con 1-3 candidatos. Ver
+    // docs/en-036-neural-runtime.md.
+    neuralInferenceTimeoutMs: readInteger(env, 'NEURAL_INFERENCE_TIMEOUT_MS', 100, 1, 60_000),
+    neuralAllowSmokeModel: readBoolean(env, 'NEURAL_ALLOW_SMOKE_MODEL', false),
   }
 }

@@ -96,6 +96,9 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
     // `inventory-grant-operation-id.ts` (HU-22) y `Sha256CommandIdFingerprint.ts`
     // (EN-035.4) derivan ids tecnicos deterministas. Son hashes, no fuentes de azar:
     // no sortean ni deciden nada del juego.
+    // `NeuralModelArtifactLoader.ts` (EN-036.4, #568) hashea `model.onnx` para
+    // verificar su integridad contra `onnxArtifactSha256` -- verificacion de
+    // artefacto, no una fuente de aleatoriedad ni de decision de juego.
     expect(users).toEqual([
       'adapters/outbound/http/inventory-grant-operation-id.ts',
       'adapters/outbound/identity/internal-signature.ts',
@@ -103,6 +106,7 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
       'adapters/outbound/system/HmacMissionSeedFactory.ts',
       'adapters/outbound/system/Sha256CommandIdFingerprint.ts',
       'adapters/outbound/system/UuidGenerator.ts',
+      'infrastructure/ai/NeuralModelArtifactLoader.ts',
     ])
   })
 
