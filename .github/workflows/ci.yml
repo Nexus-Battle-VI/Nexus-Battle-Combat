@@ -87,14 +87,15 @@ jobs:
         run: npm run build
 
   ai-pipeline:
-    name: Pipeline de dataset IA (Python)
+    name: Pipeline de dataset y entrenamiento IA (Python)
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     # Independiente del job `quality` (Node): ai/ es un paquete Python aislado
-    # (EN-036.2, Management #566) que no comparte dependencias ni build con el
-    # servicio Node. No entrena nada aqui (#566 §74): solo install/lint/tests/
-    # smoke de construccion del dataset de fixtures + import de PyTorch.
+    # (EN-036.2 #566 + EN-036.3 #567) que no comparte dependencias ni build
+    # con el servicio Node. El smoke de entrenamiento (#567 §92-94) usa
+    # EXCLUSIVAMENTE el dataset sintetico de tests/fixtures/training/ --
+    # nunca Mongo real, nunca datos de jugadores.
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -151,6 +152,59 @@ jobs:
           print('torch', torch.__version__, 'cuda:', torch.cuda.is_available())
           print('numpy', numpy.__version__)
           "
+
+      # EN-036.3 (#567 §92-94): dataset de ENTRENAMIENTO sintetico (distinto
+      # del de arriba: tiene un battleId por cada split real de
+      # battle-hash-split-v1, el otro cae entero en TRAIN y dejaria test
+      # vacio) -> training completo -> ONNX -> checker. Artifact SMOKE_TEST,
+      # nunca CANDIDATE (#567 §149): este dataset es sintetico, no real.
+      - name: "Smoke de entrenamiento: construir el dataset de training (fixtures)"
+        working-directory: ai
+        run: |
+          uv run nexus-combat-dataset build \
+            --source jsonl \
+            --events tests/fixtures/training/decision-events.jsonl \
+            --labels tests/fixtures/training/teacher-labels.jsonl \
+            --output /tmp/ai-training-dataset-ci \
+            --cutoff 2027-01-01T00:00:00Z \
+            --source-commit "${{ github.sha }}" \
+            --seed 42
+
+      - name: "Smoke de entrenamiento: nexus-combat-train + export ONNX"
+        working-directory: ai
+        run: |
+          uv run nexus-combat-train \
+            --dataset-dir /tmp/ai-training-dataset-ci \
+            --output /tmp/ai-training-artifacts-ci \
+            --source-commit "${{ github.sha }}" \
+            --seed 42
+
+      - name: "Smoke de entrenamiento: verificar artefactos + ONNX checker"
+        working-directory: ai
+        run: |
+          run_dir="$(find /tmp/ai-training-artifacts-ci -mindepth 1 -maxdepth 1 -type d)"
+          echo "run_dir=${run_dir}" >> "$GITHUB_ENV"
+          for f in model.pt model.onnx training-manifest.json metrics.json feature-schema.json; do
+            test -s "${run_dir}/${f}" || { echo "FALLO: falta o esta vacio ${f}"; exit 1; }
+          done
+          uv run python -c "
+          import json, onnx, sys
+          run_dir = '${run_dir}'
+          onnx.checker.check_model(onnx.load(f'{run_dir}/model.onnx'))
+          manifest = json.load(open(f'{run_dir}/training-manifest.json'))
+          assert manifest['artifactPurpose'] == 'SMOKE_TEST', manifest['artifactPurpose']
+          assert manifest['featureDimension'] == 72, manifest['featureDimension']
+          assert manifest['onnxOpsetVersion'] == 18, manifest['onnxOpsetVersion']
+          print('onnx checker OK, manifest OK, run_id=', run_dir.rsplit('/', 1)[-1])
+          "
+
+      - name: Publicar artefactos del smoke de entrenamiento
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-mlp-v1-smoke
+          path: ${{ env.run_dir }}
+          retention-days: 7
 
   docker:
     name: Imagen del servicio

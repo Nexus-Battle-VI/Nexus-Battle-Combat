@@ -50,3 +50,42 @@ class InvalidTeacherLabelError(ContractValidationError):
 
 class DatasetBuildError(NexusCombatAiError):
     """Error irrecuperable al construir el dataset (cutoff, fuente, manifest)."""
+
+
+class IncompatibleTrainingDatasetError(NexusCombatAiError):
+    """El frozen dataset en `--dataset-dir` no es compatible con esta version del
+    entrenador (EN-036.3, Management #567 §22, §63-64): `manifestVersion`/
+    `featureSchemaVersion`/`featureDimension`/`teacherVersion`/`utilityVersion`/
+    `labelSchemaVersion`/`splitStrategyVersion` desconocida o incompatible,
+    `outputFingerprint` no coincide con el contenido real (dataset alterado), o
+    `missingLabelUnexpected > 0` (hueco de labels no reconocido explicitamente)."""
+
+
+class DatasetNotTrainableError(NexusCombatAiError):
+    """Train, validation o test tiene 0 decisiones (#567 §23). Entrenar sobre un
+    split vacio invalidaria early stopping (validation) o la metrica final
+    (test); fail closed en vez de fingir que un split vacio es aceptable."""
+
+
+class NonFiniteTrainingValueError(NexusCombatAiError):
+    """Aparecio NaN/+inf/-inf en features, scores del modelo, loss o una metrica
+    durante training/evaluacion OFFLINE (#567 §19, §126). A diferencia del
+    gameplay online, el entrenamiento NO es fail-open: nunca se produce un
+    artefacto a partir de un estado numerico invalido."""
+
+
+class InvalidTrainingBatchError(NexusCombatAiError):
+    """Un batch de `collate_decision_samples` viola una invariante exigida antes
+    de calcular la loss (#567 §18): alguna fila sin candidatos reales, suma de
+    `teacher_probabilities` enmascaradas fuera de tolerancia de 1.0, o
+    `selected_index` fuera de rango."""
+
+
+class InvalidTrainingConfigError(NexusCombatAiError):
+    """`TrainingConfig` recibio un valor fuera de su dominio valido (p. ej.
+    `max_epochs <= 0`, `early_stopping_patience <= 0`, `batch_size <= 0`)."""
+
+
+class OnnxExportError(NexusCombatAiError):
+    """La exportacion a ONNX o su validacion posterior (`onnx.checker`) fallo, o
+    el grafo exportado no cumple el contrato productivo esperado (#567 §47-50)."""
