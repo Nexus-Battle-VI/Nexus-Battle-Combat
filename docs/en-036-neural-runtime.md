@@ -48,7 +48,7 @@ IMPORT_FAILED Error loading shared library ld-linux-x86-64.so.2: No such file or
 (needed by /spike/node_modules/onnxruntime-node/bin/napi-v6/linux/x64//libonnxruntime.so.1)
 ```
 
-`ld-linux-x86-64.so.2` es el *dynamic linker* de glibc. musl/Alpine no lo
+`ld-linux-x86-64.so.2` es el _dynamic linker_ de glibc. musl/Alpine no lo
 tiene — no es una cuestión de instalar una librería, es una incompatibilidad
 de ABI entre el binario precompilado de `onnxruntime-node` y el libc del
 sistema.
@@ -116,7 +116,7 @@ desde `#566`/trabajo previo. El único cambio es qué valor se pasa como
 ### Carga y validación del artefacto (`NeuralModelArtifactLoader`)
 
 Cadena de validación, en orden, cualquier fallo devuelve `null` (fallback a
-`RuleBasedPolicy`, el servicio nunca se cae ni bloquea el *readiness*):
+`RuleBasedPolicy`, el servicio nunca se cae ni bloquea el _readiness_):
 
 1. `NEURAL_POLICY_ENABLED=false` (default) → `null` inmediato, ni se tocan
    los archivos.
@@ -175,13 +175,13 @@ Cadena de validación, en orden, cualquier fallo devuelve `null` (fallback a
 
 ## Variables de entorno (todas con default seguro/deshabilitado)
 
-| Variable                       | Default | Efecto                                                                                 |
-| ------------------------------- | ------- | --------------------------------------------------------------------------------------- |
-| `NEURAL_POLICY_ENABLED`         | `false` | Si es `false`, `NeuralPolicy` nunca se intenta cargar: solo `RuleBasedPolicy`.           |
-| `NEURAL_MODEL_ONNX_PATH`        | (vacío) | Ruta al `.onnx`. Requerida si `NEURAL_POLICY_ENABLED=true`.                              |
-| `NEURAL_MODEL_MANIFEST_PATH`    | (vacío) | Ruta al `training-manifest.json`. Requerida si `NEURAL_POLICY_ENABLED=true`.            |
-| `NEURAL_INFERENCE_TIMEOUT_MS`   | `100`   | Timeout de una llamada de inferencia (ver justificación del valor arriba).               |
-| `NEURAL_ALLOW_SMOKE_MODEL`      | `false` | Permite artefactos `SMOKE_TEST` fuera de producción. `NODE_ENV=production` ignora esto. |
+| Variable                      | Default | Efecto                                                                                  |
+| ----------------------------- | ------- | --------------------------------------------------------------------------------------- |
+| `NEURAL_POLICY_ENABLED`       | `false` | Si es `false`, `NeuralPolicy` nunca se intenta cargar: solo `RuleBasedPolicy`.          |
+| `NEURAL_MODEL_ONNX_PATH`      | (vacío) | Ruta al `.onnx`. Requerida si `NEURAL_POLICY_ENABLED=true`.                             |
+| `NEURAL_MODEL_MANIFEST_PATH`  | (vacío) | Ruta al `training-manifest.json`. Requerida si `NEURAL_POLICY_ENABLED=true`.            |
+| `NEURAL_INFERENCE_TIMEOUT_MS` | `100`   | Timeout de una llamada de inferencia (ver justificación del valor arriba).              |
+| `NEURAL_ALLOW_SMOKE_MODEL`    | `false` | Permite artefactos `SMOKE_TEST` fuera de producción. `NODE_ENV=production` ignora esto. |
 
 En producción, con los defaults, **nada cambia**: `DECISION_POLICY_SELECTOR`
 sigue resolviendo `primary: null` y la IA decide exactamente como antes de
