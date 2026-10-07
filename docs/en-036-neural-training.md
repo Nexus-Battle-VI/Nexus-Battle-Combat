@@ -17,7 +17,7 @@ eso**: el modelo todavía no decide nada en Combat.
 Deja listo:
 
 - `CandidateScoringMLP` (`model/candidate_mlp.py`): `72 → Linear(64) → ReLU
-  → Linear(32) → ReLU → Linear(1)`, raw score, candidate axis dinámico.
+→ Linear(32) → ReLU → Linear(1)`, raw score, candidate axis dinámico.
 - `training/`: loss (`teacher-policy-cross-entropy-v1`), métricas,
   `EarlyStopping`, lector del frozen dataset (`FrozenDatasetBundle`),
   bucle de entrenamiento (`train_model`/`evaluate_model`), hashing y
@@ -32,16 +32,16 @@ Deja listo:
 
 ## Requisito (#567/#555) vs decisión técnica v1
 
-| | Requisito (issue) | Decisión técnica v1 (este PR) |
-|---|---|---|
-| Arquitectura | PyTorch, MLP 64/32/1 | Input real = `FEATURE_DIMENSION` (72), nunca hardcodeado |
-| Optimizer | AdamW, lr 0.001, batch 256, max 30 epochs, patience 5 | — |
-| Weight decay | No lo fija el issue | `0.01` (estándar para AdamW), versionado en `TrainingConfig` |
-| Loss | Supervised/imitation learning | `teacher-policy-cross-entropy-v1`: soft target CE contra la distribución MCTS completa, no solo `selectedIndex` |
-| Early stopping | 5 epochs sin mejora | `minDelta = 0.0`: la igualdad nunca reinicia la paciencia |
-| Exportación | ONNX | `external_data=False` (ver más abajo), opset `18` explícito |
-| Salida del modelo | — | Raw score, sin sigmoid/softmax (eso es del loss, no del grafo) |
-| Reproducibilidad | Artefacto + metadata | `modelStateSha256` (hash canónico de tensores) como autoridad; `run_id` determinista por `(datasetOutputFingerprint, trainingConfigSha256, seed)` |
+|                   | Requisito (issue)                                     | Decisión técnica v1 (este PR)                                                                                                                     |
+| ----------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Arquitectura      | PyTorch, MLP 64/32/1                                  | Input real = `FEATURE_DIMENSION` (72), nunca hardcodeado                                                                                          |
+| Optimizer         | AdamW, lr 0.001, batch 256, max 30 epochs, patience 5 | —                                                                                                                                                 |
+| Weight decay      | No lo fija el issue                                   | `0.01` (estándar para AdamW), versionado en `TrainingConfig`                                                                                      |
+| Loss              | Supervised/imitation learning                         | `teacher-policy-cross-entropy-v1`: soft target CE contra la distribución MCTS completa, no solo `selectedIndex`                                   |
+| Early stopping    | 5 epochs sin mejora                                   | `minDelta = 0.0`: la igualdad nunca reinicia la paciencia                                                                                         |
+| Exportación       | ONNX                                                  | `external_data=False` (ver más abajo), opset `18` explícito                                                                                       |
+| Salida del modelo | —                                                     | Raw score, sin sigmoid/softmax (eso es del loss, no del grafo)                                                                                    |
+| Reproducibilidad  | Artefacto + metadata                                  | `modelStateSha256` (hash canónico de tensores) como autoridad; `run_id` determinista por `(datasetOutputFingerprint, trainingConfigSha256, seed)` |
 
 ## Arquitectura del modelo
 
@@ -62,7 +62,7 @@ relación es `candidate_features[i] → scores[i]` (crítico para `#568`, que
 unirá el score con el candidato real por posición).
 
 `batch_size=256` es configuración de **entrenamiento** (cuántas
-*decisiones* por paso), no una dimensión del modelo: cada decisión aporta
+_decisiones_ por paso), no una dimensión del modelo: cada decisión aporta
 `C` candidatos, `C` variable. Un batch de entrenamiento es
 `[B, Cmax, 72]` con padding + `candidate_mask`; el modelo solo ve `[N, 72]`
 tras aplanar.
@@ -164,7 +164,7 @@ Auditado contra las versiones REALES lockeadas (`uv.lock`): PyTorch
    **desapareció por completo**: el `.onnx` resultante es
    byte-idéntico entre ejecuciones, confirmado dentro del mismo proceso Y
    entre procesos Python frescos (`tests/test_cli_train.py::
-   test_reproducibility_same_inputs_produce_the_same_model_state_and_metrics`).
+test_reproducibility_same_inputs_produce_the_same_model_state_and_metrics`).
    `modelStateSha256` sigue siendo la autoridad primaria de
    reproducibilidad (§41) por principio, pero en la práctica
    `onnxArtifactSha256` también es reproducible aquí.
