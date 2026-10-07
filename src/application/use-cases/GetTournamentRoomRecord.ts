@@ -49,6 +49,15 @@ export class GetTournamentRoomRecord {
       status: room.status,
       startedAt: room.battle === null ? null : room.battle.startedAt.toISOString(),
       result: room.result,
+      ...(room.tournament.mode === undefined
+        ? {}
+        : {
+            tournament: {
+              contractVersion: 3 as const,
+              mode: room.tournament.mode,
+              teamSize: room.teams[0].capacity,
+            },
+          }),
       teams: [toTeamDto(room.teams[0]), toTeamDto(room.teams[1])],
       events: { afterSeq, lastSeq: room.lastSeq, items: page },
     }

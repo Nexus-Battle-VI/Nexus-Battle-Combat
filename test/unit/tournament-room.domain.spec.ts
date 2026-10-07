@@ -4,7 +4,6 @@ import {
   type TournamentTeamInput,
 } from '../../src/domain/entities/BattleRoom'
 import {
-  InvalidModeCompositionError,
   InvalidTournamentRosterError,
   RoomNotCancellableError,
   RoomNotJoinableError,
@@ -138,7 +137,43 @@ describe('BattleRoom.createTournamentRoom', () => {
 
     expect(() =>
       BattleRoom.createTournamentRoom(ROOM_ID, CREATED_BY, baseInput({ teams }), AT),
-    ).toThrow(InvalidModeCompositionError)
+    ).toThrow(InvalidTournamentRosterError)
+  })
+
+  it('el agregado rechaza directamente un TRIO parcial o de IA', () => {
+    const trio = baseInput({
+      mode: 'TRIO',
+      teams: [
+        { teamId: 'A', members: [member('a1'), member('a2'), member('a3')] },
+        { teamId: 'B', members: [member('b1'), member('b2'), member('b3')] },
+      ],
+    })
+    expect(BattleRoom.createTournamentRoom(ROOM_ID, CREATED_BY, trio, AT).teams[0].capacity).toBe(3)
+    expect(() =>
+      BattleRoom.createTournamentRoom(
+        ROOM_ID,
+        CREATED_BY,
+        { ...trio, teams: [{ ...trio.teams[0]!, members: [member('a1')] }, trio.teams[1]!] },
+        AT,
+      ),
+    ).toThrow(InvalidTournamentRosterError)
+    expect(() =>
+      BattleRoom.createTournamentRoom(
+        ROOM_ID,
+        CREATED_BY,
+        {
+          ...trio,
+          teams: [
+            {
+              ...trio.teams[0]!,
+              members: [{ ...member('a1'), kind: 'AI' }, member('a2'), member('a3')],
+            },
+            trio.teams[1]!,
+          ],
+        },
+        AT,
+      ),
+    ).toThrow(InvalidTournamentRosterError)
   })
 
   describe('aislamiento del lobby publico', () => {
