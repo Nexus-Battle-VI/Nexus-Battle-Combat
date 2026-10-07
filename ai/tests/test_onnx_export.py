@@ -7,6 +7,7 @@ from pathlib import Path
 import onnx
 import pytest
 import torch
+from onnx import TensorProto
 
 from nexus_combat_ai.errors import OnnxExportError
 from nexus_combat_ai.export.onnx_exporter import (
@@ -61,6 +62,45 @@ def test_input_and_output_contract(tmp_path: Path) -> None:
     out_dims = output_tensor.type.tensor_type.shape.dim
     assert len(out_dims) == 1
     assert out_dims[0].dim_param != ""
+
+
+def test_input_and_output_are_explicitly_float32(tmp_path: Path) -> None:
+    """El `modelContract` del training manifest declara `inputDtype`/
+    `outputDtype` = `"float32"`; esta prueba exige que el GRAFO ONNX
+    realmente lo sea, no solo que el exportador lo produzca por casualidad."""
+    model = CandidateScoringMLP()
+    output = tmp_path / "model.onnx"
+    export_candidate_scoring_mlp_to_onnx(model, output)
+    loaded = validate_exported_onnx(output)
+
+    assert loaded.graph.input[0].type.tensor_type.elem_type == TensorProto.FLOAT
+    assert loaded.graph.output[0].type.tensor_type.elem_type == TensorProto.FLOAT
+
+
+def test_validate_rejects_a_non_float32_input_dtype(tmp_path: Path) -> None:
+    model = CandidateScoringMLP()
+    output = tmp_path / "model.onnx"
+    export_candidate_scoring_mlp_to_onnx(model, output)
+
+    tampered = onnx.load(str(output))
+    tampered.graph.input[0].type.tensor_type.elem_type = TensorProto.DOUBLE
+    onnx.save(tampered, str(output))
+
+    with pytest.raises(OnnxExportError, match="dtype"):
+        validate_exported_onnx(output)
+
+
+def test_validate_rejects_a_non_float32_output_dtype(tmp_path: Path) -> None:
+    model = CandidateScoringMLP()
+    output = tmp_path / "model.onnx"
+    export_candidate_scoring_mlp_to_onnx(model, output)
+
+    tampered = onnx.load(str(output))
+    tampered.graph.output[0].type.tensor_type.elem_type = TensorProto.DOUBLE
+    onnx.save(tampered, str(output))
+
+    with pytest.raises(OnnxExportError, match="dtype"):
+        validate_exported_onnx(output)
 
 
 def test_opset_is_the_explicit_v1_decision(tmp_path: Path) -> None:

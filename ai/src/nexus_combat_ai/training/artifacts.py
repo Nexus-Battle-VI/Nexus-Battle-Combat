@@ -23,6 +23,14 @@ METRICS_VERSION = "training-metrics-v1"
 
 ARTIFACT_PURPOSE_SMOKE_TEST = "SMOKE_TEST"
 ARTIFACT_PURPOSE_CANDIDATE = "CANDIDATE"
+"""`artifactPurpose` es una declaracion manual de quien ejecuta
+`nexus-combat-train` (via `--artifact-purpose`), NO una garantia
+criptografica de procedencia del dataset: nada en este modulo ni en el CLI
+verifica que `--dataset-dir` provenga de datos reales antes de aceptar
+`CANDIDATE` (un dataset sintetico puede marcarse `CANDIDATE` igual que uno
+real). Antes de que EN-037 (model registry) promueva un artefacto, debera
+validar la procedencia real del dataset por sus propios medios -- este
+string, por si solo, nunca debe bastar para esa decision."""
 
 
 def canonical_model_state_sha256(model: torch.nn.Module) -> str:

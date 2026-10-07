@@ -133,6 +133,18 @@ modelo. `--artifact-purpose CANDIDATE` existe para cuando exista dataset
 real suficiente, y `"ACTIVE"` no existe en absoluto (corresponde a
 EN-037).
 
+**`CANDIDATE` es una declaración manual de quien ejecuta el CLI, no una
+garantía criptográfica de procedencia real.** Nada en `nexus-combat-train`
+verifica que `--dataset-dir` provenga de datos reales antes de aceptar
+`--artifact-purpose CANDIDATE` — un dataset sintético puede marcarse
+`CANDIDATE` igual que uno real (hay un test que lo demuestra
+deliberadamente, para que esto quede documentado y no asumido). No bloquea
+`#567`: todos los runs de este PR y del smoke de CI quedan `SMOKE_TEST`. Pero
+cuando `EN-037` (model registry) implemente promoción, no deberá confiar
+únicamente en este string — tendrá que validar la procedencia real del
+dataset (p. ej. contra el propio Mongo de Combat) con sus propios medios
+antes de aceptar un artefacto como candidato a promoción.
+
 ## Exportación ONNX: lo que el spike encontró de verdad
 
 Auditado contra las versiones REALES lockeadas (`uv.lock`): PyTorch

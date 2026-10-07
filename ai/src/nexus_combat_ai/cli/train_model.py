@@ -124,8 +124,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         choices=_ARTIFACT_PURPOSES,
         default=ARTIFACT_PURPOSE_SMOKE_TEST,
         help="SMOKE_TEST (por defecto): demuestra la ingenieria, NO es un modelo de calidad "
-        "evaluada. CANDIDATE: se entreno sobre datos reales suficientes (#567 §112-114, "
-        "§149-150) -- nunca ACTIVE, eso es EN-037.",
+        "evaluada. CANDIDATE: declaracion de quien ejecuta el comando de que entreno sobre "
+        "datos reales suficientes (#567 §112-114, §149-150) -- el CLI NO verifica la "
+        "procedencia del dataset por si mismo (un --dataset-dir sintetico pasa igual), asi "
+        "que esto es una afirmacion del operador, no una garantia criptografica; EN-037 "
+        "(model registry) tendra que validar procedencia real antes de promocionar. Nunca "
+        "ACTIVE, eso tampoco es de este CLI.",
     )
     return parser
 

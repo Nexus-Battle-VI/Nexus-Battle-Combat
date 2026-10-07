@@ -23,6 +23,7 @@ from pathlib import Path
 
 import onnx
 import torch
+from onnx import TensorProto
 
 from nexus_combat_ai.errors import OnnxExportError
 from nexus_combat_ai.features.schema import FEATURE_DIMENSION
@@ -100,6 +101,12 @@ def validate_exported_onnx(path: Path) -> onnx.ModelProto:
             f"El feature axis del input es {input_dims[1].dim_value}, "
             f"se esperaba {FEATURE_DIMENSION}."
         )
+    if input_tensor.type.tensor_type.elem_type != TensorProto.FLOAT:
+        raise OnnxExportError(
+            f"El dtype del input es {input_tensor.type.tensor_type.elem_type}, "
+            f"se esperaba FLOAT ({TensorProto.FLOAT}) -- el contrato productivo "
+            "(#567 §47, modelContract.inputDtype) exige float32 explicito."
+        )
 
     output_tensor = model.graph.output[0]
     if output_tensor.name != ONNX_OUTPUT_NAME:
@@ -111,6 +118,12 @@ def validate_exported_onnx(path: Path) -> onnx.ModelProto:
         raise OnnxExportError(f"El output debe tener rank 1, tiene {len(output_dims)}.")
     if output_dims[0].dim_param == "" and output_dims[0].dim_value != 0:
         raise OnnxExportError("El unico eje (candidate axis) del output debe ser dinamico.")
+    if output_tensor.type.tensor_type.elem_type != TensorProto.FLOAT:
+        raise OnnxExportError(
+            f"El dtype del output es {output_tensor.type.tensor_type.elem_type}, "
+            f"se esperaba FLOAT ({TensorProto.FLOAT}) -- el contrato productivo "
+            "(#567 §47, modelContract.outputDtype) exige float32 explicito."
+        )
 
     opsets = {imp.domain: imp.version for imp in model.opset_import}
     default_opset = opsets.get("", None)
