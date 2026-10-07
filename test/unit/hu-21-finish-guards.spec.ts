@@ -114,6 +114,11 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
       // HU-23 (Task #435): barrido de recuperacion de apuestas pendientes,
       // mismo patron que los dos anteriores.
       'adapters/outbound/system/IntervalStakeScheduler.ts',
+      // EN-036.4 (#568): timeout de inferencia de NeuralPolicy, UNICAMENTE
+      // alrededor de `session.run()` -- no un planificador de barrido ni un
+      // escritor de persistencia; `clearTimeout` siempre se ejecuta en un
+      // `finally`.
+      'application/policies/NeuralPolicy.ts',
     ])
   })
 

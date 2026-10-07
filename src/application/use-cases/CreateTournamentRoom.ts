@@ -4,7 +4,10 @@ import {
   type TournamentRosterMemberInput,
   type TournamentTeamInput,
 } from '../../domain/entities/BattleRoom'
-import { InvalidTournamentRosterError } from '../../domain/errors/BattleRoomErrors'
+import {
+  assertTournamentRoster,
+  type TournamentRoomMode,
+} from '../../domain/policies/TournamentRosterPolicy'
 import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
 import { RoomConflictError } from '../errors/ApplicationError'
 import { TournamentRoomOperationReusedError } from '../errors/TournamentRoomErrors'
@@ -20,10 +23,16 @@ export interface TournamentRoomTeamRequest {
   readonly memberIds: readonly string[]
 }
 
+export type { TournamentRoomMode } from '../../domain/policies/TournamentRosterPolicy'
+
 export interface CreateTournamentRoomRequest {
   readonly operationId: string
   readonly tournamentId: string
   readonly encounterId: string
+  /** Omitido en el contrato histórico: equivale a DUO. */
+  readonly mode?: TournamentRoomMode
+  readonly teamSize?: number
+  readonly contractVersion?: 3
   readonly teams: readonly [TournamentRoomTeamRequest, TournamentRoomTeamRequest]
 }
 
@@ -42,8 +51,8 @@ export interface CreateTournamentRoomRequest {
  *     se devuelve ESA MISMA sala (mismo `roomId`), sin crear una segunda.
  *     `requestHash` distinto -> `TournamentRoomOperationReusedError` (409).
  *  2. Si no existe: resuelve identidad (`AccountBattleProfilePort`) y heroe
- *     equipado (`PlayerInventoryEquippedHeroPort`) de CADA uno de los 4
- *     jugadores humanos -- LOS MISMOS PUERTOS que `JoinBattleRoom` usa en el
+ *     equipado (`PlayerInventoryEquippedHeroPort`) de CADA humano (2/4/6)
+ *     -- LOS MISMOS PUERTOS que `JoinBattleRoom` usa en el
  *     flujo normal, nunca reinventados aqui. Sin heroe equipado ->
  *     `PlayerWithoutEquippedHeroError` (422), igual que al unirse por el
  *     lobby publico. La elegibilidad precombate (readiness, formato) NO se
@@ -61,7 +70,7 @@ export interface CreateTournamentRoomRequest {
  *
  * La identidad de un jugador participante NUNCA suplanta al creador: `createdBy`
  * es un identificador SINTETICO del servicio Tournament (`tournament:<tournamentId>`),
- * nunca uno de los 4 `playerId` del roster.
+ * nunca un `playerId` del roster.
  */
 export class CreateTournamentRoom {
   constructor(
@@ -72,14 +81,23 @@ export class CreateTournamentRoom {
     private readonly equippedHeroes: PlayerInventoryEquippedHeroPort,
   ) {}
 
-  async execute(request: CreateTournamentRoomRequest, requestHash: string): Promise<BattleRoomDto> {
+  async execute(
+    request: CreateTournamentRoomRequest,
+    requestHash: string,
+    requestHashVersion: 1 | 2 = 1,
+  ): Promise<BattleRoomDto> {
     const existing = await this.rooms.findByTournamentOperationId(request.operationId)
 
     if (existing !== null) {
-      return CreateTournamentRoom.replayOf(existing, request.operationId, requestHash)
+      return CreateTournamentRoom.replayOf(
+        existing,
+        request.operationId,
+        requestHash,
+        requestHashVersion,
+      )
     }
 
-    assertRosterCardinality(request.teams)
+    assertTournamentRoster(request.teams, request.mode, request.teamSize)
 
     const [teamA, teamB] = await Promise.all([
       this.resolveTeam(request.teams[0]),
@@ -91,6 +109,8 @@ export class CreateTournamentRoom {
       tournamentId: request.tournamentId,
       encounterId: request.encounterId,
       requestHash,
+      ...(request.mode === undefined ? {} : { mode: request.mode }),
+      ...(requestHashVersion === 1 ? {} : { requestHashVersion }),
       teams: [teamA, teamB],
     }
 
@@ -111,7 +131,12 @@ export class CreateTournamentRoom {
         const winner = await this.rooms.findByTournamentOperationId(request.operationId)
 
         if (winner !== null) {
-          return CreateTournamentRoom.replayOf(winner, request.operationId, requestHash)
+          return CreateTournamentRoom.replayOf(
+            winner,
+            request.operationId,
+            requestHash,
+            requestHashVersion,
+          )
         }
       }
 
@@ -128,6 +153,7 @@ export class CreateTournamentRoom {
   }
 
   private async resolveMember(playerId: string): Promise<TournamentRosterMemberInput> {
+    playerId = playerId.trim()
     const [profile, hero] = await Promise.all([
       this.accountProfiles.getBattleProfile(playerId),
       this.equippedHeroes.getEquippedHero(playerId),
@@ -149,20 +175,15 @@ export class CreateTournamentRoom {
     room: BattleRoom,
     operationId: string,
     requestHash: string,
+    requestHashVersion: 1 | 2,
   ): BattleRoomDto {
-    if (room.tournament?.requestHash !== requestHash) {
+    if (
+      room.tournament?.requestHash !== requestHash ||
+      (room.tournament.requestHashVersion ?? 1) !== requestHashVersion
+    ) {
       throw new TournamentRoomOperationReusedError(operationId)
     }
 
     return toBattleRoomDto(room, null)
-  }
-}
-
-/** Antes de cualquier llamada upstream: un roster mal formado no debe costar lecturas a Account ni a Player/Inventory. */
-const assertRosterCardinality = (teams: readonly TournamentRoomTeamRequest[]): void => {
-  if (teams.some((team) => team.memberIds.length !== 2)) {
-    throw new InvalidTournamentRosterError(
-      'Cada equipo de torneo necesita exactamente 2 jugadores.',
-    )
   }
 }

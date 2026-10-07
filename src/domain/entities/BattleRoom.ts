@@ -28,6 +28,7 @@ import {
   type SupportedDamage,
 } from '../policies/BasicAttackDamagePolicy'
 import { applyHeal, calculateHeal } from '../policies/HealApplicationPolicy'
+import { assertTournamentRoster, tournamentTeamSize } from '../policies/TournamentRosterPolicy'
 import { spendPower } from '../policies/HeroPowerPolicy'
 import {
   evaluateSkill,
@@ -352,8 +353,8 @@ export interface CreateBattleRoomInput {
  *     estado `PREPARING` por si solo NO basta -- una sala de lobby normal SI
  *     admite abandonar en `PREPARING`.
  *
- * `requestHash` es el resumen canonico del cuerpo HTTP original (mismo
- * mecanismo que `MissionSimulationIntakeRepositoryPort`, HU-72): vive aqui y
+ * `requestHash` conserva el cuerpo HTTP original para contratos historicos;
+ * version 2 resume la intencion v3 normalizada. Vive aqui y
  * no en una coleccion aparte porque la propia sala ya es el documento que se
  * guarda con bloqueo optimista, y un indice unico sobre
  * `tournament.operationId` basta para la exclusion mutua en la insercion.
@@ -363,10 +364,16 @@ export interface TournamentRoomMetadata {
   readonly tournamentId: string
   readonly encounterId: string
   readonly requestHash: string
+  readonly mode?: 'SOLO' | 'DUO' | 'TRIO'
+  readonly teamSize?: number
+  readonly contractVersion?: 3
+  /** Ausente = hash canonico del cuerpo historico; 2 = intencion v3 normalizada. */
+  readonly requestHashVersion?: 2
 }
 
 /** Un jugador humano ya resuelto (Account + Player-Inventory) por `CreateTournamentRoom`. */
 export interface TournamentRosterMemberInput {
+  readonly kind?: string
   readonly playerId: string
   readonly heroId: string | null
   readonly heroLoadoutVersion: number | null
@@ -384,6 +391,9 @@ export interface CreateTournamentRoomInput {
   readonly tournamentId: string
   readonly encounterId: string
   readonly requestHash: string
+  /** Modalidad de Tournament; ausente en snapshots/contratos antiguos = DUO. */
+  readonly mode?: 'SOLO' | 'DUO' | 'TRIO'
+  readonly requestHashVersion?: 2
   /**
    * Longitud fija 2, igual que `CreateBattleRoomInput.teamConfigs`: se recibe
    * como arreglo (no tupla) porque procede de una peticion HTTP externa, y la
@@ -633,7 +643,7 @@ export class BattleRoom {
 
   /**
    * Crea una sala de TORNEO (Management#517, EN de `tournament-rooms`): roster
-   * FIJO de 4 jugadores humanos (2 equipos de 2, nunca "hasta 4"), ya
+   * FIJO de 2/4/6 jugadores humanos (dos lados completos SOLO/DUO/TRIO), ya
    * resueltos (displayName/heroId/heroLoadoutVersion) por `CreateTournamentRoom`
    * contra los MISMOS puertos de Account/Player-Inventory que usa el flujo
    * normal -- este metodo nunca llama a un puerto externo, igual que `create()`.
@@ -674,8 +684,21 @@ export class BattleRoom {
       throw new DomainError('Una sala de torneo necesita un creador.')
     }
 
-    if (input.teams.length !== 2) {
-      throw new InvalidTournamentRosterError('Una sala de torneo necesita exactamente 2 equipos.')
+    assertTournamentRoster(
+      input.teams.map((team) => ({
+        teamId: team.teamId,
+        memberIds: team.members.map((member) => member.playerId),
+      })),
+      input.mode,
+    )
+    if (
+      input.teams.some((team) =>
+        team.members.some(
+          (member) => member.kind !== undefined && member.kind !== ParticipantKind.Human,
+        ),
+      )
+    ) {
+      throw new InvalidTournamentRosterError('El roster de torneo solo admite humanos.')
     }
 
     const teamInputA = input.teams[0]
@@ -683,22 +706,6 @@ export class BattleRoom {
 
     if (teamInputA === undefined || teamInputB === undefined) {
       throw new InvalidTournamentRosterError('Una sala de torneo necesita exactamente 2 equipos.')
-    }
-
-    for (const teamInput of [teamInputA, teamInputB]) {
-      if (teamInput.teamId.trim().length === 0) {
-        throw new InvalidTournamentRosterError('Cada equipo de torneo necesita un identificador.')
-      }
-
-      if (teamInput.members.length !== 2) {
-        throw new InvalidTournamentRosterError(
-          `El equipo "${teamInput.teamId}" necesita exactamente 2 jugadores humanos (se recibieron ${String(teamInput.members.length)}).`,
-        )
-      }
-    }
-
-    if (teamInputA.teamId.trim() === teamInputB.teamId.trim()) {
-      throw new InvalidTournamentRosterError('Los dos equipos de torneo necesitan ids distintos.')
     }
 
     const toParticipants = (team: TournamentTeamInput): readonly ParticipantInput[] =>
@@ -710,8 +717,9 @@ export class BattleRoom {
         displayName: member.displayName,
       }))
 
-    const teamA = Team.create(teamInputA.teamId.trim(), 2, toParticipants(teamInputA), at)
-    const teamB = Team.create(teamInputB.teamId.trim(), 2, toParticipants(teamInputB), at)
+    const capacity = tournamentTeamSize(input.mode)
+    const teamA = Team.create(teamInputA.teamId.trim(), capacity, toParticipants(teamInputA), at)
+    const teamB = Team.create(teamInputB.teamId.trim(), capacity, toParticipants(teamInputB), at)
     const teams: readonly [Team, Team] = [teamA, teamB]
 
     // Reutiliza EXACTAMENTE la misma comprobacion de composicion que `create()`
@@ -740,6 +748,12 @@ export class BattleRoom {
           tournamentId: input.tournamentId,
           encounterId: input.encounterId,
           requestHash: input.requestHash,
+          ...(input.mode === undefined
+            ? {}
+            : { mode: input.mode, teamSize: capacity, contractVersion: 3 as const }),
+          ...(input.requestHashVersion === undefined
+            ? {}
+            : { requestHashVersion: input.requestHashVersion }),
         },
       },
     )

@@ -25,6 +25,7 @@
     "test:integration": "jest --selectProjects integration",
     "test:coverage": "jest --coverage",
     "migrate": "node dist/infrastructure/persistence/migrate.js",
+    "validate:neural-artifact": "node dist/infrastructure/ai/validate-neural-artifact.js",
     "test:db": "jest --config jest.db.config.ts --coverage",
     "test:perf": "jest --config jest.perf.config.ts",
     "test:e2e:hu-29": "jest --config jest.e2e-hu29.config.ts",
@@ -42,6 +43,7 @@
     "class-transformer": "0.5.1",
     "class-validator": "0.15.1",
     "mongodb": "6.21.0",
+    "onnxruntime-node": "1.30.0",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
     "ws": "8.21.3"

@@ -210,7 +210,7 @@ jobs:
     name: Imagen del servicio
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: quality
+    needs: [quality, ai-pipeline]
 
     steps:
       - name: Checkout
@@ -232,6 +232,35 @@ jobs:
           tags: nexus-battle-combat:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # EN-036.4 (#568 §63-67, §151-154): el artefacto NUNCA se re-entrena en
+      # este job. Se reutiliza el SMOKE_TEST que `ai-pipeline` ya produjo y
+      # publico en este mismo run (mismo commit), se monta de solo lectura y
+      # se valida con el MISMO validador que corre en produccion
+      # (`validate-neural-artifact.js`), dentro de la imagen REAL recien
+      # construida -- nunca un script aparte que reimplemente la carga.
+      - name: Descargar el artefacto SMOKE_TEST de ai-pipeline
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: candidate-mlp-v1-smoke
+          path: /tmp/neural-smoke-artifact
+
+      # El artefacto de `ai-pipeline` es SMOKE_TEST a proposito (entrenado con
+      # datos sinteticos de fixtures, #567 §149): por eso
+      # NEURAL_ALLOW_SMOKE_MODEL=true aqui. La carga sigue rechazando
+      # SMOKE_TEST si NODE_ENV=production (NeuralModelArtifactLoader), asi
+      # que esta prueba corre con NODE_ENV=development, igual que el spike
+      # manual que valido esta misma imagen antes del PR.
+      - name: Verificar artefacto neuronal dentro de la imagen (EN-036.4 #568)
+        run: |
+          docker run --rm \
+            -v /tmp/neural-smoke-artifact:/models:ro \
+            -e NODE_ENV=development \
+            -e NEURAL_POLICY_ENABLED=true \
+            -e NEURAL_MODEL_ONNX_PATH=/models/model.onnx \
+            -e NEURAL_MODEL_MANIFEST_PATH=/models/training-manifest.json \
+            -e NEURAL_ALLOW_SMOKE_MODEL=true \
+            nexus-battle-combat:ci node dist/infrastructure/ai/validate-neural-artifact.js
 
       # La imagen corre con NODE_ENV=production, y en produccion el servicio se
       # NIEGA a arrancar sin verificacion de identidad (ADR-004). La prueba de

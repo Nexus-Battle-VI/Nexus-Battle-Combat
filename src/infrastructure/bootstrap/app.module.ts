@@ -243,8 +243,12 @@ import { RunMissionSimulation } from '../../application/use-cases/RunMissionSimu
 import { Sha256CommandIdFingerprint } from '../../adapters/outbound/system/Sha256CommandIdFingerprint'
 import { EstimateMissionOutcome } from '../../application/use-cases/EstimateMissionOutcome'
 import { RuleBasedPolicy } from '../../application/policies/RuleBasedPolicy'
-import { DecisionPolicySelector } from '../../application/services/DecisionPolicySelector'
+import {
+  DecisionPolicySelector,
+  type DecisionPolicyBinding,
+} from '../../application/services/DecisionPolicySelector'
 import { ExecuteAiTurn, AiTurnTrigger } from '../../application/use-cases/ExecuteAiTurn'
+import { loadNeuralPrimaryPolicy } from '../ai/NeuralModelArtifactLoader'
 import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
@@ -1644,16 +1648,28 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       ): EpicRealtimeHandler => new EpicRealtimeHandler(epic, logger, finalizer, aiTurnTrigger),
       inject: [USE_EPIC, LOGGER, BATTLE_FINALIZER, AI_TURN_TRIGGER],
     },
-    // HU-93.2 (Management#558): sin `NeuralPolicy` entrenada todavia (EN-036), no
-    // hay primaria -- el fallback fijo es `RuleBasedPolicy`, nunca `RandomPolicy`
-    // (esa es solo el baseline experimental de EN-035.3 para Misiones/evaluacion,
-    // jamas el fallback productivo de JcE). El dia que exista una politica
-    // entrenable real, pasa a ser la primaria aqui; `RuleBasedPolicy` sigue
-    // siendo el mismo fallback fijo.
+    // HU-93.2 (Management#558) + EN-036.4 (#568): el fallback fijo SIEMPRE es
+    // `RuleBasedPolicy` -- nunca `RandomPolicy` (ese es solo el baseline
+    // experimental de EN-035.3 para Misiones/evaluacion, jamas el fallback
+    // productivo de JcE). La primaria es condicional: `null` por defecto
+    // (`NEURAL_POLICY_ENABLED=false`, el deploy actual sigue exactamente
+    // igual que antes de #568) o `NeuralPolicy` cuando esta habilitada Y el
+    // artefacto carga/valida/pasa el smoke real (`loadNeuralPrimaryPolicy`,
+    // fail-open: cualquier fallo de carga deja `primary: null` sin tirar el
+    // arranque). `DecisionPolicySelector` ya captura cualquier fallo de la
+    // primaria en cada decision y cae a `RuleBasedPolicy` -- esta clase no
+    // cambia.
     {
       provide: DECISION_POLICY_SELECTOR,
-      useFactory: (): DecisionPolicySelector =>
-        new DecisionPolicySelector(null, { policy: new RuleBasedPolicy(), source: 'RULE_BASED' }),
+      useFactory: async (config: AppConfig, logger: Logger): Promise<DecisionPolicySelector> => {
+        const primary: DecisionPolicyBinding | null = await loadNeuralPrimaryPolicy(config, logger)
+
+        return new DecisionPolicySelector(primary, {
+          policy: new RuleBasedPolicy(),
+          source: 'RULE_BASED',
+        })
+      },
+      inject: [APP_CONFIG, LOGGER],
     },
     {
       provide: EXECUTE_AI_TURN,

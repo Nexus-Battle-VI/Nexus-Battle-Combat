@@ -1,5 +1,6 @@
 import type { BattleResult } from '../../domain/entities/BattleResult'
 import type { BattleEventWire } from './BattleEventDto'
+import type { BattleRoomDto } from './BattleRoomDto'
 
 /** Un participante del roster FIJO de la sala, con su heroe (Management#517). */
 export interface TournamentRoomParticipantDto {
@@ -35,4 +36,5 @@ export interface TournamentRoomRecordDto {
   readonly result: BattleResult | null
   readonly teams: readonly [TournamentRoomTeamDto, TournamentRoomTeamDto]
   readonly events: TournamentRoomEventPageDto
+  readonly tournament?: BattleRoomDto['tournament']
 }
