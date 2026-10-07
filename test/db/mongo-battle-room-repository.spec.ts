@@ -3,12 +3,19 @@ import 'reflect-metadata'
 import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb'
 import { type Collection, type Db, type MongoClient } from 'mongodb'
 
-import { BattleRoom, type CreateBattleRoomInput } from '../../src/domain/entities/BattleRoom'
+import {
+  BattleRoom,
+  type CreateBattleRoomInput,
+  type CreateTournamentRoomInput,
+} from '../../src/domain/entities/BattleRoom'
 import { Combatant } from '../../src/domain/entities/Combatant'
 import { createCombatProfile } from '../../src/domain/entities/CombatProfile'
 import type { TurnOrderEntry } from '../../src/domain/entities/TurnOrder'
 import { RoomConflictError } from '../../src/application/errors/ApplicationError'
 import { up as addHeroLevelToProfiles } from '../../src/adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
+import { TOURNAMENT_OPERATION_INDEX } from '../../src/adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
+import { up as addEpicToProfiles } from '../../src/adapters/outbound/persistence/migrations/020-battle-rooms-epic'
+import { golpeDeDefensaEpic } from '../fixtures/equipped-hero'
 import { MongoBattleRoomRepository } from '../../src/adapters/outbound/persistence/MongoBattleRoomRepository'
 import { describeError } from '../../src/infrastructure/observability/describe-error'
 import {
@@ -440,6 +447,101 @@ describe('MongoBattleRoomRepository', () => {
     await expect(rooms().insertOne(fixed as never)).rejects.toThrow()
   })
 
+  /**
+   * HU-31 (contrato `hu-31-equipped-epic-v1`, migracion 020): el perfil congelado lleva
+   * `epic`. El validador tenia `additionalProperties: false` en el perfil, asi que sin la
+   * migracion la batalla no podria persistirse con una epica equipada. Se comprueba contra el
+   * motor real, y que reaplicarla es inocua.
+   */
+  const startedRoomWithEpic = (id: string): BattleRoom => {
+    let room = BattleRoom.create(id, CREATOR, validInput(), AT)
+
+    room = room.join(CREATOR, 'A', AT, 'Creador', 'hero-a', 0)
+    room = room.join('jugador-b', 'B', AT, 'Rival', 'hero-b', 0)
+
+    const order: TurnOrderEntry[] = [
+      {
+        teamLabel: 'A',
+        seat: 0,
+        kind: 'HUMAN',
+        playerId: CREATOR,
+        displayName: 'Creador',
+        heroId: 'hero-a',
+        heroSubtype: 'GUERRERO_ARMAS',
+      },
+      {
+        teamLabel: 'B',
+        seat: 0,
+        kind: 'HUMAN',
+        playerId: 'jugador-b',
+        displayName: 'Rival',
+        heroId: 'hero-b',
+        heroSubtype: 'GUERRERO_ARMAS',
+      },
+    ]
+    const combatants = order.map((entry) =>
+      Combatant.start(
+        entry,
+        createCombatProfile({
+          heroId: entry.heroId ?? 'hero',
+          subtype: 'GUERRERO_ARMAS',
+          maxHealth: 44,
+          attack: 10,
+          defense: 11,
+          damage: { mode: 'DICE', count: 1, sides: 6 },
+          activeEffects: [],
+          epic: golpeDeDefensaEpic,
+        }),
+      ),
+    )
+
+    return room.startBattle(order, AT, combatants)
+  }
+
+  it('el perfil de combate con `epic` se persiste y se recupera (migracion 020)', async () => {
+    const id = nextId()
+    await repository.save(startedRoomWithEpic(id), 0)
+
+    const profile = (await repository.findById(id))?.battle?.combatantFor({
+      teamLabel: 'A',
+      seat: 0,
+    })?.profile
+
+    expect(profile?.epic?.epicReference).toBe(golpeDeDefensaEpic.epicReference)
+    expect(profile?.epic?.applied.additionalApplied).not.toBeNull()
+  })
+
+  it('un perfil sin `epic` (heroe sin epica equipada) sigue siendo valido', async () => {
+    const id = nextId()
+    await repository.save(startedRoom(id), 0)
+
+    const profile = (await repository.findById(id))?.battle?.combatantFor({
+      teamLabel: 'A',
+      seat: 0,
+    })?.profile
+
+    expect(profile).not.toHaveProperty('epic')
+  })
+
+  it('la migracion 020 es idempotente y el motor rechaza una `epic` incompleta', async () => {
+    await addEpicToProfiles(db)
+    await addEpicToProfiles(db)
+
+    const id = nextId()
+    await repository.save(startedRoomWithEpic(id), 0)
+    expect((await repository.findById(id))?.battle).not.toBeNull()
+
+    const stored = await rooms().findOne({ _id: id })
+    const fixed = JSON.parse(JSON.stringify(stored)) as Record<string, unknown>
+    const battle = fixed.battle as {
+      combatants: { profile: { epic?: Record<string, unknown> } }[]
+    }
+    delete battle.combatants[0]!.profile.epic!.applied
+    fixed._id = nextId()
+
+    await expect(rooms().insertOne(fixed as never)).rejects.toThrow()
+  })
+
   it('findInBattle devuelve solo salas IN_BATTLE', async () => {
     const inBattleId = nextId()
     const waitingId = nextId()
@@ -644,5 +746,156 @@ describe('MongoBattleRoomRepository', () => {
         ],
       }),
     ).rejects.toThrow()
+  })
+
+  /**
+   * Management#517 (EN de `tournament-rooms`, migracion 018): el campo
+   * `tournament` y el indice unico que sostiene la idempotencia de
+   * `CreateTournamentRoom` contra el motor REAL.
+   */
+  describe('tournament (Management#517)', () => {
+    const tournamentInput = (
+      overrides: Partial<CreateTournamentRoomInput> = {},
+    ): CreateTournamentRoomInput => ({
+      operationId: `op-${nextId()}`,
+      tournamentId: 'T1',
+      encounterId: 'T1:E1',
+      requestHash: 'a'.repeat(64),
+      teams: [
+        {
+          teamId: 'equipo1',
+          members: [
+            { playerId: 'p1', heroId: 'hero-p1', heroLoadoutVersion: 0, displayName: 'P1' },
+            { playerId: 'p2', heroId: 'hero-p2', heroLoadoutVersion: 0, displayName: 'P2' },
+          ],
+        },
+        {
+          teamId: 'equipo2',
+          members: [
+            { playerId: 'p3', heroId: 'hero-p3', heroLoadoutVersion: 0, displayName: 'P3' },
+            { playerId: 'p4', heroId: 'hero-p4', heroLoadoutVersion: 0, displayName: 'P4' },
+          ],
+        },
+      ],
+      ...overrides,
+    })
+
+    it('la migracion 018 crea el indice unico sobre tournament.operationId', async () => {
+      const indexes = await rooms().indexes()
+      const names = indexes.map((index) => index.name)
+
+      expect(names).toContain(TOURNAMENT_OPERATION_INDEX)
+    })
+
+    it('guarda y recupera una sala de torneo con `tournament` intacto', async () => {
+      const id = nextId()
+      const input = tournamentInput()
+      const room = BattleRoom.createTournamentRoom(id, 'tournament:T1', input, AT)
+
+      await repository.save(room, 0)
+      const reloaded = await repository.findById(id)
+
+      expect(reloaded?.status).toBe('PREPARING')
+      expect(reloaded?.tournament).toEqual({
+        operationId: input.operationId,
+        tournamentId: 'T1',
+        encounterId: 'T1:E1',
+        requestHash: 'a'.repeat(64),
+      })
+    })
+
+    it('findByTournamentOperationId encuentra la sala por operationId', async () => {
+      const id = nextId()
+      const input = tournamentInput()
+      const room = BattleRoom.createTournamentRoom(id, 'tournament:T1', input, AT)
+      await repository.save(room, 0)
+
+      const found = await repository.findByTournamentOperationId(input.operationId)
+      expect(found?.id).toBe(id)
+
+      await expect(
+        repository.findByTournamentOperationId('operationId-inexistente'),
+      ).resolves.toBeNull()
+    })
+
+    it('una sala sin tournament nunca aparece en findByTournamentOperationId ni "ocupa" el indice', async () => {
+      const lobbyId = nextId()
+      await repository.save(BattleRoom.create(lobbyId, CREATOR, validInput(), AT), 0)
+
+      const first = tournamentInput()
+      const second = tournamentInput()
+      await repository.save(
+        BattleRoom.createTournamentRoom(nextId(), 'tournament:T1', first, AT),
+        0,
+      )
+      await repository.save(
+        BattleRoom.createTournamentRoom(nextId(), 'tournament:T1', second, AT),
+        0,
+      )
+
+      await expect(
+        repository.findByTournamentOperationId(first.operationId),
+      ).resolves.not.toBeNull()
+      await expect(
+        repository.findByTournamentOperationId(second.operationId),
+      ).resolves.not.toBeNull()
+    })
+
+    it('findActiveByParticipant NUNCA devuelve una sala de torneo (aislamiento del lobby publico)', async () => {
+      const id = nextId()
+      const input = tournamentInput()
+      const room = BattleRoom.createTournamentRoom(id, 'tournament:T1', input, AT)
+      await repository.save(room, 0)
+
+      // La sala de torneo nace en PREPARING con sus 4 jugadores humanos ya
+      // resueltos: sin el filtro `tournament: null`, cada uno de ellos la
+      // veria mezclada con sus salas normales en la ruta PUBLICA
+      // `GET /v1/combat/me/rooms`.
+      for (const playerId of ['p1', 'p2', 'p3', 'p4']) {
+        const mine = await repository.findActiveByParticipant(playerId)
+        expect(mine.map((found) => found.id)).not.toContain(id)
+      }
+    })
+
+    it('el indice unico rechaza DOS salas distintas con el MISMO operationId (RoomConflictError)', async () => {
+      const operationId = `op-duplicado-${nextId()}`
+      const first = BattleRoom.createTournamentRoom(
+        nextId(),
+        'tournament:T1',
+        tournamentInput({ operationId }),
+        AT,
+      )
+      const second = BattleRoom.createTournamentRoom(
+        nextId(),
+        'tournament:T1',
+        tournamentInput({ operationId }),
+        AT,
+      )
+
+      await repository.save(first, 0)
+
+      await expect(repository.save(second, 0)).rejects.toBeInstanceOf(RoomConflictError)
+    })
+
+    it('el motor rechaza un `tournament` sin requestHash (fuera del esquema $jsonSchema)', async () => {
+      const id = nextId()
+      const room = BattleRoom.createTournamentRoom(id, 'tournament:T1', tournamentInput(), AT)
+      await repository.save(room, 0)
+
+      const document = await rooms().findOne({ _id: id })
+
+      await expect(
+        rooms().insertOne({
+          ...document,
+          _id: nextId(),
+          tournament: {
+            operationId: `op-${nextId()}`,
+            tournamentId: 'T1',
+            encounterId: 'T1:E1',
+            // requestHash ausente: el validador lo exige en `required`.
+          },
+        }),
+      ).rejects.toThrow()
+    })
   })
 })

@@ -14,6 +14,11 @@ import {
   type PlayerInventoryEquippedHeroPort,
 } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
 import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
+import { BATTLE_DROP_INVENTORY } from '../../src/application/ports/BattleDropInventoryPort'
+import {
+  BOT_COMBAT_CATALOG,
+  type BotCombatCatalogPort,
+} from '../../src/application/ports/BotCombatCatalogPort'
 import {
   Role,
   TOKEN_VERIFIER,
@@ -28,6 +33,8 @@ import {
 import { AppModule } from '../../src/infrastructure/bootstrap/app.module'
 import { equippedHeroFixture, equippedProductNotOwnedBlocker } from '../fixtures/equipped-hero'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
+import { botCatalogCandidates, offensiveHero } from '../fixtures/combat-bot-candidates'
 
 /**
  * HU-17 sobre HTTP (memoria): `POST /rooms/:id/start`, `GET /rooms/:id` y
@@ -86,6 +93,22 @@ const heroes: PlayerInventoryEquippedHeroPort = {
  */
 const commitments = recordingBattleCommitments()
 
+/**
+ * HU-30: capturar la instantanea de drop es una llamada saliente adicional a
+ * Player/Inventory al arrancar. Mismo motivo que `commitments`: se sustituye
+ * por un doble que registra para probar el cableado, no el cliente HTTP real.
+ */
+const dropInventory = recordingBattleDropInventory()
+
+/**
+ * HU-93.3: un bot JcE con UN solo heroe candidato, sin equipamiento ni epica,
+ * para que `BotParticipantFactory` sea determinista sin importar el RNG real
+ * (igual que `test/integration/ai-turn-execution-http.spec.ts`).
+ */
+const botCatalog: BotCombatCatalogPort = {
+  listBotCandidates: () => Promise.resolve(botCatalogCandidates({ heroes: [offensiveHero()] })),
+}
+
 const withEnv = (values: Record<string, string>): (() => void) => {
   const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]))
 
@@ -133,6 +156,10 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
       .useValue(heroes)
       .overrideProvider(BATTLE_HERO_COMMITMENTS)
       .useValue(commitments)
+      .overrideProvider(BATTLE_DROP_INVENTORY)
+      .useValue(dropInventory)
+      .overrideProvider(BOT_COMBAT_CATALOG)
+      .useValue(botCatalog)
       .compile()
 
     app = moduleRef.createNestApplication()
@@ -157,6 +184,11 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
     commitments.releases.length = 0
     commitments.failCommits = false
     commitments.failReleases = false
+    dropInventory.captures.length = 0
+    dropInventory.transfers.length = 0
+    dropInventory.closedBattles.length = 0
+    dropInventory.equipmentByKey.clear()
+    dropInventory.failCapture = false
   })
 
   const http = () => request(app.getHttpServer())
@@ -286,6 +318,54 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
         new Set([roomId]),
       )
       expect(commitments.commits[0]?.expiresAt.getTime()).toBeGreaterThan(Date.now())
+    })
+
+    it('HU-30: iniciar por HTTP captura el snapshot de drop de CADA humano en PVP', async () => {
+      const roomId = await preparingRoom()
+
+      const started = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+
+      expect(started.status).toBe(200)
+      expect(dropInventory.captures.map(({ playerId }) => playerId).sort()).toEqual([
+        'sujeto-a',
+        'sujeto-b',
+      ])
+    })
+
+    it('HU-93.3: iniciar una sala PVE (Humano vs IA) NO captura ningun snapshot de drop', async () => {
+      const created = await http()
+        .post('/api/v1/combat/rooms')
+        .set('Authorization', auth('token-a'))
+        .send({
+          mode: 'PVE',
+          teamConfigs: [
+            { capacity: 1 },
+            { capacity: 1, initialParticipants: [{ kind: 'AI', heroId: 'ai-0' }] },
+          ],
+          reward: { amount: 0 },
+        })
+
+      expect(created.status).toBe(201)
+
+      const roomId = created.body.id as string
+      const joined = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/join`)
+        .set('Authorization', auth('token-a'))
+        .send({ team: 'A' })
+
+      expect(joined.body.status).toBe('PREPARING')
+
+      const started = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+
+      expect(started.status).toBe(200)
+      expect(started.body.status).toBe('IN_BATTLE')
+      // Unico lector del snapshot: `PersistVersusDropDecision` (PVP exclusivo).
+      // En PVE nadie lo lee nunca, asi que no debe capturarse ninguno (HU-93.3).
+      expect(dropInventory.captures).toEqual([])
     })
 
     it('el equipo inicial lo decide el motor HU-24 (secuencia de proceso con la semilla validada), no el cliente', async () => {

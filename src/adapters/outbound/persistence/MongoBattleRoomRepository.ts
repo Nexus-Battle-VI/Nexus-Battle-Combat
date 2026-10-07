@@ -65,8 +65,12 @@ export class MongoBattleRoomRepository implements BattleRoomRepositoryPort {
   async findActiveByParticipant(playerId: string): Promise<readonly BattleRoom[]> {
     // Cada rama del `$or` tiene su indice (migracion 012):
     // (`teams.participants.playerId`, `status`) y (`createdBy`, `status`).
+    // `tournament: null` excluye las salas de torneo (Management#517): esta
+    // ruta publica no debe mostrar a sus jugadores una justa mezclada con sus
+    // salas de lobby.
     const documents = await this.rooms
       .find({
+        tournament: null,
         $or: [
           {
             'teams.participants.playerId': playerId,
@@ -79,6 +83,12 @@ export class MongoBattleRoomRepository implements BattleRoomRepositoryPort {
       .toArray()
 
     return documents.map((document) => BattleRoom.restore(toSnapshot(document)))
+  }
+
+  async findByTournamentOperationId(operationId: string): Promise<BattleRoom | null> {
+    const document = await this.rooms.findOne({ 'tournament.operationId': operationId })
+
+    return document === null ? null : BattleRoom.restore(toSnapshot(document))
   }
 
   async save(room: BattleRoom, expectedVersion: number): Promise<BattleRoom> {

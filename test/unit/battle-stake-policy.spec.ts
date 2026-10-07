@@ -71,7 +71,12 @@ describe('BattleStakePolicy (HU-23, D2 y §5.3)', () => {
     ])
   })
 
-  it('un ganador sin apuesta propia no recibe nada del pozo (y no aparece en la liquidacion)', () => {
+  // Pasada de estabilizacion economica (secciones 7-10 del brief): un
+  // ganador SIN apuesta propia YA SI participa del reparto del pozo -- antes
+  // quedaba excluido (ver historial), que era precisamente la asimetria
+  // reportada. `holdId: null` para b2 confirma que Wallet lo acredita sin
+  // referenciar ningun hold suyo (no tiene ninguno).
+  it('un ganador sin apuesta propia SI recibe su parte del pozo (holdId: null, sin hold que liberar)', () => {
     const room = finishedRoom({
       teamSizes: [1, 2],
       winnerTeamLabel: 'B',
@@ -80,27 +85,41 @@ describe('BattleStakePolicy (HU-23, D2 y §5.3)', () => {
 
     const settlement = settlementOf(room)
 
-    expect(settlement?.entries).toEqual([
-      expect.objectContaining({ playerId: 'a1', outcome: 'CAPTURED', amount: 10 }),
-      expect.objectContaining({ playerId: 'b1', outcome: 'CREDITED', amount: 10 }),
-    ])
-    expect(settlement?.entries.some((entry) => entry.playerId === 'b2')).toBe(false)
+    expect(settlement?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ playerId: 'a1', outcome: 'CAPTURED', amount: 10 }),
+        expect.objectContaining({
+          playerId: 'b1',
+          holdId: expect.stringContaining('b1'),
+          outcome: 'CREDITED',
+          amount: 5,
+        }),
+        expect.objectContaining({ playerId: 'b2', holdId: null, outcome: 'CREDITED', amount: 5 }),
+      ]),
+    )
   })
 
-  it('un perdedor sin apuesta no se captura (no aparece)', () => {
+  it('un perdedor sin apuesta no se captura (no aparece); un ganador CON apuesta propia siempre libera su propia reserva (aunque le toque 0)', () => {
     const room = finishedRoom({ teamSizes: [2, 1], winnerTeamLabel: 'A', stakes: { a1: 10 } })
 
     const settlement = settlementOf(room)
 
+    // a2 (ganador SIN apuesta, pool 0) no aporta ninguna entrada: no tiene
+    // hold que liberar y no hay nada que cobrar.
     expect(settlement?.entries).toEqual([
       expect.objectContaining({ playerId: 'a1', outcome: 'CREDITED', amount: 0 }),
     ])
   })
 
-  it('si ningun ganador aposto, el pozo no tiene destinatario: null (lo libera el llamador)', () => {
+  it('si SOLO el perdedor aposto, el ganador (sin apuesta propia) recibe igual el pozo completo -- ya NO devuelve null', () => {
     const room = finishedRoom({ stakes: { b1: 10 } })
 
-    expect(settlementOf(room)).toBeNull()
+    const settlement = settlementOf(room)
+
+    expect(settlement?.entries).toEqual([
+      expect.objectContaining({ playerId: 'b1', outcome: 'CAPTURED', amount: 10 }),
+      expect.objectContaining({ playerId: 'a1', holdId: null, outcome: 'CREDITED', amount: 10 }),
+    ])
   })
 
   it('sin ninguna apuesta devuelve null', () => {
@@ -111,6 +130,75 @@ describe('BattleStakePolicy (HU-23, D2 y §5.3)', () => {
     const room = timedOutRoom({ stakes: { a1: 10, b1: 10 } })
 
     expect(settlementOf(room)).toBeNull()
+  })
+
+  // Auditoria de la pasada de estabilizacion economica: `stakeSettlementFor`
+  // NUNCA recibe `createdBy` -- solo `BattleResult` (teamLabel/seat/result) y
+  // las `stakes`. Es estructuralmente IMPOSIBLE que esta funcion distinga al
+  // creador de la sala (`a1` en este fixture, ver `test/fixtures/battle.ts`)
+  // de un invitado. Estas pruebas lo demuestran de forma explicita para
+  // cerrar la sospecha reportada de asimetria owner/invitado: el creador
+  // pierde su apuesta exactamente igual que cualquier invitado, y el rival
+  // ganador la recibe completa.
+  it('EL CREADOR (a1) apuesta y PIERDE: se captura igual que cualquier invitado, el rival la recibe completa', () => {
+    const room = finishedRoom({ winnerTeamLabel: 'B', stakes: { a1: 8 } })
+
+    const settlement = settlementOf(room)
+
+    expect(settlement?.entries).toEqual([
+      expect.objectContaining({ playerId: 'a1', outcome: 'CAPTURED', amount: 8 }),
+      expect.objectContaining({ playerId: 'b1', outcome: 'CREDITED', amount: 8 }),
+    ])
+  })
+
+  it('EL CREADOR (a1) apuesta y GANA: recibe exactamente lo apostado por el invitado que perdio', () => {
+    const room = finishedRoom({ winnerTeamLabel: 'A', stakes: { a1: 8, b1: 8 } })
+
+    const settlement = settlementOf(room)
+
+    expect(settlement?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ playerId: 'b1', outcome: 'CAPTURED', amount: 8 }),
+        expect.objectContaining({ playerId: 'a1', outcome: 'CREDITED', amount: 8 }),
+      ]),
+    )
+  })
+
+  it('SOLO el invitado (b1, no creador) apuesta y PIERDE: se captura igual que si apostara el creador', () => {
+    const room = finishedRoom({ winnerTeamLabel: 'A', stakes: { b1: 8 } })
+
+    const settlement = settlementOf(room)
+
+    expect(settlement?.entries).toEqual([
+      expect.objectContaining({ playerId: 'b1', outcome: 'CAPTURED', amount: 8 }),
+      expect.objectContaining({ playerId: 'a1', outcome: 'CREDITED', amount: 8 }),
+    ])
+  })
+
+  it('SOLO el invitado (b1, no creador) apuesta y GANA: recibe su propia apuesta de vuelta (recuperar no es "ganancia nueva", ver BattleCreditsPolicy)', () => {
+    const room = finishedRoom({ winnerTeamLabel: 'B', stakes: { b1: 8 } })
+
+    const settlement = settlementOf(room)
+
+    // Sin perdedor con apuesta, el pozo es 0: b1 solo recupera su propio
+    // hold (`CREDITED amount: 0`, ver "un perdedor sin apuesta no se
+    // captura"), nunca se capta nada de a1 porque a1 no aposto.
+    expect(settlement?.entries).toEqual([
+      expect.objectContaining({ playerId: 'b1', outcome: 'CREDITED', amount: 0 }),
+    ])
+  })
+
+  it('ambos apuestan montos distintos: la liquidacion no depende de quien creo la sala', () => {
+    const room = finishedRoom({ winnerTeamLabel: 'A', stakes: { a1: 5, b1: 7 } })
+
+    const settlement = settlementOf(room)
+
+    expect(settlement?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ playerId: 'b1', outcome: 'CAPTURED', amount: 7 }),
+        expect.objectContaining({ playerId: 'a1', outcome: 'CREDITED', amount: 7 }),
+      ]),
+    )
   })
 
   it('la suma capturada es EXACTAMENTE la suma acreditada (suma cero)', () => {

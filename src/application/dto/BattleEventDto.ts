@@ -4,6 +4,8 @@ import type {
   BattleEvent,
   BattleFinishedPayload,
   DegradedFrom,
+  DirectDamageSkillUsedPayload,
+  EpicUsedPayload,
   HealSkillUsedPayload,
   SkillUsedPayload,
   TurnTimedOutPayload,
@@ -88,6 +90,50 @@ export type BattleEventWire =
       readonly cooldown: HealSkillUsedPayload['cooldown']
       readonly heal: HealSkillUsedPayload['heal']
       readonly targetHealth: { readonly before: number; readonly after: number }
+      readonly battle: BattleView
+    }
+  | {
+      /**
+       * HU-19 v2 (contrato §3): dano directo (`kind: DAMAGE`, Agonia) sin resolucion de
+       * Ataque/Defensa -- sin `resolution` ni `bonus`.
+       */
+      readonly type: 'directDamageSkillUsed'
+      readonly seq: number
+      readonly roomId: string
+      readonly occurredAt: string
+      readonly commandId: string
+      readonly completedPosition: number
+      readonly actor: DirectDamageSkillUsedPayload['actor']
+      readonly target: DirectDamageSkillUsedPayload['target']
+      readonly skill: DirectDamageSkillUsedPayload['skill']
+      readonly power: DirectDamageSkillUsedPayload['power']
+      readonly cooldown: DirectDamageSkillUsedPayload['cooldown']
+      readonly damage: DirectDamageSkillUsedPayload['damage']
+      readonly targetHealth: { readonly before: number; readonly after: number }
+      readonly battle: BattleView
+    }
+  | {
+      /**
+       * Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): la epica equipada
+       * ejecutada. `target`/`targetHealth`/`damage`/`heal`/`affected` ausentes cuando no
+       * aplican (la mayoria de las epicas son bonos sin objetivo ni cambio de Vida).
+       */
+      readonly type: 'epicUsed'
+      readonly seq: number
+      readonly roomId: string
+      readonly occurredAt: string
+      readonly commandId: string
+      readonly completedPosition: number
+      readonly actor: EpicUsedPayload['actor']
+      readonly target?: EpicUsedPayload['target']
+      readonly epic: EpicUsedPayload['epic']
+      readonly power: EpicUsedPayload['power']
+      readonly cooldown: EpicUsedPayload['cooldown']
+      readonly appliedEffects: number
+      readonly damage?: EpicUsedPayload['damage']
+      readonly heal?: EpicUsedPayload['heal']
+      readonly targetHealth?: { readonly before: number; readonly after: number }
+      readonly affected?: EpicUsedPayload['affected']
       readonly battle: BattleView
     }
   | {
@@ -182,6 +228,51 @@ export const toBattleEventWire = (roomId: string, event: BattleEvent): BattleEve
       heal: heal.heal,
       targetHealth: heal.targetHealth,
       battle: heal.battle,
+    }
+  }
+
+  if (event.type === 'directDamageSkillUsed') {
+    const direct = event.payload as DirectDamageSkillUsedPayload
+
+    return {
+      type: 'directDamageSkillUsed',
+      seq: event.seq,
+      roomId,
+      occurredAt,
+      commandId: direct.commandId,
+      completedPosition: direct.completedPosition,
+      actor: direct.actor,
+      target: direct.target,
+      skill: direct.skill,
+      power: direct.power,
+      cooldown: direct.cooldown,
+      damage: direct.damage,
+      targetHealth: direct.targetHealth,
+      battle: direct.battle,
+    }
+  }
+
+  if (event.type === 'epicUsed') {
+    const epic = event.payload as EpicUsedPayload
+
+    return {
+      type: 'epicUsed',
+      seq: event.seq,
+      roomId,
+      occurredAt,
+      commandId: epic.commandId,
+      completedPosition: epic.completedPosition,
+      actor: epic.actor,
+      ...(epic.target === undefined ? {} : { target: epic.target }),
+      epic: epic.epic,
+      power: epic.power,
+      cooldown: epic.cooldown,
+      appliedEffects: epic.appliedEffects,
+      ...(epic.damage === undefined ? {} : { damage: epic.damage }),
+      ...(epic.heal === undefined ? {} : { heal: epic.heal }),
+      ...(epic.targetHealth === undefined ? {} : { targetHealth: epic.targetHealth }),
+      ...(epic.affected === undefined ? {} : { affected: epic.affected }),
+      battle: epic.battle,
     }
   }
 

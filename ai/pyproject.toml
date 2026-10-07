@@ -1,0 +1,51 @@
+[project]
+name = "nexus-combat-ai"
+version = "0.1.0"
+description = "EN-036.2: pipeline de dataset y entrenamiento en Python/PyTorch para la IA de Combat (offline, nunca productivo)."
+readme = "README.md"
+authors = [
+    { name = "josemora09052025", email = "josedavid.morap@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "torch>=2.0",
+    "numpy>=2.0",
+    "pymongo>=4.9",
+]
+
+[project.scripts]
+nexus-combat-dataset = "nexus_combat_ai.cli.build_dataset:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[tool.uv]
+# CPU-only (MVP #566 no requiere GPU; preferimos el wheel oficial mas liviano).
+override-dependencies = []
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[build-system]
+requires = ["uv_build>=0.9.17,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

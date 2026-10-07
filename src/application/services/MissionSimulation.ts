@@ -1,6 +1,12 @@
 import type { RandomSequenceFactoryPort } from '../ports/RandomSequencePort'
 import type { MissionSeed } from '../ports/MissionSeedPort'
+import type { AiDecisionPort } from '../ports/AiDecisionPort'
 import { createBoundedRandom } from './BoundedRandom'
+import {
+  MissionRotationConstraint,
+  type MissionRotation,
+  type MissionRotationStrategyTrace,
+} from './MissionRotationConstraint'
 import {
   applyLevelToMagnitudeResult,
   calculateDamage,
@@ -14,6 +20,16 @@ import {
 import type { SkillBonus } from '../../domain/policies/SkillEffectPolicy'
 import type { CombatAbility, CombatMagnitude } from '../../domain/entities/CombatProfile'
 import { RandomSeed } from '../../domain/value-objects/RandomSeed'
+import { ParticipantKind } from '../../domain/entities/Participant'
+import { BattleMode } from '../../domain/value-objects/BattleMode'
+import { resolveLegalAction } from '../../domain/decision/ActionIdentity'
+import { NoLegalDecisionActionsError } from '../../domain/errors/DecisionContractErrors'
+import type {
+  BattleDecisionState,
+  DecisionCombatant,
+} from '../../domain/decision/BattleDecisionState'
+import type { ActionIntent } from '../../domain/decision/ActionIntent'
+import type { LegalAction } from '../../domain/decision/LegalAction'
 
 export interface MissionFighter {
   readonly maxHealth: number
@@ -111,37 +127,26 @@ export interface MissionSimulationResult {
   readonly combatLog: readonly Readonly<Record<string, unknown>>[]
 }
 
-type RotationPriority = 'HIGH' | 'MEDIUM' | 'LOW'
-
-/**
- * Por qué una rotación no fue viable en un turno (HU-71, P-R7). La recarga y el
- * Poder vienen del diseño; `UNKNOWN_ABILITY` y `UNSUPPORTED_EFFECT` son de Combat:
- * la habilidad no está en el perfil del héroe o su efecto no tiene semántica de
- * misión (`evaluateMissionAbility`). La condición de salud todavía no tiene regla
- * del PO (decisión 5 del diseño), así que aún no descarta ninguna rotación.
- */
-type SkipReason = 'UNKNOWN_ABILITY' | 'UNSUPPORTED_EFFECT' | 'ON_COOLDOWN' | 'NOT_ENOUGH_POWER'
-
-/** Qué rotación y qué paso usó el héroe, y por qué se saltaron las anteriores. */
-interface StrategyTrace {
-  readonly rotation: RotationPriority | null
-  readonly step: number | null
-  readonly fallback: boolean
-  readonly skipped: readonly {
-    readonly rotation: RotationPriority
-    readonly step: number
-    readonly reason: SkipReason
-  }[]
-}
-
 interface ChosenAction {
   readonly kind: 'BASIC_ATTACK' | 'ABILITY'
   readonly ability?: CombatAbility
-  readonly strategy: StrategyTrace
+  readonly strategy: MissionRotationStrategyTrace
 }
+
+/** Observación interna; acumula hechos en memoria, nunca persiste durante el combate. */
+export interface MissionDecisionObservation {
+  readonly decisionSequence: number
+  readonly stateBefore: BattleDecisionState
+  readonly legalActions: readonly LegalAction[]
+  readonly selectedAction: ActionIntent
+}
+
+export type MissionDecisionObserver = (decision: MissionDecisionObservation) => void
 
 /** Un modificador de estadística con duración (mejora del héroe o penalización del enemigo). */
 interface TimedModifier {
+  /** Habilidad que lo originó (revisión de PR #71): permite representar `activeEffects` con honestidad. */
+  readonly sourceAbilityId: string
   readonly statistic: MissionStatistic
   readonly amount: number
   /** Rondas que le quedan, contando la actual. */
@@ -154,8 +159,6 @@ const dropSpent = (list: { remaining: number }[]): void => {
   list.splice(0, list.length, ...alive)
 }
 
-const PRIORITY_ORDER: Readonly<Record<RotationPriority, number>> = { HIGH: 0, MEDIUM: 1, LOW: 2 }
-
 const DEFAULT_RULES = {
   turnDurationSeconds: 60,
   maxTurnsPerEncounter: 30,
@@ -164,12 +167,28 @@ const DEFAULT_RULES = {
   criticalMultiplier: 1.5,
 } as const
 
+/**
+ * Convencion honesta de Mision (EN-035.3, ADR-023): es un duelo 1v1, sin
+ * equipos ni asientos reales, asi que `CombatantKey` no existe de forma
+ * natural. `teamLabel` es un string generico (`Combatant.ts`); se usan estas
+ * dos etiquetas fijas solo para poder construir `BattleDecisionState`/
+ * `LegalAction` sin inventar datos que no existen.
+ */
+const MISSION_HERO_KEY = Object.freeze({ teamLabel: 'HERO', seat: 0 })
+const MISSION_ENEMY_KEY = Object.freeze({ teamLabel: 'ENEMY', seat: 0 })
+const MISSION_ENEMY_TARGET = Object.freeze({
+  scope: 'COMBATANT' as const,
+  combatant: MISSION_ENEMY_KEY,
+})
+
 /** A fixed request and operation produce the same private sequence on every replica. */
-export const simulateMission = (
+export const simulateMission = async (
   request: MissionSimulationRequest,
   seed: MissionSeed,
   sequences: RandomSequenceFactoryPort,
-): MissionSimulationResult => {
+  decisionPolicy: AiDecisionPort,
+  observeDecision?: MissionDecisionObserver,
+): Promise<MissionSimulationResult> => {
   const sequence = sequences.create(RandomSeed.create(seed.value))
   const random = createBoundedRandom(sequence)
   const rules: NonNullable<MissionSimulationRequest['rules']> = request.rules ?? DEFAULT_RULES
@@ -246,59 +265,194 @@ export const simulateMission = (
     healingDone += health - before
     return health - before
   }
-  const rotations = [...request.strategy.rotations].sort(
-    (a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority],
-  )
-  /** La primera causa por la que la habilidad no puede ejecutarse este turno, o `null`. */
-  const skipReasonOf = (ability: CombatAbility | undefined): SkipReason | null => {
-    if (ability === undefined) return 'UNKNOWN_ABILITY'
-    if (!evaluateMissionAbility(ability).supported) return 'UNSUPPORTED_EFFECT'
-    if ((cooldowns.get(ability.abilityId) ?? 0) > 0) return 'ON_COOLDOWN'
-    const affordable =
-      ability.powerCost.mode === 'ALL_AVAILABLE' ? power > 0 : ability.powerCost.amount <= power
-    return affordable ? null : 'NOT_ENOUGH_POWER'
+  const rotationConstraint = new MissionRotationConstraint()
+  const missionRotations: readonly MissionRotation[] = request.strategy.rotations
+  /**
+   * Traduce `heroModifiers`/`enemyModifiers` (buffs/debuffs con duración ya
+   * existentes) a `DecisionActiveEffect` con honestidad (revisión de PR #71):
+   * `sourceAbilityId` ahora sí se registra en `TimedModifier`, así que no
+   * hace falta inventarlo. `heroModifiers` siempre sube una estadística
+   * propia (INCREASE); `enemyModifiers` siempre baja una del enemigo
+   * (DECREASE) -- implícito por la lista en la que `applyEffect` los empuja
+   * (`MissionAbilityPolicy.effectOf`), nunca un dato fabricado aquí.
+   *
+   * Pendiente real, declarado y no resuelto en esta Task: `IMMUNITY`
+   * (`immunityRounds`) y el reflejo de daño no se representan -- Misiones
+   * los trackea como contadores sueltos sin `sourceAbilityId` ni
+   * `sourceCombatant`, y `REFLECT` ni siquiera es una variante de
+   * `DecisionActiveEffect` en el contrato de #562. Ampliarlos queda para
+   * cuando una política lo necesite.
+   */
+  const activeEffectsOf = (
+    modifiers: readonly TimedModifier[],
+    sourceCombatant: typeof MISSION_HERO_KEY | typeof MISSION_ENEMY_KEY,
+    operation: 'INCREASE' | 'DECREASE',
+  ): readonly DecisionCombatant['activeEffects'][number][] =>
+    modifiers.map((modifier) => ({
+      kind: 'STAT' as const,
+      sourceAbilityId: modifier.sourceAbilityId,
+      sourceCombatant,
+      statistic: modifier.statistic,
+      operation,
+      amount: modifier.amount,
+      remainingOwnTurns: modifier.remaining,
+    }))
+  /**
+   * Vista honesta del heroe/enemigo para `AiDecisionPort` (EN-035.3, ADR-023,
+   * revisión de PR #71): el enemigo ya trae sus stats reales de combate
+   * (`attack`/`defense`/`damage`), tomadas del mismo objeto `enemy` que usa
+   * `fight()` para resolver la pelea -- nunca `null` por pereza. `power`
+   * sigue `null` porque los enemigos de Misión genuinamente no usan Poder
+   * (EN-036 #555).
+   */
+  const buildDecisionState = (
+    enemy: {
+      readonly maxHealth: number
+      readonly attack: number
+      readonly defense: number
+      readonly damage: CombatMagnitude
+    },
+    enemyHealth: number,
+    enemyModifiers: readonly TimedModifier[],
+    roundTurns: number,
+    globalTurnsCompleted: number,
+  ): BattleDecisionState => {
+    const actor: DecisionCombatant = {
+      identity: MISSION_HERO_KEY,
+      kind: ParticipantKind.Ai,
+      heroSubtype: request.hero.profile.subtype,
+      health: { current: health, max: maxHealth },
+      power: { current: power, max: heroStats.power },
+      attack: heroStats.attack,
+      defense: heroStats.defense,
+      damage: heroStats.damage,
+      level: request.hero.profile.level ?? null,
+      cooldowns: [...cooldowns].map(([abilityId, remainingOwnTurns]) => ({
+        abilityId,
+        remainingOwnTurns,
+      })),
+      abilities: request.hero.profile.abilities.map((ability) => ({
+        abilityId: ability.abilityId,
+        powerCost: ability.powerCost,
+        chargeTurns: ability.chargeTurns,
+        effects: ability.effects.map((effect) => ({
+          kind: effect.kind,
+          target: effect.target,
+          ...(effect.statistic === undefined ? {} : { statistic: effect.statistic }),
+          ...(effect.operation === undefined ? {} : { operation: effect.operation }),
+          ...(effect.magnitude === undefined ? {} : { magnitude: effect.magnitude }),
+          ...(effect.durationTurns === undefined ? {} : { durationTurns: effect.durationTurns }),
+          hasActivationCondition: effect.hasActivationCondition,
+          ...(effect.immunityCode === undefined ? {} : { immunityCode: effect.immunityCode }),
+        })),
+      })),
+      epic: null,
+      activeEffects: activeEffectsOf(heroModifiers, MISSION_HERO_KEY, 'INCREASE'),
+      damageMemory: null,
+    }
+    const enemyCombatant: DecisionCombatant = {
+      identity: MISSION_ENEMY_KEY,
+      kind: ParticipantKind.Ai,
+      heroSubtype: null,
+      health: { current: enemyHealth, max: enemy.maxHealth },
+      power: null,
+      attack: enemy.attack,
+      defense: enemy.defense,
+      damage: enemy.damage,
+      level: null,
+      cooldowns: [],
+      abilities: [],
+      epic: null,
+      activeEffects: activeEffectsOf(enemyModifiers, MISSION_ENEMY_KEY, 'DECREASE'),
+      damageMemory: null,
+    }
+
+    return {
+      schemaVersion: 1,
+      context: {
+        battleId: request.operationId,
+        mode: BattleMode.Pve,
+        round: roundTurns,
+        turnsCompleted: globalTurnsCompleted,
+      },
+      actor,
+      allies: [],
+      enemies: [enemyCombatant],
+    }
   }
   /**
-   * Decisión por turno de HU-71 (diseño `hu-71-rotaciones-habilidades`, P-R5 a P-R7 y
-   * tabla D-1 a D-6). Cada rotación mira SOLO la acción de su cursor: si no es viable,
-   * la rotación entera no lo es este turno, se anota por qué y se prueba la siguiente,
-   * sin avanzar su cursor. `BASIC_ATTACK` siempre es viable. Si ninguna rotación es
-   * viable, ataque básico de respaldo sin consumir Poder (CA-03).
+   * Decisión por turno de HU-71 (diseño `hu-71-rotaciones-habilidades`, P-R5 a P-R7
+   * y tabla D-1 a D-6), delegada en `MissionRotationConstraint` + `AiDecisionPort`
+   * desde EN-035.3: la restricción filtra qué puede ofrecerse, la política decide
+   * entre lo ofrecido, Combat (aquí, `MissionSimulation`) ejecuta.
    */
-  const chooseAction = (): ChosenAction => {
-    const skipped: StrategyTrace['skipped'][number][] = []
-    for (const [index, rotation] of rotations.entries()) {
-      if (rotation.steps.length === 0) continue
-      const cursor = (cursors.get(index) ?? 0) % rotation.steps.length
-      const step = rotation.steps[cursor]
-      if (step === undefined) continue
-      const position = { rotation: rotation.priority, step: cursor + 1 }
-      if (step.kind === 'BASIC_ATTACK') {
-        cursors.set(index, cursor + 1)
-        return { kind: 'BASIC_ATTACK', strategy: { ...position, fallback: false, skipped } }
-      }
-      const ability = step.abilityId === undefined ? undefined : abilities.get(step.abilityId)
-      const reason = skipReasonOf(ability)
-      if (reason !== null || ability === undefined) {
-        skipped.push({ ...position, reason: reason ?? 'UNKNOWN_ABILITY' })
-        continue
-      }
-      cursors.set(index, cursor + 1)
-      return { kind: 'ABILITY', ability, strategy: { ...position, fallback: false, skipped } }
+  const chooseAction = async (
+    enemy: {
+      readonly maxHealth: number
+      readonly attack: number
+      readonly defense: number
+      readonly damage: CombatMagnitude
+    },
+    enemyHealth: number,
+    enemyModifiers: readonly TimedModifier[],
+    roundTurns: number,
+    decisionSequence: number,
+  ): Promise<ChosenAction> => {
+    const evaluation = rotationConstraint.evaluate({
+      rotations: missionRotations,
+      cursors,
+      abilities,
+      cooldowns,
+      power,
+      health,
+      maxHealth,
+      enemyTarget: MISSION_ENEMY_TARGET,
+    })
+    const state = buildDecisionState(
+      enemy,
+      enemyHealth,
+      enemyModifiers,
+      roundTurns,
+      decisionSequence - 1,
+    )
+    const intent = await decisionPolicy.decide(state, evaluation.legalActions)
+    const resolved = resolveLegalAction(intent, evaluation.legalActions)
+    observeDecision?.({
+      decisionSequence,
+      stateBefore: state,
+      legalActions: evaluation.legalActions,
+      selectedAction: resolved,
+    })
+    const strategy = evaluation.resolve(resolved)
+
+    if (resolved.kind === 'EPIC') {
+      // Misiones nunca ofrece candidatas EPIC (no hay épica en este modo);
+      // llegar aquí sería una política fabricando una acción inexistente.
+      throw new NoLegalDecisionActionsError()
     }
-    return {
-      kind: 'BASIC_ATTACK',
-      strategy: { rotation: null, step: null, fallback: true, skipped },
+    if (resolved.kind === 'BASIC_ATTACK') {
+      return { kind: 'BASIC_ATTACK', strategy }
     }
+
+    const ability = abilities.get(resolved.abilityId)
+
+    if (ability === undefined) {
+      throw new NoLegalDecisionActionsError()
+    }
+
+    return { kind: 'ABILITY', ability, strategy }
   }
-  const fight = (
+  const fight = async (
     enemyRef: string,
     base: MissionFighter,
     multiplier: number,
     maxTurns: number,
     encounter: number,
     instance: number,
-  ): { readonly status: 'DEFEATED' | 'HERO_DEFEATED' | 'ESCAPED'; readonly turns: number } => {
+  ): Promise<{
+    readonly status: 'DEFEATED' | 'HERO_DEFEATED' | 'ESCAPED'
+    readonly turns: number
+  }> => {
     const enemy = {
       maxHealth: Math.max(1, Math.ceil(base.maxHealth * multiplier)),
       attack: Math.ceil(base.attack * multiplier),
@@ -321,12 +475,20 @@ export const simulateMission = (
         reflect = reflect.remaining > 1 ? { ...reflect, remaining: reflect.remaining - 1 } : null
     }
     /** Aplica un efecto de habilidad (P-J4) y devuelve lo que queda en la bitácora. */
-    const applyEffect = (effect: MissionEffect): Readonly<Record<string, unknown>> => {
+    const applyEffect = (
+      effect: MissionEffect,
+      sourceAbilityId: string,
+    ): Readonly<Record<string, unknown>> => {
       switch (effect.kind) {
         case 'MODIFIER': {
           const amount = bonus(effect.amount)
           const list = effect.target === 'SELF' ? heroModifiers : enemyModifiers
-          list.push({ statistic: effect.statistic, amount, remaining: effect.turns })
+          list.push({
+            sourceAbilityId,
+            statistic: effect.statistic,
+            amount,
+            remaining: effect.turns,
+          })
           return {
             kind: effect.target === 'SELF' ? 'BUFF' : 'DEBUFF',
             statistic: effect.statistic,
@@ -380,7 +542,7 @@ export const simulateMission = (
         event('heroHealed', { amount, heroHealth: health })
       }
       dropSpent(pendingHeals)
-      const action = chooseAction()
+      const action = await chooseAction(enemy, enemyHealth, enemyModifiers, turns, totalTurns)
       let attackBonus = 0
       let damageBonus = 0
       let attacks = true
@@ -403,7 +565,9 @@ export const simulateMission = (
             (skillsUsed.get(action.ability.abilityId) ?? 0) + 1,
           )
           attacks = support.attacks
-          for (const effect of support.effects) effects.push(applyEffect(effect))
+          for (const effect of support.effects) {
+            effects.push(applyEffect(effect, action.ability.abilityId))
+          }
         }
       }
       let hit = false
@@ -516,7 +680,7 @@ export const simulateMission = (
       for (let n = 0; n < enemy.count; n += 1) {
         const instance = (instances.get(enemy.enemyRef) ?? 0) + 1
         instances.set(enemy.enemyRef, instance)
-        const result = fight(
+        const result = await fight(
           enemy.enemyRef,
           enemy.profile,
           request.enemyStatMultiplier * (1 + (encounter.powerStep ?? 0)),
@@ -550,7 +714,7 @@ export const simulateMission = (
           if (!appeared) continue
           const instance = (masterInstances.get(candidate.masterRef) ?? 0) + 1
           masterInstances.set(candidate.masterRef, instance)
-          const result = fight(
+          const result = await fight(
             candidate.masterRef,
             candidate.profile,
             1,

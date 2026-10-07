@@ -17,6 +17,14 @@ import * as missionSimulationIntakeMigration from '../../adapters/outbound/persi
 import * as missionSimulationResultsMigration from '../../adapters/outbound/persistence/migrations/015-mission-simulation-results'
 import * as battleRoomsSkillEffectsMigration from '../../adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
 import * as battleRoomsHeroLevelMigration from '../../adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
+import * as battleRoomsTournamentMigration from '../../adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
+import * as battleDropWorkflowsMigration from '../../adapters/outbound/persistence/migrations/019-battle-drop-workflows'
+import * as battleRoomsEpicMigration from '../../adapters/outbound/persistence/migrations/020-battle-rooms-epic'
+import * as battleRoomsEpicStatEffectsMigration from '../../adapters/outbound/persistence/migrations/021-battle-rooms-epic-stat-effects'
+import * as battleRoomsEpicUsedEventMigration from '../../adapters/outbound/persistence/migrations/022-battle-rooms-epic-used-event'
+import * as combatDecisionEventsMigration from '../../adapters/outbound/persistence/migrations/023-combat-decision-events'
+import * as combatDecisionEventsEndTurnMigration from '../../adapters/outbound/persistence/migrations/024-combat-decision-events-end-turn'
+import * as mctsTeacherLabelsMigration from '../../adapters/outbound/persistence/migrations/025-mcts-teacher-labels'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -85,6 +93,17 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '015-mission-simulation-results', up: missionSimulationResultsMigration.up },
   { name: '016-battle-rooms-skill-effects', up: battleRoomsSkillEffectsMigration.up },
   { name: '017-battle-rooms-hero-level', up: battleRoomsHeroLevelMigration.up },
+  { name: '018-battle-rooms-tournament', up: battleRoomsTournamentMigration.up },
+  { name: '019-battle-drop-workflows', up: battleDropWorkflowsMigration.up },
+  { name: '020-battle-rooms-epic', up: battleRoomsEpicMigration.up },
+  { name: '021-battle-rooms-epic-stat-effects', up: battleRoomsEpicStatEffectsMigration.up },
+  { name: '022-battle-rooms-epic-used-event', up: battleRoomsEpicUsedEventMigration.up },
+  { name: '023-combat-decision-events', up: combatDecisionEventsMigration.up },
+  {
+    name: '024-combat-decision-events-end-turn',
+    up: combatDecisionEventsEndTurnMigration.up,
+  },
+  { name: '025-mcts-teacher-labels', up: mctsTeacherLabelsMigration.up },
 ]
 
 const REGISTRY = '_migrations'

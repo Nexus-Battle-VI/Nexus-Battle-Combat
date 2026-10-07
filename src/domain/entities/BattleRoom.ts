@@ -3,10 +3,13 @@ import {
   ActorUnavailableError,
   BattleNotInProgressError,
   InvalidBattleRosterError,
+  EpicOnCooldownError,
+  EpicTargetRequiredError,
   InsufficientPowerForHealError,
   InvalidCommandIdError,
   InvalidHealTargetError,
   InvalidTargetError,
+  NoEpicEquippedError,
   NotYourTurnError,
   RoomNotStartableError,
   SameTeamTargetError,
@@ -15,6 +18,7 @@ import {
   TargetUnavailableError,
   UnknownSkillError,
   UnsupportedCombatProfileError,
+  UnsupportedEpicEffectError,
   UnsupportedSkillEffectError,
 } from '../errors/BattleErrors'
 import {
@@ -31,11 +35,13 @@ import {
   type TemporalEffectAudience,
   type TemporalEffectTemplate,
 } from '../policies/SkillEffectPolicy'
+import { evaluateEpicEffects, type EpicEffectPlan } from '../policies/EpicSkillPolicy'
 import {
   DuplicateDisplayNameError,
   InvalidModeCompositionError,
   InvalidRoomCapacityError,
   InvalidTeamCapacityError,
+  InvalidTournamentRosterError,
   PlayerAlreadyJoinedError,
   PlayerNotInRoomError,
   RoomCancellationForbiddenError,
@@ -91,7 +97,7 @@ import {
 } from './BattleEvent'
 import { BattleState, type BattleStateSnapshot, type BattleView } from './BattleState'
 import type { ActiveSkillEffect, Combatant, CombatantKey } from './Combatant'
-import type { CombatAbility, CombatMagnitude, CombatProfile } from './CombatProfile'
+import type { CombatAbility, CombatEpic, CombatMagnitude, CombatProfile } from './CombatProfile'
 import { memberKey, type TeamRoster, type TurnOrderEntry } from './TurnOrder'
 
 /**
@@ -212,6 +218,7 @@ export interface HealingRecipient {
  */
 export interface SkillHealingReadyPlan {
   readonly kind: 'healingSkill'
+  readonly audience: 'ALLY' | 'ALLIED_GROUP'
   readonly attackerEntry: TurnOrderEntry
   readonly attacker: Combatant
   readonly attackerProfile: CombatProfile
@@ -250,13 +257,51 @@ export interface SkillDegradedPlan {
   readonly abilityId: string
 }
 
-export type SkillPlan =
+export type SkillActionPlan =
   | SkillReadyPlan
   | SkillHealReadyPlan
   | SkillDirectDamageReadyPlan
   | SkillHealingReadyPlan
   | SkillDegradedPlan
-  | BasicAttackReplay
+
+export type SkillPlan = SkillActionPlan | BasicAttackReplay
+
+/**
+ * La epica equipada ya VALIDADA (correccion HU-19/HU-31, `EpicSkillPolicy`): 0 sorteos hasta
+ * aqui. `target`/`targetEntry` son `null` cuando ningun efecto necesito un objetivo unico
+ * (todos SELF/ALLIED_GROUP); `recipients` solo trae algo con audiencia `ALLIED_GROUP`.
+ */
+export interface EpicReadyPlan {
+  readonly kind: 'epic'
+  readonly attackerEntry: TurnOrderEntry
+  readonly attacker: Combatant
+  readonly epic: CombatEpic
+  readonly effectPlan: EpicEffectPlan
+  readonly targetEntry: TurnOrderEntry | null
+  readonly target: Combatant | null
+  readonly recipients: readonly HealingRecipient[]
+  readonly powerBefore: number
+  readonly powerAfter: number
+}
+
+export type EpicPlan = EpicReadyPlan | BasicAttackReplay
+
+/** Un efecto de estadistica o inmunidad de la epica, ya resuelto (dados tirados) y dirigido. */
+export interface ResolvedEpicEffect {
+  readonly targetKey: CombatantKey
+  readonly effect: ActiveSkillEffect
+}
+
+/** Lo que `UseEpic` resuelve (sorteos) antes de aplicar (correccion HU-19/HU-31). */
+export interface EpicOutcome {
+  readonly resolvedEffects: readonly ResolvedEpicEffect[]
+  /** Suma de todos los `instantHeals`, ya con sus dados tirados; `null` si ninguno. */
+  readonly healAmount: number | null
+  /** Suma de todos los `directDamage`, ya con sus dados tirados; `null` si ninguno. */
+  readonly damageAmount: number | null
+  /** Suma de `calculateHeal(maximoDelObjetivo, basisPoints)` de cada `revive`; `null` si ninguno. */
+  readonly reviveAmount: number | null
+}
 
 /** Lo que HU-20, HU-25 y el sorteo de dano produjeron para una habilidad. */
 export interface SkillOutcome extends BasicAttackOutcome {
@@ -295,6 +340,58 @@ export interface CreateBattleRoomInput {
   readonly reward: { readonly amount: number }
 }
 
+/**
+ * Identificacion de torneo persistida en la sala (Management#517, EN de
+ * `tournament-rooms`). Sirve DOS propositos a la vez:
+ *
+ *  1. IDEMPOTENCIA de creacion: `operationId` + `requestHash` permiten que
+ *     `CreateTournamentRoom` detecte un reintento con el MISMO cuerpo (misma
+ *     sala, sin crear una segunda) de uno con un cuerpo DISTINTO (409).
+ *  2. AISLAMIENTO del lobby publico: `BattleRoom.tournament !== null` es la
+ *     marca que `leave()` comprueba explicitamente (ver su guarda) porque el
+ *     estado `PREPARING` por si solo NO basta -- una sala de lobby normal SI
+ *     admite abandonar en `PREPARING`.
+ *
+ * `requestHash` es el resumen canonico del cuerpo HTTP original (mismo
+ * mecanismo que `MissionSimulationIntakeRepositoryPort`, HU-72): vive aqui y
+ * no en una coleccion aparte porque la propia sala ya es el documento que se
+ * guarda con bloqueo optimista, y un indice unico sobre
+ * `tournament.operationId` basta para la exclusion mutua en la insercion.
+ */
+export interface TournamentRoomMetadata {
+  readonly operationId: string
+  readonly tournamentId: string
+  readonly encounterId: string
+  readonly requestHash: string
+}
+
+/** Un jugador humano ya resuelto (Account + Player-Inventory) por `CreateTournamentRoom`. */
+export interface TournamentRosterMemberInput {
+  readonly playerId: string
+  readonly heroId: string | null
+  readonly heroLoadoutVersion: number | null
+  readonly displayName: string | null
+}
+
+/** Un equipo de la sala de torneo: `teamId` lo decide Tournament, no un enum fijo de Combat. */
+export interface TournamentTeamInput {
+  readonly teamId: string
+  readonly members: readonly TournamentRosterMemberInput[]
+}
+
+export interface CreateTournamentRoomInput {
+  readonly operationId: string
+  readonly tournamentId: string
+  readonly encounterId: string
+  readonly requestHash: string
+  /**
+   * Longitud fija 2, igual que `CreateBattleRoomInput.teamConfigs`: se recibe
+   * como arreglo (no tupla) porque procede de una peticion HTTP externa, y la
+   * longitud se valida en tiempo de ejecucion, no se asume del tipo.
+   */
+  readonly teams: readonly TournamentTeamInput[]
+}
+
 export interface BattleRoomSnapshot {
   readonly id: string
   readonly mode: BattleMode
@@ -315,6 +412,13 @@ export interface BattleRoomSnapshot {
    * si y solo si la sala esta `FINISHED` (invariante de la migracion `009`).
    */
   readonly result: BattleResult | null
+  /**
+   * Management#517: identificacion de torneo si la sala NACIO por la ruta
+   * interna `POST /internal/v1/combat/tournament-rooms`; `null` para
+   * cualquier sala del lobby publico (HU-14). Aditivo: un documento anterior
+   * a esta ampliacion no lo tiene y se restaura como `null`.
+   */
+  readonly tournament: TournamentRoomMetadata | null
 }
 
 /**
@@ -322,13 +426,16 @@ export interface BattleRoomSnapshot {
  * documentos y las instantaneas anteriores a la batalla sigan restaurandose
  * sin migracion de datos (ausente = sin batalla, sin eventos, sin comandos).
  * `result` es opcional por el mismo motivo: un documento anterior a HU-21 no lo
- * tiene y se restaura como `null`.
+ * tiene y se restaura como `null`. `tournament` es opcional por el MISMO
+ * criterio (Management#517): ausente = sala del lobby publico.
  */
 export type RestorableBattleRoomSnapshot = Omit<
   BattleRoomSnapshot,
-  'battle' | 'events' | 'handledCommands' | 'result'
+  'battle' | 'events' | 'handledCommands' | 'result' | 'tournament'
 > &
-  Partial<Pick<BattleRoomSnapshot, 'battle' | 'events' | 'handledCommands' | 'result'>>
+  Partial<
+    Pick<BattleRoomSnapshot, 'battle' | 'events' | 'handledCommands' | 'result' | 'tournament'>
+  >
 
 /** Estado de batalla que acompana a la sala; vacio hasta HU-17 `startBattle()`. */
 interface BattleExtras {
@@ -337,9 +444,23 @@ interface BattleExtras {
   readonly handledCommands: readonly HandledCommand[]
   /** HU-21: opcional en los constructores internos; ausente equivale a `null`. */
   readonly result?: BattleResult | null
+  /**
+   * Management#517: opcional en los constructores internos: ausente equivale
+   * a `null` (sala de lobby). Los metodos que mutan una sala YA creada deben
+   * preservarlo explicitamente (`tournament: this.tournament`) para que una
+   * sala de torneo conserve su identificacion durante toda la batalla -- ver
+   * el comentario de `TournamentRoomMetadata`.
+   */
+  readonly tournament?: TournamentRoomMetadata | null
 }
 
-const NO_BATTLE: BattleExtras = { battle: null, events: [], handledCommands: [], result: null }
+const NO_BATTLE: BattleExtras = {
+  battle: null,
+  events: [],
+  handledCommands: [],
+  result: null,
+  tournament: null,
+}
 
 /**
  * Causa con la que se finaliza una sala (HU-21, contrato §4). No es un estado:
@@ -399,6 +520,8 @@ export class BattleRoom {
   readonly handledCommands: readonly HandledCommand[]
   /** HU-21: resultado unico; `null` mientras la batalla no haya terminado. */
   readonly result: BattleResult | null
+  /** Management#517: `null` para toda sala del lobby publico (HU-14). */
+  readonly tournament: TournamentRoomMetadata | null
   private readonly _version: number
 
   private constructor(
@@ -424,6 +547,7 @@ export class BattleRoom {
     this.events = extras.events
     this.handledCommands = extras.handledCommands
     this.result = extras.result ?? null
+    this.tournament = extras.tournament ?? null
   }
 
   /**
@@ -508,6 +632,120 @@ export class BattleRoom {
   }
 
   /**
+   * Crea una sala de TORNEO (Management#517, EN de `tournament-rooms`): roster
+   * FIJO de 4 jugadores humanos (2 equipos de 2, nunca "hasta 4"), ya
+   * resueltos (displayName/heroId/heroLoadoutVersion) por `CreateTournamentRoom`
+   * contra los MISMOS puertos de Account/Player-Inventory que usa el flujo
+   * normal -- este metodo nunca llama a un puerto externo, igual que `create()`.
+   *
+   * DOS DIFERENCIAS DELIBERADAS frente a `create()`:
+   *
+   *  1. Nace DIRECTAMENTE en `PREPARING`, nunca en `WAITING_FOR_PLAYERS`: el
+   *     roster ya esta completo desde el origen (un torneo no tiene fase de
+   *     "esperar jugadores"), asi que la sala queda automaticamente FUERA de
+   *     `findWaitingForPlayers()` / el listado publico sin ningun filtro
+   *     adicional.
+   *  2. Lleva `tournament` (nunca `null`): ESE SOLO HECHO (1) no basta para
+   *     aislarla del lobby publico, porque `leave()` SI admite `PREPARING`
+   *     para una sala de lobby normal (abandonar libera un cupo y la sala
+   *     vuelve a `WAITING_FOR_PLAYERS`). Por eso `leave()` comprueba
+   *     `tournament !== null` explicitamente y rechaza sin importar el estado
+   *     (ver su guarda). `join()`/`cancel()` NO necesitan esa misma guarda:
+   *     su propia precondicion de estado (`WAITING_FOR_PLAYERS`) ya excluye
+   *     para siempre a una sala que nacio en `PREPARING`.
+   *
+   * `createdBy` es un identificador SINTETICO del servicio Tournament (nunca
+   * un `playerId` de jugador): la ruta publica `POST /rooms/:id/start` exige
+   * `requester === createdBy`, y un testimonio JWT de jugador jamas produce
+   * ese valor -- ningun jugador participante puede suplantar al creador.
+   *
+   * Sin apuesta (`reward.amount = 0`, ningun `stake`): un torneo no es una
+   * sala de lobby con premio configurable (RF-23 es una historia distinta).
+   */
+  static createTournamentRoom(
+    id: string,
+    createdBy: string,
+    input: CreateTournamentRoomInput,
+    at: Date,
+  ): BattleRoom {
+    const roomId = BattleRoomId.create(id)
+
+    if (createdBy.trim().length === 0) {
+      throw new DomainError('Una sala de torneo necesita un creador.')
+    }
+
+    if (input.teams.length !== 2) {
+      throw new InvalidTournamentRosterError('Una sala de torneo necesita exactamente 2 equipos.')
+    }
+
+    const teamInputA = input.teams[0]
+    const teamInputB = input.teams[1]
+
+    if (teamInputA === undefined || teamInputB === undefined) {
+      throw new InvalidTournamentRosterError('Una sala de torneo necesita exactamente 2 equipos.')
+    }
+
+    for (const teamInput of [teamInputA, teamInputB]) {
+      if (teamInput.teamId.trim().length === 0) {
+        throw new InvalidTournamentRosterError('Cada equipo de torneo necesita un identificador.')
+      }
+
+      if (teamInput.members.length !== 2) {
+        throw new InvalidTournamentRosterError(
+          `El equipo "${teamInput.teamId}" necesita exactamente 2 jugadores humanos (se recibieron ${String(teamInput.members.length)}).`,
+        )
+      }
+    }
+
+    if (teamInputA.teamId.trim() === teamInputB.teamId.trim()) {
+      throw new InvalidTournamentRosterError('Los dos equipos de torneo necesitan ids distintos.')
+    }
+
+    const toParticipants = (team: TournamentTeamInput): readonly ParticipantInput[] =>
+      team.members.map((member) => ({
+        kind: ParticipantKind.Human,
+        playerId: member.playerId,
+        heroId: member.heroId,
+        heroLoadoutVersion: member.heroLoadoutVersion,
+        displayName: member.displayName,
+      }))
+
+    const teamA = Team.create(teamInputA.teamId.trim(), 2, toParticipants(teamInputA), at)
+    const teamB = Team.create(teamInputB.teamId.trim(), 2, toParticipants(teamInputB), at)
+    const teams: readonly [Team, Team] = [teamA, teamB]
+
+    // Reutiliza EXACTAMENTE la misma comprobacion de composicion que `create()`
+    // (jugador humano duplicado entre equipos; PVP no admite AI): una sala de
+    // torneo es PVP por definicion, nunca se inventa una segunda regla.
+    BattleRoom.validateModeComposition(BattleMode.Pvp, teams)
+
+    const reward = RewardConfig.create(0)
+
+    return new BattleRoom(
+      roomId.value,
+      BattleMode.Pvp,
+      BattleRoomStatus.Preparing,
+      teams,
+      reward,
+      createdBy.trim(),
+      at,
+      0,
+      {
+        battle: null,
+        events: [],
+        handledCommands: [],
+        result: null,
+        tournament: {
+          operationId: input.operationId,
+          tournamentId: input.tournamentId,
+          encounterId: input.encounterId,
+          requestHash: input.requestHash,
+        },
+      },
+    )
+  }
+
+  /**
    * Reconstruye una sala desde persistencia. Solo comprobaciones
    * estructurales (`DomainError`): los datos ya pasaron las reglas de
    * negocio al escribirse.
@@ -573,7 +811,7 @@ export class BattleRoom {
       snapshot.createdBy.trim(),
       snapshot.createdAt,
       snapshot.version,
-      { battle, events, handledCommands, result },
+      { battle, events, handledCommands, result, tournament: snapshot.tournament ?? null },
     )
   }
 
@@ -745,6 +983,18 @@ export class BattleRoom {
    * completar el cupo total.
    */
   leave(playerId: string): BattleRoom {
+    // Management#517: una sala de torneo rechaza `leave()` SIN IMPORTAR SU
+    // ESTADO. `status !== WAITING_FOR_PLAYERS` (comprobacion de abajo) NO
+    // basta aqui: a diferencia de `join()`/`cancel()` (que exigen
+    // `WAITING_FOR_PLAYERS`, estado que una sala de torneo nunca alcanza),
+    // `leave()` SI admite `PREPARING` para una sala de lobby normal
+    // (abandonar libera un cupo y la sala vuelve a `WAITING_FOR_PLAYERS`) --
+    // y una sala de torneo nace PRECISAMENTE en `PREPARING`, con el roster ya
+    // completo. Ver `createTournamentRoom()`.
+    if (this.tournament !== null) {
+      throw new RoomNotLeavableError(this.id, this.status)
+    }
+
     // HU-17: con la batalla en curso la lista de participantes es definitiva
     // (RF-17): abandonar el lobby cambiaria el roster de una cola ya publicada.
     // HU-21: una sala FINISHED es terminal; tampoco admite `leave` (contrato §2).
@@ -827,6 +1077,7 @@ export class BattleRoom {
       events: this.events,
       handledCommands: this.handledCommands,
       result: this.result,
+      tournament: this.tournament,
     }
   }
 
@@ -979,6 +1230,7 @@ export class BattleRoom {
         events: this.events,
         handledCommands: this.handledCommands,
         result: this.result,
+        tournament: this.tournament,
       },
     )
   }
@@ -1047,7 +1299,7 @@ export class BattleRoom {
       this.createdBy,
       this.createdAt,
       this._version,
-      { battle, events: [event], handledCommands: [] },
+      { battle, events: [event], handledCommands: [], tournament: this.tournament },
     )
   }
 
@@ -1105,6 +1357,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
   }
@@ -1131,7 +1384,17 @@ export class BattleRoom {
       return replay
     }
 
-    const context = this.requireCombatContext(actorPlayerId, target)
+    const actor = this.requireHumanActorTurn(actorPlayerId)
+
+    return this.planBasicAttackForActor(actor, target)
+  }
+
+  /**
+   * Planificacion pura del ataque del actor vigente. La identidad humana se valida en
+   * `planBasicAttack`; las decisiones internas (HUMAN o AI) usan la misma autoridad por clave.
+   */
+  planBasicAttackForActor(actor: CombatantKey, target: CombatantKey): BasicAttackReadyPlan {
+    const context = this.requireCombatContext(actor, target)
 
     if (context.attackerProfile.attack === null) {
       throw new UnsupportedCombatProfileError('el heroe no tiene un valor de Ataque numerico.')
@@ -1170,7 +1433,21 @@ export class BattleRoom {
    * de curacion de HU-12 no se puede resolver sin esa informacion, y antes de
    * ella no hacia falta (todo objetivo era siempre un rival).
    */
-  private requireAttackerTurn(actorPlayerId: string): {
+  private requireHumanActorTurn(actorPlayerId: string): CombatantKey {
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const current = this.battle.currentEntry
+
+    if (current.kind !== ParticipantKind.Human || current.playerId !== actorPlayerId) {
+      throw new NotYourTurnError(this.id)
+    }
+
+    return { teamLabel: current.teamLabel, seat: current.seat }
+  }
+
+  private requireAttackerTurn(actorKey: CombatantKey): {
     readonly attackerEntry: TurnOrderEntry
     readonly attacker: Combatant
     readonly attackerProfile: CombatProfile
@@ -1181,7 +1458,7 @@ export class BattleRoom {
 
     const attackerEntry = this.battle.currentEntry
 
-    if (attackerEntry.kind !== ParticipantKind.Human || attackerEntry.playerId !== actorPlayerId) {
+    if (attackerEntry.teamLabel !== actorKey.teamLabel || attackerEntry.seat !== actorKey.seat) {
       throw new NotYourTurnError(this.id)
     }
 
@@ -1294,7 +1571,7 @@ export class BattleRoom {
    * poder variar la audiencia segun la habilidad (excepcion de curacion, HU-12).
    */
   private requireCombatContext(
-    actorPlayerId: string,
+    actor: CombatantKey,
     target: CombatantKey,
   ): {
     readonly attackerEntry: TurnOrderEntry
@@ -1305,7 +1582,7 @@ export class BattleRoom {
     readonly targetProfile: CombatProfile
     readonly targetHealth: number
   } {
-    const attackerContext = this.requireAttackerTurn(actorPlayerId)
+    const attackerContext = this.requireAttackerTurn(actor)
     const targetContext = this.requireTargetCombatant(
       attackerContext.attackerEntry,
       target,
@@ -1399,6 +1676,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
@@ -1447,7 +1725,18 @@ export class BattleRoom {
       return replay
     }
 
-    const { attackerEntry, attacker, attackerProfile } = this.requireAttackerTurn(actorPlayerId)
+    const actor = this.requireHumanActorTurn(actorPlayerId)
+
+    return this.planSkillForActor(actor, abilityId, target)
+  }
+
+  /** Planificacion pura de habilidad para el actor vigente, independiente de autenticacion. */
+  planSkillForActor(
+    actor: CombatantKey,
+    abilityId: string,
+    target?: CombatantKey,
+  ): SkillActionPlan {
+    const { attackerEntry, attacker, attackerProfile } = this.requireAttackerTurn(actor)
     const maxPower = attackerProfile.maxPower
 
     if (maxPower === undefined || attacker.currentPower === null || !attacker.hasSkillState) {
@@ -1474,6 +1763,10 @@ export class BattleRoom {
     // HU-19 v2: `HEAL` (Reanimacion, v1 sin cambios) y `HEALING` (contrato §1) son sanadores --
     // no tienen Ataque numerico y NO degradan con Poder insuficiente (excepcion de HU-12).
     if (support.kind === 'HEAL') {
+      if (target === undefined) {
+        throw new InvalidTargetError(this.id)
+      }
+
       const targetContext = this.requireTargetCombatant(attackerEntry, target, 'ALLY')
       const payment = spendPower(
         { heroId: memberKey(attackerEntry), current: currentPower, max: maxPower },
@@ -1498,7 +1791,15 @@ export class BattleRoom {
     }
 
     if (support.kind === 'HEALING') {
-      const recipients = this.resolveHealingRecipients(attackerEntry, target, support.audience)
+      if (target === undefined && support.audience === 'ALLY') {
+        throw new InvalidTargetError(this.id)
+      }
+
+      const recipients = this.resolveHealingRecipients(
+        attackerEntry,
+        target ?? attackerEntry,
+        support.audience,
+      )
       const payment = spendPower(
         { heroId: memberKey(attackerEntry), current: currentPower, max: maxPower },
         ability.powerCost,
@@ -1522,6 +1823,7 @@ export class BattleRoom {
 
       return {
         kind: 'healingSkill',
+        audience: support.audience,
         attackerEntry,
         attacker,
         attackerProfile,
@@ -1538,6 +1840,10 @@ export class BattleRoom {
     // y el Poder insuficiente DEGRADA a ataque basico (HU-11) en vez de rechazar.
     if (attackerProfile.attack === null) {
       throw new UnsupportedCombatProfileError('el heroe no tiene un valor de Ataque numerico.')
+    }
+
+    if (target === undefined) {
+      throw new InvalidTargetError(this.id)
     }
 
     const targetContext = this.requireTargetCombatant(attackerEntry, target, 'OPPONENT')
@@ -1601,6 +1907,114 @@ export class BattleRoom {
         ability.abilityId,
         attackerEntry,
       ),
+    }
+  }
+
+  /**
+   * Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): VALIDA el uso de la epica
+   * equipada como accion de turno, SIN sortear nada todavia. A diferencia de `planSkill`, no
+   * hay `abilityId` que el cliente elija: la UNICA epica ejecutable es la que esta congelada
+   * en `attackerProfile.epic` (nadie puede pedir ejecutar una distinta, nunca existio esa
+   * entrada). El costo de Poder de una epica es SIEMPRE 0 (Catalog): el pago nunca falla, pero
+   * se invoca igual (`spendPower`) por el mismo motivo que una habilidad -- un solo camino de
+   * pago, sin un segundo "no pagar nada" para la epica.
+   *
+   * `target` es OPCIONAL: solo se exige cuando `EpicSkillPolicy` determina que algun efecto
+   * necesita una audiencia distinta de `SELF` (`EpicEffectPlan.requiredAudience`).
+   */
+  planEpic(actorPlayerId: string, commandId: string, target?: CombatantKey): EpicPlan {
+    BattleRoom.assertValidCommandId(commandId)
+
+    const replay = this.replayOf(commandId)
+
+    if (replay !== null) {
+      return replay
+    }
+
+    const actor = this.requireHumanActorTurn(actorPlayerId)
+
+    return this.planEpicForActor(actor, target)
+  }
+
+  /** Planificacion pura de epica para el actor vigente, independiente de autenticacion. */
+  planEpicForActor(actor: CombatantKey, target?: CombatantKey): EpicReadyPlan {
+    const { attackerEntry, attacker, attackerProfile } = this.requireAttackerTurn(actor)
+    const epic = attackerProfile.epic
+
+    if (epic === undefined) {
+      throw new NoEpicEquippedError()
+    }
+
+    const maxPower = attackerProfile.maxPower
+
+    if (maxPower === undefined || attacker.currentPower === null || !attacker.hasSkillState) {
+      throw new SkillsNotAvailableError()
+    }
+
+    if (attacker.cooldownOf(epic.epicProductId) > 0) {
+      throw new EpicOnCooldownError()
+    }
+
+    const support = evaluateEpicEffects(epic.executableEffects, epic.cooldownTurns)
+
+    if (!support.supported) {
+      throw new UnsupportedEpicEffectError(support.reason)
+    }
+
+    const effectPlan = support.plan
+    const currentPower = attacker.currentPower
+    // Se paga con el MISMO `spendPower` de siempre. `epic.powerCost` es siempre 0 (Catalog,
+    // `CombatProfile.validateEpic`) -> modo `NONE` (un costo `FIXED` no admite 0,
+    // `HeroPowerPolicy` lo valida explicitamente); si algun dia Catalog publicara un costo
+    // real, este codigo lo cobraria igual que una habilidad, sin un segundo camino.
+    const payment = spendPower(
+      { heroId: memberKey(attackerEntry), current: currentPower, max: maxPower },
+      epic.powerCost === 0 ? { mode: 'NONE' } : { mode: 'FIXED', amount: epic.powerCost },
+    )
+
+    if (!payment.ok) {
+      // Inalcanzable mientras `epic.powerCost` sea 0 (`NONE` siempre es `payable: true`).
+      throw new DomainError('El Poder no alcanza para usar la epica equipada.')
+    }
+
+    let targetEntry: TurnOrderEntry | null = null
+    let targetCombatant: Combatant | null = null
+    let recipients: readonly HealingRecipient[] = []
+
+    if (effectPlan.requiredAudience === 'OPPONENT' || effectPlan.requiredAudience === 'ALLY') {
+      if (target === undefined) {
+        throw new EpicTargetRequiredError()
+      }
+
+      const targetContext = this.requireTargetCombatant(
+        attackerEntry,
+        target,
+        effectPlan.requiredAudience,
+      )
+      targetEntry = targetContext.targetEntry
+      targetCombatant = targetContext.target
+    } else if (effectPlan.requiredAudience === 'ALLIED_GROUP') {
+      // El `target` del comando NO es la fuente del alcance (mismo criterio que una sanacion de
+      // grupo, `resolveHealingRecipients`): sin uno explicito, se usa el propio actor -- siempre
+      // "existe en la batalla" (ya se comprobo en `requireAttackerTurn`).
+      recipients = this.resolveHealingRecipients(
+        attackerEntry,
+        target ?? attackerEntry,
+        'ALLIED_GROUP',
+      )
+    }
+
+    return {
+      kind: 'epic',
+      attackerEntry,
+      attacker,
+      epic,
+      effectPlan,
+      targetEntry,
+      target: targetCombatant,
+      recipients,
+      powerBefore: currentPower,
+      powerAfter: payment.state.current,
     }
   }
 
@@ -1823,6 +2237,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
@@ -1902,6 +2317,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
@@ -1982,6 +2398,7 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
@@ -2100,11 +2517,155 @@ export class BattleRoom {
         battle,
         events: [...this.events, event],
         handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
       },
     )
 
     // Curar nunca reduce la Vida de nadie: no puede eliminar a un equipo (mismo criterio que
     // `applyHealSkill`).
+    return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
+  }
+
+  /**
+   * Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): aplica la epica ya resuelta
+   * como UNA sola transicion del agregado -- Poder del actor + recarga (`cooldownTurns + 1`,
+   * mismo patron que una habilidad) + TODOS los efectos correspondientes (temporales,
+   * inmunidad, dano directo, sanacion instantanea, reanimacion) + evento + `commandId`
+   * procesado + turno avanzado, en una unica version nueva.
+   *
+   * Por construccion (`EpicSkillPolicy.evaluateEpicEffects`: una sola audiencia por epica), a
+   * lo sumo UNA de estas tres cosas muta la Vida de alguien en esta llamada: dano directo
+   * (OPPONENT), sanacion/reanimacion de un unico aliado (ALLY, las dos se suman si coinciden),
+   * o sanacion de grupo (ALLIED_GROUP). Los efectos temporales (bonos, inmunidad) se adjuntan
+   * DESPUES de `completeTurn`, mismo criterio que `applySkill`/`applyHealingSkill`.
+   */
+  applyEpic(plan: EpicReadyPlan, outcome: EpicOutcome, commandId: string, at: Date): BattleRoom {
+    BattleRoom.assertValidCommandId(commandId)
+
+    if (this.status !== BattleRoomStatus.InBattle || this.battle === null) {
+      throw new BattleNotInProgressError(this.id, this.status)
+    }
+
+    const completedPosition = this.battle.currentPosition
+    const actor = plan.attacker
+      .withPower(plan.powerAfter)
+      .withCooldown(plan.epic.epicProductId, plan.epic.cooldownTurns + 1)
+
+    let battle = this.battle.withCombatant(actor)
+    let targetHealth: { readonly before: number; readonly after: number } | undefined
+    let damagePayload:
+      { readonly calculatedDamage: number; readonly appliedDamage: number } | undefined
+    let healPayload: { readonly amount: number } | undefined
+    let affected: readonly CombatantKey[] | undefined
+
+    if (plan.recipients.length > 0 && outcome.healAmount !== null) {
+      const healed: {
+        readonly key: CombatantKey
+        readonly before: number
+        readonly after: number
+      }[] = []
+
+      for (const recipient of plan.recipients) {
+        const maxHealth = recipient.combatant.profile?.maxHealth ?? 0
+        const currentHealth = recipient.combatant.currentHealth ?? 0
+        const applied = applyHeal(currentHealth, maxHealth, outcome.healAmount)
+
+        battle = battle.withCombatant(recipient.combatant.withHealth(applied.healthAfter))
+        healed.push({
+          key: { teamLabel: recipient.entry.teamLabel, seat: recipient.entry.seat },
+          before: applied.healthBefore,
+          after: applied.healthAfter,
+        })
+      }
+
+      const primary = healed[0] as { readonly before: number; readonly after: number }
+      targetHealth = { before: primary.before, after: primary.after }
+      healPayload = { amount: outcome.healAmount }
+
+      if (healed.length > 1) {
+        affected = healed.map((entry) => entry.key)
+      }
+    } else if (plan.target !== null && plan.targetEntry !== null) {
+      const combinedHeal = (outcome.healAmount ?? 0) + (outcome.reviveAmount ?? 0)
+
+      if (outcome.damageAmount !== null) {
+        const applied = applyDamage(plan.target.currentHealth ?? 0, outcome.damageAmount)
+        const targetCombatant = plan.target
+          .withHealth(applied.healthAfter)
+          .withDamageTaken(applied.appliedDamage)
+
+        battle = battle.withCombatant(targetCombatant)
+        targetHealth = { before: applied.healthBefore, after: applied.healthAfter }
+        damagePayload = {
+          calculatedDamage: outcome.damageAmount,
+          appliedDamage: applied.appliedDamage,
+        }
+      } else if (combinedHeal > 0) {
+        const maxHealth = plan.target.profile?.maxHealth ?? 0
+        const currentHealth = plan.target.currentHealth ?? 0
+        const applied = applyHeal(currentHealth, maxHealth, combinedHeal)
+
+        battle = battle.withCombatant(plan.target.withHealth(applied.healthAfter))
+        targetHealth = { before: applied.healthBefore, after: applied.healthAfter }
+        healPayload = { amount: combinedHeal }
+      }
+    }
+
+    battle = battle.completeTurn(at)
+    // Los efectos temporales NUEVOS (bonos, inmunidad) se adjuntan DESPUES de `completeTurn`
+    // (mismo criterio que `applySkill`/`applyHealingSkill`): ninguno tira su primer
+    // decremento en esta misma transaccion.
+    const keys = [
+      plan.attackerEntry,
+      ...(plan.targetEntry === null ? [] : [plan.targetEntry]),
+      ...plan.recipients.map((recipient) => recipient.entry),
+    ]
+    battle = BattleRoom.withActiveEffectsAttached(battle, outcome.resolvedEffects, keys)
+
+    const seq = this.lastSeq + 1
+    const event: BattleEvent = {
+      seq,
+      type: BattleEventType.EpicUsed,
+      occurredAt: at,
+      payload: {
+        commandId,
+        completedPosition,
+        actor: { teamLabel: plan.attackerEntry.teamLabel, seat: plan.attackerEntry.seat },
+        ...(plan.targetEntry === null
+          ? {}
+          : { target: { teamLabel: plan.targetEntry.teamLabel, seat: plan.targetEntry.seat } }),
+        epic: { epicProductId: plan.epic.epicProductId, name: plan.epic.name },
+        power: { before: plan.powerBefore, after: plan.powerAfter },
+        cooldown: {
+          remainingTurns:
+            battle.combatantFor(plan.attackerEntry)?.cooldownOf(plan.epic.epicProductId) ?? 0,
+        },
+        appliedEffects: plan.epic.executableEffects.length,
+        ...(damagePayload === undefined ? {} : { damage: damagePayload }),
+        ...(healPayload === undefined ? {} : { heal: healPayload }),
+        ...(targetHealth === undefined ? {} : { targetHealth }),
+        ...(affected === undefined ? {} : { affected }),
+        battle: battle.toView(this.id),
+      },
+    }
+
+    const next = new BattleRoom(
+      this.id,
+      this.mode,
+      this.status,
+      this.teams,
+      this.reward,
+      this.createdBy,
+      this.createdAt,
+      this._version,
+      {
+        battle,
+        events: [...this.events, event],
+        handledCommands: [...this.handledCommands, { commandId, seq }],
+        tournament: this.tournament,
+      },
+    )
+
     return next.concludeIfEliminated(plan.attackerEntry.teamLabel, at)
   }
 
@@ -2171,6 +2732,7 @@ export class BattleRoom {
         events: [...this.events, event],
         handledCommands: this.handledCommands,
         result,
+        tournament: this.tournament,
       },
     )
   }
@@ -2298,6 +2860,7 @@ export class BattleRoom {
         events: [...this.events, event],
         // El vencimiento del turno NO consume comandos: no toca `handledCommands`.
         handledCommands: this.handledCommands,
+        tournament: this.tournament,
       },
     )
   }

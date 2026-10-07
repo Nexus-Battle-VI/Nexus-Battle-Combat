@@ -105,6 +105,9 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
       'adapters/inbound/ws/BattleRoomRealtimeGateway.ts',
       'adapters/outbound/http/InternalHttpClient.ts',
       'adapters/outbound/system/IntervalBattleDeadlineScheduler.ts',
+      // HU-30 (Task HU-30.2): mismo patron de barrido, para conciliar y
+      // liquidar los drops diferidos de Versus.
+      'adapters/outbound/system/IntervalBattleDropScheduler.ts',
       // HU-22 (Task HU-22.3): mismo patron de barrido que el planificador de
       // vencimientos, para el RewardWorkflow.
       'adapters/outbound/system/IntervalRewardWorkflowScheduler.ts',
@@ -117,6 +120,7 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
   it.each([
     ['application/use-cases/ExecuteBasicAttack.ts', 1],
     ['application/use-cases/UseSkill.ts', 1],
+    ['application/use-cases/UseEpic.ts', 1],
     ['application/services/BattleDeadlineSettler.ts', 1],
     ['application/use-cases/ProcessBattleDeadlines.ts', 0],
     ['application/services/BattleFinalizer.ts', 0],
@@ -143,8 +147,12 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
 
     expect(callers).toEqual([
       'adapters/inbound/ws/BasicAttackRealtimeHandler.ts',
+      'adapters/inbound/ws/EpicRealtimeHandler.ts',
       'adapters/inbound/ws/SkillRealtimeHandler.ts',
       'application/services/BattleDeadlineSettler.ts',
+      // HU-93.2: el orquestador de turno AI publica el resultado y, solo si la
+      // batalla terminó, cierra con `afterFinished`, igual que los handlers humanos.
+      'application/use-cases/ExecuteAiTurn.ts',
     ])
 
     for (const path of callers) {
@@ -161,6 +169,7 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
     for (const path of [
       'application/use-cases/ExecuteBasicAttack.ts',
       'application/use-cases/UseSkill.ts',
+      'application/use-cases/UseEpic.ts',
     ]) {
       expect(code(file(path))).not.toMatch(/afterFinished\(/)
     }
@@ -171,6 +180,7 @@ describe('HU-21 — el cliente no aporta el resultado y los adaptadores no acred
   it.each([
     'adapters/inbound/ws/BasicAttackRealtimeHandler.ts',
     'adapters/inbound/ws/SkillRealtimeHandler.ts',
+    'adapters/inbound/ws/EpicRealtimeHandler.ts',
   ])('%s no lee ganador, causa ni tiempos del mensaje', (path) => {
     const handler = code(file(path))
 
@@ -181,6 +191,7 @@ describe('HU-21 — el cliente no aporta el resultado y los adaptadores no acred
     for (const path of [
       'application/use-cases/ExecuteBasicAttack.ts',
       'application/use-cases/UseSkill.ts',
+      'application/use-cases/UseEpic.ts',
     ]) {
       const useCase = code(file(path))
 

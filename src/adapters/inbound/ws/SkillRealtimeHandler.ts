@@ -6,6 +6,7 @@ import {
 } from '../../../application/errors/ApplicationError'
 import type { UseSkill } from '../../../application/use-cases/UseSkill'
 import type { BattleFinalizer } from '../../../application/services/BattleFinalizer'
+import type { AiTurnTrigger } from '../../../application/use-cases/ExecuteAiTurn'
 import {
   ActorUnavailableError,
   BattleNotInProgressError,
@@ -125,6 +126,8 @@ export class SkillRealtimeHandler {
     private readonly logger: Logger,
     /** HU-21: efectos de la finalizacion, SIEMPRE despues de difundir. */
     private readonly finalizer: BattleFinalizer | null = null,
+    /** HU-93.2: dispara el turno AI tras una transicion humana valida (fail-open). */
+    private readonly aiTurnTrigger: AiTurnTrigger | null = null,
   ) {}
 
   async handle(
@@ -182,6 +185,8 @@ export class SkillRealtimeHandler {
 
       if (result.finished !== null) {
         this.finalizer?.afterFinished(result.finished)
+      } else {
+        void this.aiTurnTrigger?.afterTransition(command.roomId)
       }
     } catch (error: unknown) {
       this.reject(client, this.codeFor(error, command), command.commandId)

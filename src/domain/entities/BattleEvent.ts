@@ -2,6 +2,7 @@ import type { BattleResult } from './BattleResult'
 import type { BattleView } from './BattleState'
 import type { CombatantKey } from './Combatant'
 import type { CombatPowerCost } from './CombatProfile'
+import type { VersusDropDecision } from './VersusDrop'
 
 /**
  * Eventos de batalla con numero de secuencia (ADR-020, HU-17). `seq` es un
@@ -35,6 +36,14 @@ export const BattleEventType = {
    * efecto de HU-25 -- Agonia. Distinto de `skillUsed` porque no hay `resolution` que reportar.
    */
   DirectDamageSkillUsed: 'directDamageSkillUsed',
+  /**
+   * Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): la epica equipada
+   * ejecutada como accion de turno. Costo de Poder 0, recarga 2 turnos propios
+   * (ambos los deriva Catalog, nunca Combat). Distinto de `skillUsed`: no hay
+   * `abilityId` del cliente (la epica congelada en el perfil es la UNICA que se
+   * puede usar) y puede aplicar varios efectos heterogeneos a la vez.
+   */
+  EpicUsed: 'epicUsed',
 } as const
 
 export type BattleEventType = (typeof BattleEventType)[keyof typeof BattleEventType]
@@ -116,6 +125,8 @@ export interface BasicAttackResolvedPayload {
   readonly target: CombatantKey
   readonly resolution: BasicAttackResolution
   readonly targetHealth: { readonly before: number; readonly after: number }
+  /** HU-30: decisión autoritativa y durable, interna; no forma parte del wire público. */
+  readonly versusDrop?: VersusDropDecision
   /** HU-19 (opcional): por que este ataque basico sustituyo a una habilidad. */
   readonly degradedFrom?: DegradedFrom
   /** Vista POSTERIOR: Vida actualizada y turno ya avanzado. */
@@ -147,6 +158,7 @@ export interface SkillUsedPayload {
   readonly bonus: { readonly attack: number; readonly damage: number | null }
   readonly resolution: BasicAttackResolution
   readonly targetHealth: { readonly before: number; readonly after: number }
+  readonly versusDrop?: VersusDropDecision
   /** Vista POSTERIOR: Vida, Poder, recargas y turno ya avanzado. */
   readonly battle: BattleView
 }
@@ -206,6 +218,33 @@ export interface DirectDamageSkillUsedPayload {
   /** `floor(dano base x porcentaje / 100)` no aplica: el dano se materializa tal cual. */
   readonly damage: { readonly calculatedDamage: number; readonly appliedDamage: number }
   readonly targetHealth: { readonly before: number; readonly after: number }
+  readonly versusDrop?: VersusDropDecision
+  readonly battle: BattleView
+}
+
+/**
+ * Resultado de usar la epica equipada (correccion HU-19/HU-31). `target` esta
+ * AUSENTE cuando ningun efecto necesito un objetivo (todos SELF/ALLIED_GROUP);
+ * `targetHealth` esta AUSENTE cuando ningun efecto cambio la Vida de nadie (solo
+ * aplico bonos temporales). `appliedEffects` cuenta cuantos efectos se aplicaron,
+ * sin detallar su contenido (igual lista blanca que el resto del contrato).
+ */
+export interface EpicUsedPayload {
+  readonly commandId: string
+  readonly completedPosition: number
+  readonly actor: CombatantKey
+  readonly target?: CombatantKey
+  readonly epic: { readonly epicProductId: string; readonly name: string }
+  readonly power: { readonly before: number; readonly after: number }
+  readonly cooldown: { readonly remainingTurns: number }
+  readonly appliedEffects: number
+  readonly damage?: { readonly calculatedDamage: number; readonly appliedDamage: number }
+  readonly heal?: { readonly amount: number }
+  readonly targetHealth?: { readonly before: number; readonly after: number }
+  /** Presente UNICAMENTE cuando el efecto fue de grupo (`ALLIED_GROUP`). */
+  readonly affected?: readonly CombatantKey[]
+  /** HU-30: decision autoritativa y durable, interna; no forma parte del wire publico. */
+  readonly versusDrop?: VersusDropDecision
   readonly battle: BattleView
 }
 
@@ -222,6 +261,7 @@ export interface BattleEvent {
     | DirectDamageSkillUsedPayload
     | TurnTimedOutPayload
     | BattleFinishedPayload
+    | EpicUsedPayload
 }
 
 /** Comando ya procesado (ADR-020: repetir un `commandId` no ejecuta dos veces). */

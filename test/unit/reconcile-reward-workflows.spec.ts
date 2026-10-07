@@ -5,7 +5,7 @@ import { CreateRewardWorkflows } from '../../src/application/use-cases/CreateRew
 import { ReconcileRewardWorkflows } from '../../src/application/use-cases/ReconcileRewardWorkflows'
 import { battleWithCombat } from '../fixtures/basic-attack'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
-import { silentLogger } from '../fixtures/battle'
+import { finishedRoom as finishedRosterRoom, silentLogger } from '../fixtures/battle'
 
 const AT = new Date('2026-09-21T10:05:00.000Z')
 
@@ -204,5 +204,32 @@ describe('ReconcileRewardWorkflows (HU-22): cierra el hueco entre sala FINISHED 
     ])
     expect(commitments.releases.map(({ playerId }) => playerId)).toEqual(['b1'])
     expect(await workflows.findByBattleAndPlayer(room.id, 'a1')).not.toBeNull()
+  })
+
+  /**
+   * HU-93.3: reconciliar tras un reinicio no puede inventarle a la IA ni un
+   * workflow ni una liberacion que nunca tuvo. Cubre especificamente el
+   * camino de reinicio (distinto del `publish()` en vivo, que ya prueba
+   * `create-reward-workflows.spec.ts`).
+   */
+  it('HU-93.3: una sala PVE solo reconcilia al humano; la IA no recibe workflow ni liberacion', async () => {
+    const rooms = new InMemoryBattleRoomRepository()
+    const room = finishedRosterRoom({ aiInTeamB: 1, winnerTeamLabel: 'A' })
+    await rooms.save(room, 0)
+
+    const workflows = new InMemoryRewardWorkflowRepository()
+    const commitments = recordingBattleCommitments()
+    const reconcile = new ReconcileRewardWorkflows(
+      rooms,
+      new CreateRewardWorkflows(workflows),
+      commitments,
+      silentLogger,
+    )
+
+    const roomsChecked = await reconcile.execute(new Date('2026-09-21T00:00:00.000Z'))
+
+    expect(roomsChecked).toBe(1)
+    expect(await workflows.findByBattleAndPlayer(room.id, 'a1')).not.toBeNull()
+    expect(commitments.releases).toEqual([{ roomId: room.id, playerId: 'a1' }])
   })
 })

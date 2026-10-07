@@ -84,7 +84,7 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
     expect(code).not.toMatch(/nextIndex|RandomIndex/)
   })
 
-  it('el ticket del WebSocket es el UNICO uso de node:crypto de HU-17 y no decide nada del juego', () => {
+  it('solo los adaptadores técnicos aprobados usan node:crypto y ninguno decide el juego', () => {
     const users = allTypeScriptFiles(ROOT)
       .filter((file) =>
         /node:crypto|from 'crypto'/.test(withoutComments(readFileSync(file, 'utf8'))),
@@ -93,14 +93,15 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
       .sort()
 
     // Ademas de la firma HMAC (contrato interno) y el UUID de las salas (existentes antes de HU-17).
-    // `inventory-grant-operation-id.ts` (HU-22): SHA-1 DETERMINISTA de un id logico para
-    // derivar un UUID v5 (idempotencia hacia Player-Inventory). Es un hash, no una fuente
-    // de azar: no sortea ni decide nada del juego.
+    // `inventory-grant-operation-id.ts` (HU-22) y `Sha256CommandIdFingerprint.ts`
+    // (EN-035.4) derivan ids tecnicos deterministas. Son hashes, no fuentes de azar:
+    // no sortean ni deciden nada del juego.
     expect(users).toEqual([
       'adapters/outbound/http/inventory-grant-operation-id.ts',
       'adapters/outbound/identity/internal-signature.ts',
       'adapters/outbound/system/CryptoRealtimeTicketCodec.ts',
       'adapters/outbound/system/HmacMissionSeedFactory.ts',
+      'adapters/outbound/system/Sha256CommandIdFingerprint.ts',
       'adapters/outbound/system/UuidGenerator.ts',
     ])
   })

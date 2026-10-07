@@ -69,8 +69,11 @@ export interface AppConfig {
   readonly accountServiceBaseUrl: string | null
   /** URL base de Player-Inventory para el contrato interno `equipped-hero` (HU-15.2, DP-4). Sin barra final. */
   readonly playerInventoryServiceBaseUrl: string | null
+  /** URL base de Catalog para candidatos gameplay de bots (HU-93.1A). Sin barra final. */
+  readonly catalogServiceBaseUrl: string | null
   /** URL base de Wallet para el contrato interno `battle-reward` (HU-22, `hu-22-reward-contract-v1` §3). Sin barra final. */
   readonly walletServiceBaseUrl: string | null
+  readonly notificationsServiceBaseUrl?: string | null
   /** Tiempo de espera de las llamadas HTTP internas salientes (Account, Player-Inventory, Wallet). */
   readonly internalHttpTimeoutMs: number
   readonly chat: ChatConfig
@@ -81,6 +84,17 @@ export interface AppConfig {
    * ver `docs/hu-17-turn-order.md`.
    */
   readonly randomSeed: number
+  /**
+   * EN-036.2 (#566, correccion de alcance sobre PR#81): activa `LiveMctsTeacherLabeler`
+   * (teacher label MCTS en vivo sobre cada decision HUMAN/AI real). Deshabilitado
+   * por defecto: cada decision etiquetada corre una busqueda MCTS completa
+   * (`rollouts: 128`) en segundo plano, con costo real de CPU que compite por
+   * el MISMO event loop que el resto de Combat -- un despliegue que lo
+   * necesite para alimentar el dataset de #566 lo activa explicitamente,
+   * igual criterio que `PERSISTENCE_DRIVER`/`AUTH_MODE` (nunca un riesgo
+   * nuevo por defecto silencioso).
+   */
+  readonly mctsLiveTeacherLabelingEnabled: boolean
 }
 
 /** Semilla de referencia validada por HU-26 (Management #362-#364). */
@@ -219,7 +233,16 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   const internalServiceAuthSecret = readString(env, 'INTERNAL_SERVICE_AUTH_SECRET', '')
   const accountServiceBaseUrl = readString(env, 'ACCOUNT_SERVICE_BASE_URL', '')
   const playerInventoryServiceBaseUrl = readString(env, 'PLAYER_INVENTORY_SERVICE_BASE_URL', '')
+  // El compose local histórico todavía no declara esta variable. El hostname
+  // estable de la red Compose permite probar HU-93.1 sin editar Infrastructure;
+  // producción, en cambio, debe declararla de forma explícita.
+  const catalogServiceBaseUrl = readString(
+    env,
+    'CATALOG_SERVICE_BASE_URL',
+    nodeEnv === 'development' ? 'http://catalog:3003' : '',
+  )
   const walletServiceBaseUrl = readString(env, 'WALLET_SERVICE_BASE_URL', '')
+  const notificationsServiceBaseUrl = readString(env, 'NOTIFICATIONS_SERVICE_BASE_URL', '')
 
   // Igual que AUTH_MODE/PERSISTENCE_DRIVER: en produccion, HU-15.2 no puede
   // arrancar sin poder resolver displayName/heroId -- lo contrario dejaria
@@ -227,11 +250,13 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   // que el arranque lo advirtiera.
   if (
     nodeEnv === 'production' &&
-    (accountServiceBaseUrl === '' || playerInventoryServiceBaseUrl === '')
+    (accountServiceBaseUrl === '' ||
+      playerInventoryServiceBaseUrl === '' ||
+      catalogServiceBaseUrl === '')
   ) {
     throw new ConfigurationError(
-      'ACCOUNT_SERVICE_BASE_URL y PLAYER_INVENTORY_SERVICE_BASE_URL son obligatorios con ' +
-        'NODE_ENV=production (HU-15.2, RF-15: resolucion de displayName/heroId al unirse).',
+      'ACCOUNT_SERVICE_BASE_URL, PLAYER_INVENTORY_SERVICE_BASE_URL y ' +
+        'CATALOG_SERVICE_BASE_URL son obligatorios con NODE_ENV=production.',
     )
   }
 
@@ -265,7 +290,10 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     accountServiceBaseUrl: accountServiceBaseUrl === '' ? null : accountServiceBaseUrl,
     playerInventoryServiceBaseUrl:
       playerInventoryServiceBaseUrl === '' ? null : playerInventoryServiceBaseUrl,
+    catalogServiceBaseUrl: catalogServiceBaseUrl === '' ? null : catalogServiceBaseUrl,
     walletServiceBaseUrl: walletServiceBaseUrl === '' ? null : walletServiceBaseUrl,
+    notificationsServiceBaseUrl:
+      notificationsServiceBaseUrl === '' ? null : notificationsServiceBaseUrl,
     internalHttpTimeoutMs: readInteger(env, 'INTERNAL_HTTP_TIMEOUT_MS', 3_000, 100, 30_000),
     chat: {
       // El tope 2000 acota lo que el validador del motor admite (8000 unidades,
@@ -277,5 +305,6 @@ export const loadConfig = (env: RawEnv): AppConfig => {
       historyLimit: readInteger(env, 'CHAT_HISTORY_LIMIT', 50, 1, 200),
     },
     randomSeed: readInteger(env, 'COMBAT_RANDOM_SEED', DEFAULT_RANDOM_SEED, 0, 4_294_967_295),
+    mctsLiveTeacherLabelingEnabled: readBoolean(env, 'MCTS_LIVE_TEACHER_LABELING_ENABLED', false),
   }
 }

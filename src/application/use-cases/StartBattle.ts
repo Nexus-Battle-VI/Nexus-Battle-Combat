@@ -3,6 +3,7 @@ import { Combatant } from '../../domain/entities/Combatant'
 import { createCombatProfile } from '../../domain/entities/CombatProfile'
 import { ParticipantKind } from '../../domain/entities/Participant'
 import type { RosterMember, TeamRoster } from '../../domain/entities/TurnOrder'
+import { memberKey } from '../../domain/entities/TurnOrder'
 import { InvalidCombatProfileError, RoomNotStartableError } from '../../domain/errors/BattleErrors'
 import {
   assessPrecombatEligibility,
@@ -14,6 +15,7 @@ import {
   generateTurnOrder,
   type BoundedRandom,
 } from '../../domain/policies/TurnOrderPolicy'
+import { BattleMode } from '../../domain/value-objects/BattleMode'
 import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import { commitmentExpiresAt } from '../../domain/policies/BattleTimingPolicy'
 import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
@@ -28,6 +30,7 @@ import type { BattleEventPublisherPort } from '../ports/BattleEventPublisherPort
 import type { BattleConnectionsPort } from '../ports/BattleConnectionsPort'
 import type { BattleDeadlineBookPort } from '../ports/BattleDeadlineBookPort'
 import type { BattleHeroCommitmentPort } from '../ports/BattleHeroCommitmentPort'
+import type { BattleDropInventoryPort } from '../ports/BattleDropInventoryPort'
 import type { BattlePresencePort } from '../ports/BattlePresencePort'
 import type { BattleRoomRepositoryPort } from '../ports/BattleRoomRepositoryPort'
 import type { ClockPort } from '../ports/ClockPort'
@@ -36,6 +39,10 @@ import type {
   PlayerInventoryEquippedHeroPort,
 } from '../ports/PlayerInventoryEquippedHeroPort'
 import { combatProfileFrom } from '../services/CombatProfileFactory'
+import type {
+  BotParticipantFactory,
+  PreparedBotParticipant,
+} from '../services/BotParticipantFactory'
 
 /** El heroe equipado ya no es el que se aprobo al unirse (HU-16, TOCTOU). */
 export const HERO_CHANGED_SINCE_JOIN = 'HERO_CHANGED_SINCE_JOIN'
@@ -99,6 +106,10 @@ export class StartBattle {
     private readonly presence: BattlePresencePort | null = null,
     private readonly book: BattleDeadlineBookPort | null = null,
     private readonly connections: BattleConnectionsPort | null = null,
+    /** HU-30: congela las identidades/tasas mientras el compromiso HU-29 está activo. */
+    private readonly dropInventory: BattleDropInventoryPort | null = null,
+    /** HU-93.1: prepara únicamente participantes AI de JcE; Tournament queda fuera de alcance. */
+    private readonly bots: Pick<BotParticipantFactory, 'create'> | null = null,
   ) {}
 
   async execute(roomId: string, requesterId: string): Promise<BattleRoomDto> {
@@ -120,6 +131,50 @@ export class StartBattle {
       throw new RoomAccessForbiddenError(roomId)
     }
 
+    return this.start(room, requesterId)
+  }
+
+  /**
+   * Arranca una sala YA AUTORIZADA por el llamante (Management#517, uso
+   * interno de `StartTournamentRoom`): SIN las dos comprobaciones de
+   * identidad de `execute()` ("¿es participante?", "¿es el creador?"),
+   * pensadas para un testimonio JWT de jugador sobre la ruta publica. Un
+   * caller interno ya se autorizo con HMAC en su propia ruta
+   * `@InternalOnly()` antes de llegar aqui -- y el `createdBy` de una sala
+   * de torneo es un identificador SINTETICO del servicio Tournament que
+   * NUNCA es participante por diseño (Management#517), asi que exigirle
+   * pasar `isParticipant()` seria imposible por construccion, no una
+   * proteccion real.
+   *
+   * Comparte TODO lo demas con `execute()`, letra por letra: idempotencia
+   * sobre `IN_BATTLE`, composicion balanceada, revalidacion precombate,
+   * compromiso de heroes, aleatoriedad centralizada, cola de turnos y
+   * difusion (ver `start()` mas abajo, factorizado de `execute()` sin
+   * cambiar su comportamiento).
+   */
+  async startRoom(roomId: string): Promise<BattleRoomDto> {
+    const room = await this.rooms.findById(roomId)
+
+    if (room === null) {
+      throw new RoomNotFoundError(roomId)
+    }
+
+    if (room.status === BattleRoomStatus.InBattle) {
+      return toBattleRoomDto(room, null)
+    }
+
+    return this.start(room, null)
+  }
+
+  /**
+   * Cuerpo compartido de `execute()`/`startRoom()`, a partir de donde ambos
+   * YA decidieron que `room` esta autorizada para arrancar. `viewerId`
+   * controla UNICAMENTE que apuesta propia expone el DTO (HU-23, §10) -- no
+   * es una comprobacion de identidad, esa ya ocurrio en el llamante.
+   */
+  private async start(room: BattleRoom, viewerId: string | null): Promise<BattleRoomDto> {
+    const roomId = room.id
+
     if (room.status !== BattleRoomStatus.Preparing) {
       throw new RoomNotStartableError(room.id, room.status)
     }
@@ -138,6 +193,21 @@ export class StartBattle {
     // con el loadout modificable, que es justo lo que la HU prohibe. En este
     // orden, el peor caso es un compromiso sin batalla, que caduca solo.
     await this.commitBattleHeroes(room, heroes, startedAt)
+    // HU-30/HU-93.3: el snapshot de drop solo le sirve a PVP (Versus) -- el
+    // unico lector es `PersistVersusDropDecision`, que ya se limita a PVP. En
+    // PVE nadie lo lee nunca: capturarlo igual solo agrega una llamada a
+    // Player-Inventory que puede bloquear el inicio de una justa Humano vs IA
+    // sin ningun beneficio.
+    if (this.dropInventory !== null && room.mode === BattleMode.Pvp) {
+      for (const [playerId, hero] of heroes) {
+        await this.dropInventory.capture({
+          battleId: room.id,
+          playerId,
+          heroId: hero.heroId,
+          loadoutVersion: hero.loadoutVersion,
+        })
+      }
+    }
 
     let saved
     try {
@@ -147,7 +217,7 @@ export class StartBattle {
         const current = await this.rooms.findById(roomId)
 
         if (current?.status === BattleRoomStatus.InBattle) {
-          return toBattleRoomDto(current, requesterId)
+          return toBattleRoomDto(current, viewerId)
         }
       }
 
@@ -157,7 +227,7 @@ export class StartBattle {
     this.publish(saved.id, saved.events)
     this.seedPresence(saved)
 
-    return toBattleRoomDto(saved, requesterId)
+    return toBattleRoomDto(saved, viewerId)
   }
 
   /**
@@ -199,7 +269,8 @@ export class StartBattle {
    * Revalida a cada HUMAN y devuelve la lista definitiva con el subtipo de
    * presentacion y el SNAPSHOT DE COMBATE congelado (HU-18): con la misma respuesta de
    * Player-Inventory que ya se pidio para revalidar HU-16, sin una segunda llamada.
-   * Los `AI` no tienen perfil (no hay fuente autoritativa de sus estadisticas).
+   * Los `AI` de JcE reciben un perfil efimero desde Catalog. Tournament conserva
+   * su flujo anterior: integrar bots de bracket requiere una Task propia.
    */
   private async revalidate(room: BattleRoom): Promise<{
     readonly rosters: readonly [TeamRoster, TeamRoster]
@@ -223,6 +294,24 @@ export class StartBattle {
         heroes.set(playerId, await this.equippedHeroes.getEquippedHero(playerId))
       }),
     )
+
+    const preparedBots = new Map<string, PreparedBotParticipant>()
+
+    if (room.tournament === null) {
+      const aiMembers = rosters.flatMap((roster) =>
+        roster.members.filter((member) => member.kind === ParticipantKind.Ai),
+      )
+
+      if (aiMembers.length > 0 && this.bots === null) {
+        throw new UpstreamServiceError('catalog', 'no_configurado')
+      }
+
+      // Secuencial: todos consumen el mismo stream BATTLE_RANDOM en orden de roster.
+      for (const member of aiMembers) {
+        const bots = this.bots
+        if (bots !== null) preparedBots.set(memberKey(member), await bots.create())
+      }
+    }
 
     const enriched = new Map<string, RosterMember>()
     const profiles = new Map<string, Combatant>()
@@ -280,13 +369,28 @@ export class StartBattle {
         heroId: member.heroId ?? hero.heroId,
         heroSubtype: hero.subtype,
       })
-      profiles.set(playerId, this.freeze(member, hero))
+      profiles.set(memberKey(member), this.freeze(member, hero))
+    }
+
+    for (const roster of rosters) {
+      for (const member of roster.members) {
+        if (member.kind !== ParticipantKind.Ai) continue
+        const bot = preparedBots.get(memberKey(member))
+        if (bot === undefined) continue
+
+        enriched.set(memberKey(member), {
+          ...member,
+          heroId: bot.heroId,
+          heroSubtype: bot.heroSubtype,
+        })
+        profiles.set(memberKey(member), Combatant.start(member, bot.profile))
+      }
     }
 
     const withSubtype = (roster: TeamRoster): TeamRoster => ({
       label: roster.label,
-      members: roster.members.map((member) =>
-        member.playerId === null ? member : (enriched.get(member.playerId) ?? member),
+      members: roster.members.map(
+        (member) => enriched.get(member.playerId ?? memberKey(member)) ?? member,
       ),
     })
 
@@ -296,11 +400,7 @@ export class StartBattle {
     ]
     const combatants = finalRosters
       .flatMap((roster) => roster.members)
-      .map((member) =>
-        member.playerId === null
-          ? Combatant.start(member, null)
-          : (profiles.get(member.playerId) ?? Combatant.start(member, null)),
-      )
+      .map((member) => profiles.get(memberKey(member)) ?? Combatant.start(member, null))
 
     return {
       rosters: finalRosters,

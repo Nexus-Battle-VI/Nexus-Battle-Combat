@@ -80,6 +80,42 @@ export interface CombatAbility {
   readonly effects: readonly CombatAbilityEffect[]
 }
 
+/**
+ * Epica equipada CONGELADA (HU-31, contrato `hu-31-equipped-epic-v1` §8; correccion
+ * HU-19/HU-31 tras GAP-HU31-CATALOG-MULTI-EFFECT).
+ *
+ * Espejo local de `EquippedHeroEpic` (`PlayerInventoryEquippedHeroPort.ts`), ya
+ * resuelta por Player-Inventory (`applyEpicEffects`, sin reimplementar el resolver
+ * aqui). `baseEffect`/`specificEffects`/`applied.*` son objetos OPACOS (igual
+ * criterio que antes de la correccion: solo para presentacion/trazabilidad, nunca
+ * interpretados) -- el resultado ya resuelto segun el subtipo real del heroe en el
+ * momento del inicio de la batalla, que no cambia aunque la epica equipada cambie
+ * despues (HU-29/HU-31 §9: cambios posteriores a este congelamiento no afectan la
+ * batalla ya iniciada).
+ *
+ * `executableEffects` SI esta tipado/validado (`CombatAbilityEffect`, reutilizando
+ * `validateAbilityEffect`): es `applied.baseApplied` (si no es `null`) + todos los
+ * `applied.additionalApplied`, en ese orden -- lo que `UseEpic`/`EpicSkillPolicy`
+ * ejecutan de verdad. `powerCost`/`cooldownTurns` son los mismos valores que Catalog
+ * deriva para TODA EPICA (0 y 2): viajan para que Combat los use sin inventar una
+ * constante propia, mismo criterio que `powerCost`/`chargeTurns` en `CombatAbility`.
+ */
+export interface CombatEpic {
+  readonly epicProductId: string
+  readonly epicReference: string
+  readonly name: string
+  readonly compatibleHeroSubtype: string
+  readonly powerCost: number
+  readonly cooldownTurns: number
+  readonly baseEffect: Readonly<Record<string, unknown>> | null
+  readonly specificEffects: readonly Readonly<Record<string, unknown>>[]
+  readonly applied: {
+    readonly baseApplied: Readonly<Record<string, unknown>> | null
+    readonly additionalApplied: readonly Readonly<Record<string, unknown>>[]
+  }
+  readonly executableEffects: readonly CombatAbilityEffect[]
+}
+
 export interface CombatProfile {
   readonly heroId: string
   /** Codigo de subtipo (`hero-subtypes-v1`), tal como lo publica Player-Inventory. */
@@ -104,6 +140,8 @@ export interface CombatProfile {
   readonly level?: number
   /** HU-19: habilidades del heroe, en el orden de Catalog. Ausente en un perfil anterior a HU-19. */
   readonly abilities?: readonly CombatAbility[]
+  /** HU-31: epica equipada congelada. Ausente cuando el heroe no tiene ninguna. */
+  readonly epic?: CombatEpic
 }
 
 /** Un identificador de habilidad es una clave de documento: sin puntos, `$` ni separadores. */
@@ -251,6 +289,105 @@ const freezeAbilities = (abilities: readonly CombatAbility[]): readonly CombatAb
   return Object.freeze(frozen)
 }
 
+const requireOpaqueRecord = (value: unknown, field: string): Readonly<Record<string, unknown>> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new InvalidCombatProfileError(`"${field}" debe ser un objeto.`)
+  }
+
+  return value as Readonly<Record<string, unknown>>
+}
+
+const requireNullableOpaqueRecord = (
+  value: unknown,
+  field: string,
+): Readonly<Record<string, unknown>> | null =>
+  value === null ? null : requireOpaqueRecord(value, field)
+
+const requireOpaqueRecordList = (
+  value: unknown,
+  field: string,
+  minimum: number,
+): readonly Readonly<Record<string, unknown>>[] => {
+  if (!Array.isArray(value)) {
+    throw new InvalidCombatProfileError(`"${field}" debe ser una lista.`)
+  }
+
+  if (value.length < minimum) {
+    throw new InvalidCombatProfileError(
+      `"${field}" debe tener al menos ${String(minimum)} elemento(s).`,
+    )
+  }
+
+  return value.map((item, index) => requireOpaqueRecord(item, `${field}[${String(index)}]`))
+}
+
+/**
+ * Valida y congela la epica equipada (HU-31; correccion HU-19/HU-31 tras
+ * GAP-HU31-CATALOG-MULTI-EFFECT). `baseEffect`/`specificEffects`/`applied.*`
+ * son objetos OPACOS: solo se comprueba su forma minima (objeto, lista, o
+ * `null` donde el contrato lo permite), nunca su contenido.
+ *
+ * `executableEffects` SI se valida con `validateAbilityEffect` (reutilizada
+ * tal cual): es la lista que `UseEpic`/`EpicSkillPolicy` ejecutan de verdad,
+ * mismo vocabulario kind/target/statistic/operation/magnitude que una
+ * habilidad.
+ */
+const validateEpic = (epic: CombatEpic): CombatEpic => {
+  requireNonEmptyText(epic.epicProductId, 'epic.epicProductId')
+  requireNonEmptyText(epic.epicReference, 'epic.epicReference')
+  requireNonEmptyText(epic.name, 'epic.name')
+  requireNonEmptyText(epic.compatibleHeroSubtype, 'epic.compatibleHeroSubtype')
+  requireNonNegativeInteger(epic.powerCost, 'epic.powerCost')
+
+  if (
+    !Number.isInteger(epic.cooldownTurns) ||
+    epic.cooldownTurns < 1 ||
+    epic.cooldownTurns > MAX_CHARGE_TURNS
+  ) {
+    throw new InvalidCombatProfileError(
+      `"epic.cooldownTurns" debe ser un entero entre 1 y ${String(MAX_CHARGE_TURNS)}.`,
+    )
+  }
+
+  const baseEffect = requireNullableOpaqueRecord(epic.baseEffect, 'epic.baseEffect')
+  const specificEffects = requireOpaqueRecordList(epic.specificEffects, 'epic.specificEffects', 1)
+  const applied = requireOpaqueRecord(epic.applied, 'epic.applied')
+  const baseApplied = requireNullableOpaqueRecord(applied.baseApplied, 'epic.applied.baseApplied')
+  const additionalApplied = requireOpaqueRecordList(
+    applied.additionalApplied,
+    'epic.applied.additionalApplied',
+    0,
+  )
+
+  const rawExecutableEffects: unknown = epic.executableEffects
+
+  if (!Array.isArray(rawExecutableEffects)) {
+    throw new InvalidCombatProfileError('"epic.executableEffects" debe ser una lista.')
+  }
+
+  const executableEffects = (rawExecutableEffects as readonly CombatAbilityEffect[]).map(
+    (effect, index) => validateAbilityEffect(effect, `epic.executableEffects[${String(index)}]`),
+  )
+
+  return Object.freeze({
+    epicProductId: epic.epicProductId,
+    epicReference: epic.epicReference,
+    name: epic.name,
+    compatibleHeroSubtype: epic.compatibleHeroSubtype,
+    powerCost: epic.powerCost,
+    cooldownTurns: epic.cooldownTurns,
+    baseEffect: baseEffect === null ? null : Object.freeze({ ...baseEffect }),
+    specificEffects: Object.freeze(specificEffects.map((effect) => Object.freeze({ ...effect }))),
+    applied: Object.freeze({
+      baseApplied: baseApplied === null ? null : Object.freeze({ ...baseApplied }),
+      additionalApplied: Object.freeze(
+        additionalApplied.map((effect) => Object.freeze({ ...effect })),
+      ),
+    }),
+    executableEffects: Object.freeze(executableEffects),
+  })
+}
+
 /**
  * Valida y congela un perfil. Los enteros son los que Player-Inventory garantiza
  * para las estadisticas efectivas; un valor distinto es un dato upstream mal
@@ -264,7 +401,7 @@ export const createCombatProfile = (profile: CombatProfile): CombatProfile => {
     requireNonNegativeInteger(profile.attack, 'attack')
   }
 
-  const { maxPower, abilities, level, ...rest } = profile
+  const { maxPower, abilities, level, epic, ...rest } = profile
 
   if (maxPower !== undefined) {
     requireNonNegativeInteger(maxPower, 'maxPower')
@@ -285,5 +422,6 @@ export const createCombatProfile = (profile: CombatProfile): CombatProfile => {
     ...(maxPower === undefined ? {} : { maxPower }),
     ...(level === undefined ? {} : { level }),
     ...(abilities === undefined ? {} : { abilities: freezeAbilities(abilities) }),
+    ...(epic === undefined ? {} : { epic: validateEpic(epic) }),
   })
 }

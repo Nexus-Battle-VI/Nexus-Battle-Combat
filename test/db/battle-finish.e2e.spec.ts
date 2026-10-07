@@ -58,10 +58,13 @@ import {
 } from '../../src/adapters/outbound/persistence/migrations/009-battle-rooms-finish'
 import { up as upSkillEffectsMigration } from '../../src/adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
 import { up as upHeroLevelMigration } from '../../src/adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
+import { up as upTournamentMigration } from '../../src/adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
 import { indexForEffect, indexForFace } from '../fixtures/basic-attack'
 import { MutableClock } from '../fixtures/chat-harness'
 import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
+import { BATTLE_DROP_INVENTORY } from '../../src/application/ports/BattleDropInventoryPort'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
 import { equippedHeroFixture, shieldStrikeAbility } from '../fixtures/equipped-hero'
 
 /**
@@ -238,6 +241,8 @@ describe('HU-21 de extremo a extremo (protocolo): finalizacion entre dos cliente
       // propia prueba unitaria).
       .overrideProvider(BATTLE_HERO_COMMITMENTS)
       .useValue(recordingBattleCommitments())
+      .overrideProvider(BATTLE_DROP_INVENTORY)
+      .useValue(recordingBattleDropInventory())
       .overrideProvider(BATTLE_RANDOM_SEQUENCE)
       .useValue(sequence)
       .overrideProvider(CLOCK)
@@ -1218,6 +1223,7 @@ describe('HU-21 de extremo a extremo (protocolo): finalizacion entre dos cliente
         await upFinishMigration(db)
         await upSkillEffectsMigration(db)
         await upHeroLevelMigration(db)
+        await upTournamentMigration(db)
       }
 
       await expect(

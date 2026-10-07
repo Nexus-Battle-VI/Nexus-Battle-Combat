@@ -107,6 +107,58 @@ export interface EquippedHero {
   readonly loadoutVersion: number
   /** Instante ISO-8601 en que el jugador preparo el heroe. */
   readonly selectedAt: string
+  /**
+   * AMPLIACION ADITIVA (HU-31, contrato `hu-31-equipped-epic-v1` §5/§8).
+   *
+   * Epica equipada del heroe, YA RESUELTA por Player-Inventory (misma
+   * `applyEpicEffects` de siempre, invocada una vez por peticion, igual
+   * patron que `abilities`). Combat la RECIBE y la congela en el snapshot
+   * inicial de batalla (`CombatProfile.epic`); no la vuelve a resolver, no
+   * la ejecuta como accion de turno (eso sigue bloqueado, ver
+   * `docs/hu-19-skills.md`) y no la trata como candidata de drop PvP
+   * (HU-30: ese canal es `battle-drops/snapshots`, uno completamente
+   * distinto que nunca lee este campo).
+   *
+   * AUSENTE (no `null`) cuando el heroe no tiene epica equipada -- mismo
+   * criterio de ausencia explicita que el resto de este contrato.
+   */
+  readonly epic?: EquippedHeroEpic
+}
+
+/**
+ * Epica equipada, ya resuelta (HU-31; correccion HU-19/HU-31 tras
+ * GAP-HU31-CATALOG-MULTI-EFFECT). Lista blanca: ningun campo adicional de
+ * Catalog cruza esta frontera.
+ *
+ * `baseEffect`/`specificEffects` son la definicion cruda (para que una vista
+ * publica pueda mostrar "que hace" incluso sin coincidencia de subtipo);
+ * `applied.*` es el resultado YA resuelto por `applyEpicEffects` con el
+ * subtype real del heroe -- `baseApplied` siempre que la definicion lo
+ * declare (o `null` si es "No aplica"), `additionalApplied` SOLO si el
+ * subtype coincidio (lista: puede traer mas de un efecto simultaneo).
+ *
+ * `executableEffects` es NUEVO: `applied.baseApplied` (si no `null`) + todos
+ * los `applied.additionalApplied`, parseados con el MISMO `parseAbilityEffect`
+ * que ya valida los efectos de habilidades -- mismo vocabulario
+ * kind/target/statistic/operation/magnitude. Es lo que `UseEpic` ejecuta de
+ * verdad; `baseEffect`/`specificEffects`/`applied.*` siguen siendo opacos
+ * para presentacion/trazabilidad. `powerCost`/`cooldownTurns` son los mismos
+ * valores que Catalog deriva para TODA EPICA (0 y 2).
+ */
+export interface EquippedHeroEpic {
+  readonly epicProductId: string
+  readonly epicReference: string
+  readonly name: string
+  readonly compatibleHeroSubtype: string
+  readonly powerCost: number
+  readonly cooldownTurns: number
+  readonly baseEffect: Readonly<Record<string, unknown>> | null
+  readonly specificEffects: readonly Readonly<Record<string, unknown>>[]
+  readonly applied: {
+    readonly baseApplied: Readonly<Record<string, unknown>> | null
+    readonly additionalApplied: readonly Readonly<Record<string, unknown>>[]
+  }
+  readonly executableEffects: readonly EquippedHeroAbilityEffect[]
 }
 
 /** Costo de Poder de una habilidad tal como lo publica Catalog v1 (Tabla 7). */

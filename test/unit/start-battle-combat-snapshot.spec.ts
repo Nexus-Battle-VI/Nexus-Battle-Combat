@@ -3,11 +3,13 @@ import { InMemoryBattleRoomRepository } from '../../src/adapters/outbound/persis
 import { UpstreamServiceError } from '../../src/application/errors/UpstreamErrors'
 import type { EquippedHero } from '../../src/application/ports/PlayerInventoryEquippedHeroPort'
 import { combatProfileFrom } from '../../src/application/services/CombatProfileFactory'
+import { BotParticipantFactory } from '../../src/application/services/BotParticipantFactory'
 import { ExecuteBasicAttack } from '../../src/application/use-cases/ExecuteBasicAttack'
 import { StartBattle } from '../../src/application/use-cases/StartBattle'
 import { RandomEffectType } from '../../src/domain/random-effects/RandomEffectType'
-import { equippedHeroFixture } from '../fixtures/equipped-hero'
+import { equippedHeroFixture, golpeDeDefensaEpic } from '../fixtures/equipped-hero'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { botCatalogCandidates } from '../fixtures/combat-bot-candidates'
 import {
   ROOM_ID,
   clock,
@@ -48,13 +50,24 @@ const start = async (
 
   await repo.save(preparingRoom(options), 0)
 
+  const random = scriptedRandom(
+    (options.aiInTeamA ?? 0) + (options.aiInTeamB ?? 0) > 0 ? [0, 7999, 0] : [0],
+  )
   const useCase = new StartBattle(
     repo,
     clock,
     heroes,
-    scriptedRandom([0]),
+    random,
     recordingPublisher(),
     recordingBattleCommitments(),
+    null,
+    null,
+    null,
+    null,
+    new BotParticipantFactory(
+      { listBotCandidates: () => Promise.resolve(botCatalogCandidates()) },
+      random,
+    ),
   )
   const dto = await useCase.execute(ROOM_ID, 'a1')
 
@@ -200,7 +213,7 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
     expect(profile.damage).not.toBe(source.effectiveStats.damage)
   })
 
-  it('un participante AI queda sin perfil (no hay fuente autoritativa): Vida null, y no se inventan valores', async () => {
+  it('un participante AI recibe perfil autoritativo de Catalog, sin consultar Player-Inventory', async () => {
     const { dto, heroes } = await start(
       { mode: 'PVE', teamSizes: [1, 1], aiInTeamB: 1 },
       heroesPort({}, (playerId) => hero(playerId)),
@@ -211,13 +224,16 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
       seat: 0,
       health: { current: 44, max: 44 },
     })
-    // Un `AI` no tiene perfil: ni Vida, ni Poder, ni habilidades (no se inventan valores).
-    expect(dto.battle?.combatants[1]).toEqual({
+    expect(dto.battle?.combatants[1]).toMatchObject({
       teamLabel: 'B',
       seat: 0,
-      health: null,
-      power: null,
-      skills: [],
+      health: { current: 40, max: 40 },
+      power: { current: 10, max: 10 },
+      skills: [
+        { abilityId: '20000000-0000-4000-8000-000000000001' },
+        { abilityId: '20000000-0000-4000-8000-000000000003' },
+        { abilityId: '20000000-0000-4000-8000-000000000004' },
+      ],
     })
     expect(heroes.calls).toEqual(['a1'])
   })
@@ -268,5 +284,110 @@ describe('StartBattle — snapshot de combate (HU-18)', () => {
     const payload = room?.events[0]?.payload as unknown as { battle: { combatants: unknown[] } }
 
     expect(payload.battle.combatants).toHaveLength(2)
+  })
+})
+
+describe('StartBattle — epica equipada congelada en el snapshot (HU-31, contrato hu-31-equipped-epic-v1)', () => {
+  it('T-C-01/T-C-02: subtipo coincidente -> el snapshot congela base y especifico ya resueltos', async () => {
+    const { repo } = await start(
+      {},
+      heroesPort({}, (playerId) => hero(playerId, { epic: golpeDeDefensaEpic })),
+    )
+    const profile = (await repo.findById(ROOM_ID))?.battle?.combatantFor({
+      teamLabel: 'A',
+      seat: 0,
+    })?.profile
+
+    expect(profile?.epic?.applied.baseApplied).not.toBeNull()
+    expect(profile?.epic?.applied.additionalApplied.length).toBeGreaterThan(0)
+  })
+
+  it('T-C-03: subtipo NO coincidente -> el snapshot congela solo el efecto base', async () => {
+    const { repo } = await start(
+      {},
+      heroesPort({}, (playerId) =>
+        hero(playerId, {
+          subtype: 'GUERRERO_TANQUE',
+          epic: {
+            ...golpeDeDefensaEpic,
+            applied: { baseApplied: golpeDeDefensaEpic.baseEffect, additionalApplied: [] },
+          },
+        }),
+      ),
+    )
+    const profile = (await repo.findById(ROOM_ID))?.battle?.combatantFor({
+      teamLabel: 'A',
+      seat: 0,
+    })?.profile
+
+    expect(profile?.epic?.applied.baseApplied).not.toBeNull()
+    expect(profile?.epic?.applied.additionalApplied).toEqual([])
+  })
+
+  it('T-C-04: batalla sin epica equipada -> comportamiento anterior intacto, sin la clave epic', async () => {
+    const { repo } = await start()
+    const profile = (await repo.findById(ROOM_ID))?.battle?.combatantFor({
+      teamLabel: 'A',
+      seat: 0,
+    })?.profile
+
+    expect('epic' in (profile ?? {})).toBe(false)
+  })
+
+  it('T-C-04 bis: la epica se CONGELA -- Player-Inventory no se vuelve a consultar tras iniciar, aunque el heroe tenga epica', async () => {
+    const heroes = heroesPort({}, (playerId) => hero(playerId, { epic: golpeDeDefensaEpic }))
+    const { repo } = await start({}, heroes)
+    const callsAfterStart = heroes.calls.length
+
+    // Leer la sala de nuevo, mas tarde, no debe disparar una segunda consulta:
+    // el perfil con la epica ya esta congelado en el documento persistido.
+    const room = await repo.findById(ROOM_ID)
+    const profile = room?.battle?.combatantFor({ teamLabel: 'A', seat: 0 })?.profile
+
+    expect(heroes.calls).toHaveLength(callsAfterStart)
+    expect(profile?.epic?.epicReference).toBe(golpeDeDefensaEpic.epicReference)
+  })
+
+  it('T-C-05/T-C-06: team battle -- cada participante conserva su propia epica, incluso con la misma definicion', async () => {
+    const epicoA = golpeDeDefensaEpic
+    const epicoB = {
+      ...golpeDeDefensaEpic,
+      applied: { baseApplied: golpeDeDefensaEpic.baseEffect, additionalApplied: [] },
+    }
+    const heroes = heroesPort(
+      {
+        a1: hero('a1', { epic: epicoA }),
+        a2: hero('a2', {}),
+        b1: hero('b1', { subtype: 'GUERRERO_TANQUE', epic: epicoB }),
+        b2: hero('b2', { epic: epicoA }),
+      },
+      (playerId) => hero(playerId),
+    )
+    const repo = new InMemoryBattleRoomRepository()
+    await repo.save(preparingRoom({ teamSizes: [2, 2] }), 0)
+    const useCase = new StartBattle(
+      repo,
+      clock,
+      heroes,
+      // 4 participantes: el barajado Fisher-Yates consume exactamente 3 selecciones.
+      scriptedRandom([0, 0, 0]),
+      recordingPublisher(),
+      recordingBattleCommitments(),
+    )
+    await useCase.execute(ROOM_ID, 'a1')
+    const room = await repo.findById(ROOM_ID)
+
+    const a1Profile = room?.battle?.combatantFor({ teamLabel: 'A', seat: 0 })?.profile
+    const a2Profile = room?.battle?.combatantFor({ teamLabel: 'A', seat: 1 })?.profile
+    const b1Profile = room?.battle?.combatantFor({ teamLabel: 'B', seat: 0 })?.profile
+    const b2Profile = room?.battle?.combatantFor({ teamLabel: 'B', seat: 1 })?.profile
+
+    expect(a1Profile?.epic?.applied.additionalApplied.length).toBeGreaterThan(0)
+    expect('epic' in (a2Profile ?? {})).toBe(false)
+    expect(b1Profile?.epic?.applied.additionalApplied).toEqual([])
+    expect(b2Profile?.epic?.applied.additionalApplied.length).toBeGreaterThan(0)
+    // Misma definicion de epica (A1 y B2), estados independientes por participante.
+    expect(a1Profile?.epic).not.toBe(b2Profile?.epic)
+    expect(a1Profile?.epic).toEqual(b2Profile?.epic)
   })
 })

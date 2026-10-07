@@ -8,9 +8,11 @@ import { MyBattleRoomsController } from '../../adapters/inbound/http/my-battle-r
 import { RewardStatusController } from '../../adapters/inbound/http/reward-status.controller'
 import { ExperienceRollsController } from '../../adapters/inbound/http/experience-rolls.controller'
 import { MissionSimulationsController } from '../../adapters/inbound/http/mission-simulations.controller'
+import { TournamentRoomController } from '../../adapters/inbound/http/tournament-room.controller'
 import { HealthController } from '../../adapters/inbound/http/health.controller'
 import { READINESS_CHECKS, VERSION_REPORT } from '../../adapters/inbound/http/tokens.health'
 import {
+  AI_TURN_TRIGGER,
   BATTLE_RANDOM,
   BATTLE_RANDOM_SEQUENCE,
   BATTLE_DEADLINE_SCHEDULER_OPTIONS,
@@ -21,8 +23,11 @@ import {
   CONSUME_REALTIME_TICKET,
   CREATE_BATTLE_ROOM,
   CREATE_REWARD_WORKFLOWS,
+  DECISION_POLICY_SELECTOR,
+  EXECUTE_AI_TURN,
   EXECUTE_BASIC_ATTACK,
   USE_SKILL,
+  USE_EPIC,
   GET_BATTLE_ROOM,
   GET_REWARD_STATUS,
   ISSUE_REALTIME_TICKET,
@@ -51,6 +56,9 @@ import {
   STAKE_SCHEDULER_OPTIONS,
   STAKE_SETTLER,
   START_BATTLE,
+  CREATE_TOURNAMENT_ROOM,
+  START_TOURNAMENT_ROOM,
+  GET_TOURNAMENT_ROOM_RECORD,
 } from '../../adapters/inbound/http/tokens'
 import { AnonymousIdentityGuard } from '../../adapters/inbound/http/auth/anonymous.guard'
 import { InternalServiceGuard } from '../../adapters/inbound/http/auth/internal-service.guard'
@@ -58,13 +66,32 @@ import { JwtAuthGuard } from '../../adapters/inbound/http/auth/jwt-auth.guard'
 import { RolesGuard } from '../../adapters/inbound/http/auth/roles.guard'
 import { BasicAttackRealtimeHandler } from '../../adapters/inbound/ws/BasicAttackRealtimeHandler'
 import { SkillRealtimeHandler } from '../../adapters/inbound/ws/SkillRealtimeHandler'
+import { EpicRealtimeHandler } from '../../adapters/inbound/ws/EpicRealtimeHandler'
 import { BattleRoomRealtimeGateway } from '../../adapters/inbound/ws/BattleRoomRealtimeGateway'
 import { ChannelLock } from '../../adapters/inbound/ws/ChannelLock'
 import { ChatRealtimeHandler } from '../../adapters/inbound/ws/ChatRealtimeHandler'
 import { CognitoTokenVerifier } from '../../adapters/outbound/identity/CognitoTokenVerifier'
 import { AccountHttpClient } from '../../adapters/outbound/http/AccountHttpClient'
 import { PlayerInventoryHttpClient } from '../../adapters/outbound/http/PlayerInventoryHttpClient'
+import { CatalogBotCandidatesHttpClient } from '../../adapters/outbound/http/CatalogBotCandidatesHttpClient'
 import { PlayerInventoryBattleCommitmentHttpClient } from '../../adapters/outbound/http/PlayerInventoryBattleCommitmentHttpClient'
+import { PlayerInventoryBattleDropHttpClient } from '../../adapters/outbound/http/PlayerInventoryBattleDropHttpClient'
+import { NotificationsBattleDropHttpClient } from '../../adapters/outbound/http/NotificationsBattleDropHttpClient'
+import {
+  BATTLE_DROP_INVENTORY,
+  type BattleDropInventoryPort,
+} from '../../application/ports/BattleDropInventoryPort'
+import {
+  BATTLE_DROP_NOTIFIER,
+  type BattleDropNotificationPort,
+} from '../../application/ports/BattleDropNotificationPort'
+import {
+  BATTLE_DROP_WORKFLOWS,
+  type BattleDropWorkflowRepositoryPort,
+} from '../../application/ports/BattleDropWorkflowRepositoryPort'
+import { InMemoryBattleDropWorkflowRepository } from '../../adapters/outbound/persistence/InMemoryBattleDropWorkflowRepository'
+import { MongoBattleDropWorkflowRepository } from '../../adapters/outbound/persistence/MongoBattleDropWorkflowRepository'
+import { IntervalBattleDropScheduler } from '../../adapters/outbound/system/IntervalBattleDropScheduler'
 import { PlayerInventoryGrantHttpClient } from '../../adapters/outbound/http/PlayerInventoryGrantHttpClient'
 import { WalletHttpClient } from '../../adapters/outbound/http/WalletHttpClient'
 import { WalletStakeHttpClient } from '../../adapters/outbound/http/WalletStakeHttpClient'
@@ -73,11 +100,15 @@ import { InMemoryChatMessageRepository } from '../../adapters/outbound/persisten
 import { InMemoryRewardWorkflowRepository } from '../../adapters/outbound/persistence/InMemoryRewardWorkflowRepository'
 import { InMemoryExperienceRollRepository } from '../../adapters/outbound/persistence/InMemoryExperienceRollRepository'
 import { InMemoryMissionSimulationIntakeRepository } from '../../adapters/outbound/persistence/InMemoryMissionSimulationIntakeRepository'
+import { InMemoryCombatDecisionTelemetryRepository } from '../../adapters/outbound/persistence/InMemoryCombatDecisionTelemetryRepository'
+import { InMemoryMctsTeacherLabelRepository } from '../../adapters/outbound/persistence/InMemoryMctsTeacherLabelRepository'
 import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/MongoBattleRoomRepository'
 import { MongoChatMessageRepository } from '../../adapters/outbound/persistence/MongoChatMessageRepository'
 import { MongoRewardWorkflowRepository } from '../../adapters/outbound/persistence/MongoRewardWorkflowRepository'
 import { MongoExperienceRollRepository } from '../../adapters/outbound/persistence/MongoExperienceRollRepository'
 import { MongoMissionSimulationIntakeRepository } from '../../adapters/outbound/persistence/MongoMissionSimulationIntakeRepository'
+import { MongoCombatDecisionTelemetryRepository } from '../../adapters/outbound/persistence/MongoCombatDecisionTelemetryRepository'
+import { MongoMctsTeacherLabelRepository } from '../../adapters/outbound/persistence/MongoMctsTeacherLabelRepository'
 import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
@@ -97,6 +128,7 @@ import {
 } from '../../adapters/outbound/system/IntervalStakeScheduler'
 import { RewardWorkflowResultPublisher } from '../../adapters/outbound/system/RewardWorkflowResultPublisher'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
+import { InMemoryMctsSimulationAdapter } from '../../adapters/outbound/system/InMemoryMctsSimulationAdapter'
 import { SystemClock } from '../../adapters/outbound/system/SystemClock'
 import { UuidGenerator } from '../../adapters/outbound/system/UuidGenerator'
 import {
@@ -141,6 +173,10 @@ import {
   PLAYER_INVENTORY_EQUIPPED_HERO,
   type PlayerInventoryEquippedHeroPort,
 } from '../../application/ports/PlayerInventoryEquippedHeroPort'
+import {
+  BOT_COMBAT_CATALOG,
+  type BotCombatCatalogPort,
+} from '../../application/ports/BotCombatCatalogPort'
 import type { RewardCreditPort } from '../../application/ports/RewardCreditPort'
 import type { RewardGrantPort } from '../../application/ports/RewardGrantPort'
 import type { RewardWorkflowRepositoryPort } from '../../application/ports/RewardWorkflowRepositoryPort'
@@ -152,6 +188,14 @@ import {
   MISSION_SIMULATION_INTAKE_REPOSITORY,
   type MissionSimulationIntakeRepositoryPort,
 } from '../../application/ports/MissionSimulationIntakeRepositoryPort'
+import {
+  COMBAT_DECISION_TELEMETRY_REPOSITORY,
+  type CombatDecisionTelemetryRepositoryPort,
+} from '../../application/ports/CombatDecisionTelemetryRepositoryPort'
+import {
+  MCTS_TEACHER_LABEL_REPOSITORY,
+  type MctsTeacherLabelRepositoryPort,
+} from '../../application/ports/MctsTeacherLabelRepositoryPort'
 import { WALLET_STAKE_PORT, type WalletStakePort } from '../../application/ports/WalletStakePort'
 import {
   RANDOM_SEQUENCE_FACTORY,
@@ -176,6 +220,12 @@ import {
 import { createBoundedRandom } from '../../application/services/BoundedRandom'
 import { BattleDeadlineSettler } from '../../application/services/BattleDeadlineSettler'
 import { BattleFinalizer } from '../../application/services/BattleFinalizer'
+import { CombatDecisionRecorder } from '../../application/services/CombatDecisionRecorder'
+import { LiveMctsTeacherLabeler } from '../../application/services/LiveMctsTeacherLabeler'
+import { MctsSearch } from '../../application/services/MctsSearch'
+import { MctsTeacher } from '../../application/services/MctsTeacher'
+import { PersistVersusDropDecision } from '../../application/services/PersistVersusDropDecision'
+import { BotParticipantFactory } from '../../application/services/BotParticipantFactory'
 import { StakeReleaser } from '../../application/services/StakeReleaser'
 import { StakeReserver } from '../../application/services/StakeReserver'
 import { StakeSettler } from '../../application/services/StakeSettler'
@@ -190,12 +240,17 @@ import { GetRewardStatus } from '../../application/use-cases/GetRewardStatus'
 import { ResolveExperienceRolls } from '../../application/use-cases/ResolveExperienceRolls'
 import { AcceptMissionSimulationRequest } from '../../application/use-cases/AcceptMissionSimulationRequest'
 import { RunMissionSimulation } from '../../application/use-cases/RunMissionSimulation'
+import { Sha256CommandIdFingerprint } from '../../adapters/outbound/system/Sha256CommandIdFingerprint'
 import { EstimateMissionOutcome } from '../../application/use-cases/EstimateMissionOutcome'
+import { RuleBasedPolicy } from '../../application/policies/RuleBasedPolicy'
+import { DecisionPolicySelector } from '../../application/services/DecisionPolicySelector'
+import { ExecuteAiTurn, AiTurnTrigger } from '../../application/use-cases/ExecuteAiTurn'
 import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
 import { RecoverBattleDeadlines } from '../../application/use-cases/RecoverBattleDeadlines'
 import { UseSkill } from '../../application/use-cases/UseSkill'
+import { UseEpic } from '../../application/use-cases/UseEpic'
 import { GetBattleRoom } from '../../application/use-cases/GetBattleRoom'
 import { ResumeBattle } from '../../application/use-cases/ResumeBattle'
 import { StartBattle } from '../../application/use-cases/StartBattle'
@@ -211,6 +266,9 @@ import { JoinBattleRoom } from '../../application/use-cases/JoinBattleRoom'
 import { LeaveBattleRoom } from '../../application/use-cases/LeaveBattleRoom'
 import { ListAvailableBattleRooms } from '../../application/use-cases/ListAvailableBattleRooms'
 import { ListMyActiveBattleRooms } from '../../application/use-cases/ListMyActiveBattleRooms'
+import { CreateTournamentRoom } from '../../application/use-cases/CreateTournamentRoom'
+import { StartTournamentRoom } from '../../application/use-cases/StartTournamentRoom'
+import { GetTournamentRoomRecord } from '../../application/use-cases/GetTournamentRoomRecord'
 import { ReadChatHistory } from '../../application/use-cases/ReadChatHistory'
 import { SendChatMessage } from '../../application/use-cases/SendChatMessage'
 import { ChatRateLimiter } from '../../domain/policies/ChatRateLimiter'
@@ -235,7 +293,7 @@ export const DATABASE_LIFECYCLE = Symbol('DatabaseLifecycle')
  * de arquitectura, no un ajuste de configuracion: por eso vive en codigo, donde
  * cambiarla exige un Pull Request revisado.
  */
-export const INTERNAL_CALLERS: readonly string[] = ['missions']
+export const INTERNAL_CALLERS: readonly string[] = ['missions', 'tournament']
 
 /**
  * Identidad de Combat al llamar a las rutas `@InternalOnly()` de OTROS
@@ -262,6 +320,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     MyBattleRoomsController,
     ExperienceRollsController,
     MissionSimulationsController,
+    TournamentRoomController,
   ],
   providers: [
     {
@@ -461,6 +520,31 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       },
       inject: [APP_CONFIG, CLOCK, LOGGER],
     },
+    {
+      provide: BOT_COMBAT_CATALOG,
+      useFactory: (config: AppConfig, clock: ClockPort, logger: Logger): BotCombatCatalogPort => {
+        if (config.internalServiceAuthSecret === null || config.catalogServiceBaseUrl === null) {
+          logger.warn('catalog_bot_client_sin_configurar', {
+            detail: 'CATALOG_SERVICE_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET no configurados.',
+          })
+
+          return {
+            listBotCandidates: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('catalog', 'no_configurado')),
+          }
+        }
+
+        return new CatalogBotCandidatesHttpClient({
+          baseUrl: config.catalogServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
     // HU-14: salas de batalla. `PERSISTENCE_DRIVER=memory` respalda pruebas
     // de integracion sin motor real, igual que el resto de repositorios del
     // proyecto cuando adoptan ese patron.
@@ -471,6 +555,69 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       inject: [DATABASE],
     },
     {
+      provide: COMBAT_DECISION_TELEMETRY_REPOSITORY,
+      useFactory: (db: Db | null): CombatDecisionTelemetryRepositoryPort =>
+        db === null
+          ? new InMemoryCombatDecisionTelemetryRepository()
+          : new MongoCombatDecisionTelemetryRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: CombatDecisionRecorder,
+      useFactory: (
+        repository: CombatDecisionTelemetryRepositoryPort,
+        clock: ClockPort,
+        logger: Logger,
+      ): CombatDecisionRecorder =>
+        new CombatDecisionRecorder(repository, clock, logger, new Sha256CommandIdFingerprint()),
+      inject: [COMBAT_DECISION_TELEMETRY_REPOSITORY, CLOCK, LOGGER],
+    },
+    // EN-036.2 (#566, correccion de alcance sobre PR#81): persistencia append-only
+    // del teacher label MCTS en vivo. Misma coleccion/base propia de Combat que
+    // `combat-decision-events`, nunca otra base ni otro servicio.
+    {
+      provide: MCTS_TEACHER_LABEL_REPOSITORY,
+      useFactory: (db: Db | null): MctsTeacherLabelRepositoryPort =>
+        db === null
+          ? new InMemoryMctsTeacherLabelRepository()
+          : new MongoMctsTeacherLabelRepository(db),
+      inject: [DATABASE],
+    },
+    // EN-036.1 (#565): el teacher MCTS nunca comparte el RNG productivo. Reutiliza
+    // el MISMO `RANDOM_SEQUENCE_FACTORY` sin estado (crea una secuencia aislada
+    // por rollout, ver `MctsSearch`), nunca `BATTLE_RANDOM_SEQUENCE` (el cursor
+    // continuo de proceso de HU-17/HU-24).
+    {
+      provide: MctsSearch,
+      useFactory: (factory: RandomSequenceFactoryPort, clock: ClockPort): MctsSearch =>
+        new MctsSearch(new InMemoryMctsSimulationAdapter(clock), factory),
+      inject: [RANDOM_SEQUENCE_FACTORY, CLOCK],
+    },
+    {
+      provide: MctsTeacher,
+      useFactory: (search: MctsSearch): MctsTeacher => new MctsTeacher(search),
+      inject: [MctsSearch],
+    },
+    // EN-036.2 (#566, correccion de alcance sobre PR#81): fail-open (§15) y
+    // nunca esperado en el camino de respuesta -- ver `LiveMctsTeacherLabeler`.
+    // `null` mientras `MCTS_LIVE_TEACHER_LABELING_ENABLED` no este activo
+    // (por defecto, ver `env.ts`): los 4 casos de uso ya tratan `null` como
+    // "desactivado" via `?.`, igual que `decisionRecorder`.
+    {
+      provide: LiveMctsTeacherLabeler,
+      useFactory: (
+        config: AppConfig,
+        teacher: MctsTeacher,
+        repository: MctsTeacherLabelRepositoryPort,
+        clock: ClockPort,
+        logger: Logger,
+      ): LiveMctsTeacherLabeler | null =>
+        config.mctsLiveTeacherLabelingEnabled
+          ? new LiveMctsTeacherLabeler(teacher, repository, clock, logger)
+          : null,
+      inject: [APP_CONFIG, MctsTeacher, MCTS_TEACHER_LABEL_REPOSITORY, CLOCK, LOGGER],
+    },
+    {
       provide: CREATE_BATTLE_ROOM,
       useFactory: (
         rooms: BattleRoomRepositoryPort,
@@ -479,6 +626,27 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         stakeReserver: StakeReserver,
       ): CreateBattleRoom => new CreateBattleRoom(rooms, ids, clock, stakeReserver),
       inject: [BATTLE_ROOM_REPOSITORY, ID_GENERATOR, CLOCK, STAKE_RESERVER],
+    },
+    // Management#517 (EN de `tournament-rooms`): reutiliza LOS MISMOS puertos
+    // de Account/Player-Inventory que `JoinBattleRoom` para resolver el
+    // roster fijo de 4 jugadores -- nunca una segunda implementacion.
+    {
+      provide: CREATE_TOURNAMENT_ROOM,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        ids: IdGeneratorPort,
+        clock: ClockPort,
+        accountProfiles: AccountBattleProfilePort,
+        equippedHeroes: PlayerInventoryEquippedHeroPort,
+      ): CreateTournamentRoom =>
+        new CreateTournamentRoom(rooms, ids, clock, accountProfiles, equippedHeroes),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        ID_GENERATOR,
+        CLOCK,
+        ACCOUNT_BATTLE_PROFILE,
+        PLAYER_INVENTORY_EQUIPPED_HERO,
+      ],
     },
     {
       provide: LIST_AVAILABLE_BATTLE_ROOMS,
@@ -640,6 +808,12 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       useFactory: (sequence: RandomSequencePort): BoundedRandom => createBoundedRandom(sequence),
       inject: [BATTLE_RANDOM_SEQUENCE],
     },
+    {
+      provide: BotParticipantFactory,
+      useFactory: (catalog: BotCombatCatalogPort, random: BoundedRandom): BotParticipantFactory =>
+        new BotParticipantFactory(catalog, random),
+      inject: [BOT_COMBAT_CATALOG, BATTLE_RANDOM],
+    },
     // IMPORTANTE: el gateway se registra como CLASE, no con `useFactory`. Nest solo
     // descubre y monta un `@WebSocketGateway` cuando el proveedor es la propia
     // clase (con `useFactory` su metatype es la fabrica y el gateway no llega a
@@ -717,8 +891,18 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         results: BattleResultPublisherPort,
         commitments: BattleHeroCommitmentPort,
         logger: Logger,
+        decisions: CombatDecisionRecorder,
       ): BattleFinalizer =>
-        new BattleFinalizer(book, presence, notifier, release, results, commitments, logger),
+        new BattleFinalizer(
+          book,
+          presence,
+          notifier,
+          release,
+          results,
+          commitments,
+          logger,
+          decisions,
+        ),
       inject: [
         BATTLE_DEADLINE_BOOK,
         BATTLE_PRESENCE,
@@ -727,6 +911,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_RESULT_PUBLISHER,
         BATTLE_HERO_COMMITMENTS,
         LOGGER,
+        CombatDecisionRecorder,
       ],
     },
     {
@@ -812,6 +997,41 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           ? new InMemoryRewardWorkflowRepository()
           : new MongoRewardWorkflowRepository(db),
       inject: [DATABASE],
+    },
+    {
+      provide: BATTLE_DROP_WORKFLOWS,
+      useFactory: (db: Db | null): BattleDropWorkflowRepositoryPort =>
+        db === null
+          ? new InMemoryBattleDropWorkflowRepository()
+          : new MongoBattleDropWorkflowRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: IntervalBattleDropScheduler,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        workflows: BattleDropWorkflowRepositoryPort,
+        inventory: BattleDropInventoryPort,
+        commitments: BattleHeroCommitmentPort,
+        notifications: BattleDropNotificationPort,
+        logger: Logger,
+      ): IntervalBattleDropScheduler =>
+        new IntervalBattleDropScheduler(
+          rooms,
+          workflows,
+          inventory,
+          commitments,
+          notifications,
+          logger,
+        ),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        BATTLE_DROP_WORKFLOWS,
+        BATTLE_DROP_INVENTORY,
+        BATTLE_HERO_COMMITMENTS,
+        BATTLE_DROP_NOTIFIER,
+        LOGGER,
+      ],
     },
     {
       provide: REWARD_CREDIT_PORT,
@@ -953,13 +1173,23 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         repository: MissionSimulationIntakeRepositoryPort,
         sequences: RandomSequenceFactoryPort,
         config: AppConfig,
+        decisions: CombatDecisionRecorder,
       ): RunMissionSimulation =>
         new RunMissionSimulation(
           repository,
           sequences,
           new HmacMissionSeedFactory(config.internalServiceAuthSecret),
+          // EN-035.3: política productiva actual. RandomPolicy es solo para
+          // pruebas/evaluación futura, nunca el default aquí (ADR-023).
+          { policy: new RuleBasedPolicy(), source: 'RULE_BASED' },
+          decisions,
         ),
-      inject: [MISSION_SIMULATION_INTAKE_REPOSITORY, RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
+      inject: [
+        MISSION_SIMULATION_INTAKE_REPOSITORY,
+        RANDOM_SEQUENCE_FACTORY,
+        APP_CONFIG,
+        CombatDecisionRecorder,
+      ],
     },
     {
       // Diseno «misiones jugables», P-J7: la misma simulacion con semillas
@@ -972,6 +1202,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         new EstimateMissionOutcome(
           sequences,
           new HmacMissionSeedFactory(config.internalServiceAuthSecret),
+          new RuleBasedPolicy(),
         ),
       inject: [RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
     },
@@ -1100,6 +1331,8 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         presence: BattlePresencePort,
         book: BattleDeadlineBookPort,
         connections: BattleConnectionsPort,
+        dropInventory: BattleDropInventoryPort,
+        bots: BotParticipantFactory,
       ): StartBattle =>
         new StartBattle(
           rooms,
@@ -1111,6 +1344,8 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           presence,
           book,
           connections,
+          dropInventory,
+          bots,
         ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
@@ -1122,7 +1357,27 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         BATTLE_PRESENCE,
         BATTLE_DEADLINE_BOOK,
         BATTLE_CONNECTIONS,
+        BATTLE_DROP_INVENTORY,
+        BotParticipantFactory,
       ],
+    },
+    // Management#517: "arrancar esta sala de torneo concreta" delegando TAL
+    // CUAL en `StartBattle` -- NUNCA una segunda implementacion del motor.
+    {
+      provide: START_TOURNAMENT_ROOM,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        startBattle: StartBattle,
+      ): StartTournamentRoom => new StartTournamentRoom(rooms, startBattle),
+      inject: [BATTLE_ROOM_REPOSITORY, START_BATTLE],
+    },
+    // Management#517: lectura pura y paginada sobre `BattleRoom.events`, el
+    // MISMO almacenamiento que ya usan `BattleRoomRealtimeGateway`/`ResumeBattle`.
+    {
+      provide: GET_TOURNAMENT_ROOM_RECORD,
+      useFactory: (rooms: BattleRoomRepositoryPort): GetTournamentRoomRecord =>
+        new GetTournamentRoomRecord(rooms),
+      inject: [BATTLE_ROOM_REPOSITORY],
     },
     // HU-29 (Task HU-29.2): el compromiso de batalla que bloquea el equipamiento
     // del heroe mientras la sala esta activa. Sin configuracion NO se inventa un
@@ -1162,6 +1417,65 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       },
       inject: [APP_CONFIG, CLOCK, LOGGER],
     },
+    {
+      provide: BATTLE_DROP_INVENTORY,
+      useFactory: (
+        config: AppConfig,
+        clock: ClockPort,
+        logger: Logger,
+      ): BattleDropInventoryPort => {
+        if (
+          config.internalServiceAuthSecret === null ||
+          config.playerInventoryServiceBaseUrl === null
+        ) {
+          const unavailable = (): Promise<never> =>
+            Promise.reject(new UpstreamServiceError('player-inventory', 'no_configurado'))
+          return {
+            capture: unavailable,
+            find: unavailable,
+            transfer: unavailable,
+            closeBattle: unavailable,
+          }
+        }
+        return new PlayerInventoryBattleDropHttpClient({
+          baseUrl: config.playerInventoryServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
+    {
+      provide: BATTLE_DROP_NOTIFIER,
+      useFactory: (
+        config: AppConfig,
+        clock: ClockPort,
+        logger: Logger,
+      ): BattleDropNotificationPort => {
+        if (
+          config.internalServiceAuthSecret === null ||
+          config.notificationsServiceBaseUrl === null ||
+          config.notificationsServiceBaseUrl === undefined
+        ) {
+          return {
+            notify: (): Promise<never> =>
+              Promise.reject(new UpstreamServiceError('notifications', 'no_configurado')),
+          }
+        }
+        return new NotificationsBattleDropHttpClient({
+          baseUrl: config.notificationsServiceBaseUrl,
+          callerService: OUTBOUND_SERVICE_NAME,
+          secret: config.internalServiceAuthSecret,
+          clock,
+          logger,
+          timeoutMs: config.internalHttpTimeoutMs,
+        })
+      },
+      inject: [APP_CONFIG, CLOCK, LOGGER],
+    },
     // Sin ruta publica: lo invocaran las acciones validas de HU-18/HU-19 al
     // terminar un turno. Web nunca decide `turno + 1`.
     {
@@ -1181,6 +1495,14 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       useFactory: (): RoomCommandLockPort => new ChannelLock(),
     },
     {
+      provide: PersistVersusDropDecision,
+      useFactory: (
+        inventory: BattleDropInventoryPort,
+        sequence: RandomSequencePort,
+      ): PersistVersusDropDecision => new PersistVersusDropDecision(inventory, sequence),
+      inject: [BATTLE_DROP_INVENTORY, BATTLE_RANDOM_SEQUENCE],
+    },
+    {
       provide: EXECUTE_BASIC_ATTACK,
       useFactory: (
         rooms: BattleRoomRepositoryPort,
@@ -1188,13 +1510,30 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         sequence: RandomSequencePort,
         lock: RoomCommandLockPort,
         settler: BattleDeadlineSettler,
-      ): ExecuteBasicAttack => new ExecuteBasicAttack(rooms, clock, sequence, lock, settler),
+        versusDrop: PersistVersusDropDecision,
+        decisions: CombatDecisionRecorder,
+        liveTeacherLabeler: LiveMctsTeacherLabeler,
+      ): ExecuteBasicAttack =>
+        new ExecuteBasicAttack(
+          rooms,
+          clock,
+          sequence,
+          lock,
+          settler,
+          undefined,
+          versusDrop,
+          decisions,
+          liveTeacherLabeler,
+        ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
         BATTLE_RANDOM_SEQUENCE,
         ROOM_COMMAND_LOCK,
         BATTLE_DEADLINE_SETTLER,
+        PersistVersusDropDecision,
+        CombatDecisionRecorder,
+        LiveMctsTeacherLabeler,
       ],
     },
     {
@@ -1203,8 +1542,10 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         attack: ExecuteBasicAttack,
         finalizer: BattleFinalizer,
         logger: Logger,
-      ): BasicAttackRealtimeHandler => new BasicAttackRealtimeHandler(attack, logger, finalizer),
-      inject: [EXECUTE_BASIC_ATTACK, BATTLE_FINALIZER, LOGGER],
+        aiTurnTrigger: AiTurnTrigger,
+      ): BasicAttackRealtimeHandler =>
+        new BasicAttackRealtimeHandler(attack, logger, finalizer, aiTurnTrigger),
+      inject: [EXECUTE_BASIC_ATTACK, BATTLE_FINALIZER, LOGGER, AI_TURN_TRIGGER],
     },
     // HU-19 (RF-19): habilidad especial por el mismo WebSocket (`useSkill`). Comparte el bloqueo
     // de sala y la secuencia HU-24 con el ataque basico, y lo reutiliza (mismo bloqueo, sin pedirlo
@@ -1218,7 +1559,22 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         lock: RoomCommandLockPort,
         basicAttack: ExecuteBasicAttack,
         settler: BattleDeadlineSettler,
-      ): UseSkill => new UseSkill(rooms, clock, sequence, lock, basicAttack, settler),
+        versusDrop: PersistVersusDropDecision,
+        decisions: CombatDecisionRecorder,
+        liveTeacherLabeler: LiveMctsTeacherLabeler,
+      ): UseSkill =>
+        new UseSkill(
+          rooms,
+          clock,
+          sequence,
+          lock,
+          basicAttack,
+          settler,
+          undefined,
+          versusDrop,
+          decisions,
+          liveTeacherLabeler,
+        ),
       inject: [
         BATTLE_ROOM_REPOSITORY,
         CLOCK,
@@ -1226,6 +1582,9 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         ROOM_COMMAND_LOCK,
         EXECUTE_BASIC_ATTACK,
         BATTLE_DEADLINE_SETTLER,
+        PersistVersusDropDecision,
+        CombatDecisionRecorder,
+        LiveMctsTeacherLabeler,
       ],
     },
     {
@@ -1234,8 +1593,123 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         skill: UseSkill,
         logger: Logger,
         finalizer: BattleFinalizer,
-      ): SkillRealtimeHandler => new SkillRealtimeHandler(skill, logger, finalizer),
-      inject: [USE_SKILL, LOGGER, BATTLE_FINALIZER],
+        aiTurnTrigger: AiTurnTrigger,
+      ): SkillRealtimeHandler => new SkillRealtimeHandler(skill, logger, finalizer, aiTurnTrigger),
+      inject: [USE_SKILL, LOGGER, BATTLE_FINALIZER, AI_TURN_TRIGGER],
+    },
+    // Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): la epica equipada, por el
+    // mismo WebSocket (`useEpic`). Comparte el bloqueo de sala y la secuencia HU-24 con el
+    // ataque basico/`useSkill`; a diferencia de ambos, no reutiliza `ExecuteBasicAttack` (usar
+    // la epica nunca degrada a ataque basico: su costo de Poder es siempre 0).
+    {
+      provide: USE_EPIC,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        clock: ClockPort,
+        sequence: RandomSequencePort,
+        lock: RoomCommandLockPort,
+        settler: BattleDeadlineSettler,
+        versusDrop: PersistVersusDropDecision,
+        decisions: CombatDecisionRecorder,
+        liveTeacherLabeler: LiveMctsTeacherLabeler,
+      ): UseEpic =>
+        new UseEpic(
+          rooms,
+          clock,
+          sequence,
+          lock,
+          settler,
+          versusDrop,
+          decisions,
+          liveTeacherLabeler,
+        ),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        CLOCK,
+        BATTLE_RANDOM_SEQUENCE,
+        ROOM_COMMAND_LOCK,
+        BATTLE_DEADLINE_SETTLER,
+        PersistVersusDropDecision,
+        CombatDecisionRecorder,
+        LiveMctsTeacherLabeler,
+      ],
+    },
+    {
+      provide: EpicRealtimeHandler,
+      useFactory: (
+        epic: UseEpic,
+        logger: Logger,
+        finalizer: BattleFinalizer,
+        aiTurnTrigger: AiTurnTrigger,
+      ): EpicRealtimeHandler => new EpicRealtimeHandler(epic, logger, finalizer, aiTurnTrigger),
+      inject: [USE_EPIC, LOGGER, BATTLE_FINALIZER, AI_TURN_TRIGGER],
+    },
+    // HU-93.2 (Management#558): sin `NeuralPolicy` entrenada todavia (EN-036), no
+    // hay primaria -- el fallback fijo es `RuleBasedPolicy`, nunca `RandomPolicy`
+    // (esa es solo el baseline experimental de EN-035.3 para Misiones/evaluacion,
+    // jamas el fallback productivo de JcE). El dia que exista una politica
+    // entrenable real, pasa a ser la primaria aqui; `RuleBasedPolicy` sigue
+    // siendo el mismo fallback fijo.
+    {
+      provide: DECISION_POLICY_SELECTOR,
+      useFactory: (): DecisionPolicySelector =>
+        new DecisionPolicySelector(null, { policy: new RuleBasedPolicy(), source: 'RULE_BASED' }),
+    },
+    {
+      provide: EXECUTE_AI_TURN,
+      useFactory: (
+        rooms: BattleRoomRepositoryPort,
+        lock: RoomCommandLockPort,
+        policies: DecisionPolicySelector,
+        attack: ExecuteBasicAttack,
+        skill: UseSkill,
+        epic: UseEpic,
+        completeTurn: CompleteBattleTurn,
+        decisions: CombatDecisionRecorder,
+        publisher: BattleEventPublisherPort,
+        finalizer: BattleFinalizer,
+        settler: BattleDeadlineSettler,
+        liveTeacherLabeler: LiveMctsTeacherLabeler,
+      ): ExecuteAiTurn =>
+        new ExecuteAiTurn(
+          rooms,
+          lock,
+          policies,
+          attack,
+          skill,
+          epic,
+          completeTurn,
+          decisions,
+          publisher,
+          finalizer,
+          new Sha256CommandIdFingerprint(),
+          settler,
+          undefined,
+          undefined,
+          liveTeacherLabeler,
+        ),
+      inject: [
+        BATTLE_ROOM_REPOSITORY,
+        ROOM_COMMAND_LOCK,
+        DECISION_POLICY_SELECTOR,
+        EXECUTE_BASIC_ATTACK,
+        USE_SKILL,
+        USE_EPIC,
+        COMPLETE_BATTLE_TURN,
+        CombatDecisionRecorder,
+        BATTLE_EVENT_PUBLISHER,
+        BATTLE_FINALIZER,
+        BATTLE_DEADLINE_SETTLER,
+        LiveMctsTeacherLabeler,
+      ],
+    },
+    {
+      // Fail-open (contrato HU-93.2 §7): un fallo del bot nunca rechaza una
+      // accion humana ya persistida y difundida.
+      provide: AI_TURN_TRIGGER,
+      useFactory: (turns: ExecuteAiTurn, logger: Logger): AiTurnTrigger =>
+        new AiTurnTrigger(turns, logger),
+      inject: [EXECUTE_AI_TURN, LOGGER],
     },
     {
       provide: READINESS_CHECKS,

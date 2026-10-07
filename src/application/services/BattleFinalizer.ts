@@ -9,6 +9,8 @@ import type {
 } from '../ports/BattleResultPublisherPort'
 import type { BattleRoomReleasePort } from '../ports/BattleRoomReleasePort'
 import type { RealtimeNotifierPort } from '../ports/RealtimeNotifierPort'
+import { hasPendingVersusDrop } from './BattleDropState'
+import type { CombatDecisionRecorder } from './CombatDecisionRecorder'
 
 /** Lo unico que el finalizador necesita de un registro estructurado. */
 export interface BattleFinalizerLogger {
@@ -43,6 +45,7 @@ export class BattleFinalizer {
     private readonly results: BattleResultPublisherPort,
     private readonly commitments: BattleHeroCommitmentPort,
     private readonly logger: BattleFinalizerLogger,
+    private readonly decisionRecorder: CombatDecisionRecorder | null = null,
   ) {}
 
   afterFinished(room: BattleRoom): void {
@@ -66,7 +69,9 @@ export class BattleFinalizer {
     // temporal de HU-29 deja de aplicarse aqui y el flujo normal de inventario
     // vuelve.
     this.step('battle_commitment_release', () => {
-      this.releaseBattleCommitments(room)
+      // HU-30: la pieza sigue comprometida hasta que Player-Inventory confirme
+      // todas las transferencias; el reconciliador de drops la liberará.
+      if (!hasPendingVersusDrop(room)) this.releaseBattleCommitments(room)
     })
     this.step('result_publish', () => {
       const notification = buildBattleFinishedNotification(room)
@@ -74,6 +79,24 @@ export class BattleFinalizer {
       if (notification !== null) {
         this.results.publish(notification)
       }
+    })
+    this.step('decision_outcome', () => {
+      if (this.decisionRecorder === null || room.result === null) return
+
+      const origin = room.tournament === null ? 'ONLINE' : 'TOURNAMENT'
+      const event = this.decisionRecorder.tryPrepareOutcome({
+        origin,
+        battleId: room.id,
+        mode: room.mode,
+        outcome: {
+          kind: 'BATTLE',
+          reason: room.result.reason,
+          outcome: room.result.outcome,
+          winnerTeamLabel: room.result.winnerTeamLabel,
+        },
+      })
+
+      if (event !== null) void this.decisionRecorder.record(event)
     })
   }
 

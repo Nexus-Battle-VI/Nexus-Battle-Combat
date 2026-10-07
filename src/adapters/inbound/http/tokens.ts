@@ -19,6 +19,8 @@ export const BATTLE_RANDOM_SEQUENCE = Symbol('BattleRandomSequence')
 export const EXECUTE_BASIC_ATTACK = Symbol('ExecuteBasicAttack')
 /** HU-19: habilidad especial (`useSkill`); reutiliza el ataque basico cuando el Poder no alcanza. */
 export const USE_SKILL = Symbol('UseSkill')
+/** Correccion HU-19/HU-31 (tras GAP-HU31-CATALOG-MULTI-EFFECT): epica equipada (`useEpic`). */
+export const USE_EPIC = Symbol('UseEpic')
 /** HU-18: serializa los comandos de una misma sala (una replica, ADR-020). */
 export const ROOM_COMMAND_LOCK = Symbol('RoomCommandLock')
 /** HU-21: piezas de la finalizacion de batalla (servicios, casos de uso y planificador). */
@@ -55,3 +57,19 @@ export const ACCEPT_MISSION_SIMULATION_REQUEST = Symbol('AcceptMissionSimulation
 export const RUN_MISSION_SIMULATION = Symbol('RunMissionSimulation')
 /** Estimacion de exito sin guardar nada (diseno «misiones jugables», P-J7). */
 export const ESTIMATE_MISSION_OUTCOME = Symbol('EstimateMissionOutcome')
+/**
+ * Management#517 (EN de `tournament-rooms`): salas de combate que el servicio
+ * Tournament reserva para cada justa, via rutas internas HMAC.
+ */
+export const CREATE_TOURNAMENT_ROOM = Symbol('CreateTournamentRoom')
+export const START_TOURNAMENT_ROOM = Symbol('StartTournamentRoom')
+export const GET_TOURNAMENT_ROOM_RECORD = Symbol('GetTournamentRoomRecord')
+/**
+ * HU-93.2 (EN-035.3/.4): turno automatico de IA en JcE 1v1. `DECISION_POLICY_SELECTOR`
+ * envuelve la politica productiva (RuleBasedPolicy, ADR-023) con un fallback nunca
+ * elegido por defecto; `AI_TURN_TRIGGER` es el adaptador fail-open que dispara
+ * `ExecuteAiTurn` tras una transicion ya persistida y difundida.
+ */
+export const DECISION_POLICY_SELECTOR = Symbol('DecisionPolicySelector')
+export const EXECUTE_AI_TURN = Symbol('ExecuteAiTurn')
+export const AI_TURN_TRIGGER = Symbol('AiTurnTrigger')

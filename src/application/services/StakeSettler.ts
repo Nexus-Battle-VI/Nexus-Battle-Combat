@@ -98,11 +98,16 @@ export class StakeSettler {
       return
     }
 
+    // Un ganador SIN apuesta propia (`holdId: null`, pasada de estabilizacion
+    // economica) no tiene ningun `ParticipantStake` que actualizar aqui --
+    // `withStakeStatuses` solo conoce holds reales.
     const updated = current.withStakeStatuses(
-      settlement.entries.map((entry) => ({
-        holdOperationId: entry.holdId,
-        status: entry.outcome === 'CAPTURED' ? StakeStatus.Captured : StakeStatus.SettledWon,
-      })),
+      settlement.entries
+        .filter((entry): entry is typeof entry & { holdId: string } => entry.holdId !== null)
+        .map((entry) => ({
+          holdOperationId: entry.holdId,
+          status: entry.outcome === 'CAPTURED' ? StakeStatus.Captured : StakeStatus.SettledWon,
+        })),
     )
 
     await this.rooms.save(updated, current.version)

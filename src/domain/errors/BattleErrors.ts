@@ -274,3 +274,60 @@ export class RandomSelectionExhaustedError extends DomainError {
     this.name = 'RandomSelectionExhaustedError'
   }
 }
+
+/**
+ * HU-19/HU-31 (correccion): ejecucion de la epica equipada como accion de turno.
+ * Mismo criterio de codigos que `SkillErrorCode`.
+ */
+export const EpicErrorCode = Object.freeze({
+  NoEpicEquipped: 'NO_EPIC_EQUIPPED',
+  EpicOnCooldown: 'EPIC_ON_COOLDOWN',
+  UnsupportedEpicEffect: 'UNSUPPORTED_EPIC_EFFECT',
+  EpicTargetRequired: 'EPIC_TARGET_REQUIRED',
+} as const)
+
+/** El heroe del actor no tiene ninguna epica equipada (congelada en el snapshot). */
+export class NoEpicEquippedError extends DomainError {
+  readonly code = EpicErrorCode.NoEpicEquipped
+
+  constructor() {
+    super('El heroe no tiene ninguna epica equipada.')
+    this.name = 'NoEpicEquippedError'
+  }
+}
+
+/** La epica sigue en recarga (correccion HU-19/HU-31: cooldown = 2 turnos propios). */
+export class EpicOnCooldownError extends DomainError {
+  readonly code = EpicErrorCode.EpicOnCooldown
+
+  constructor() {
+    super('La epica sigue en recarga.')
+    this.name = 'EpicOnCooldownError'
+  }
+}
+
+/**
+ * Algun efecto de la epica no esta formalmente soportado todavia (REFLECT_DAMAGE,
+ * TEMPORARY_STATUS, audiencias mixtas incompatibles en la misma epica, ENEMY_GROUP,
+ * o una estadistica/kind sin semantica definida). No se ejecuta nada: ni siquiera
+ * los efectos que si encajarian, para no aplicar una epica a medias. `reason` es
+ * solo para el registro y las pruebas, nunca viaja al cliente.
+ */
+export class UnsupportedEpicEffectError extends DomainError {
+  readonly code = EpicErrorCode.UnsupportedEpicEffect
+
+  constructor(readonly reason: string) {
+    super(`La epica no se puede ejecutar: ${reason}`)
+    this.name = 'UnsupportedEpicEffectError'
+  }
+}
+
+/** Algun efecto de la epica necesita un objetivo (ALLY/OPPONENT) y el comando no trajo ninguno. */
+export class EpicTargetRequiredError extends DomainError {
+  readonly code = EpicErrorCode.EpicTargetRequired
+
+  constructor() {
+    super('La epica necesita un objetivo para al menos uno de sus efectos.')
+    this.name = 'EpicTargetRequiredError'
+  }
+}

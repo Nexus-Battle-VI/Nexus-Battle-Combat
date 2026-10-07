@@ -16,6 +16,7 @@ import {
 import { up as upFinishMigration } from '../../src/adapters/outbound/persistence/migrations/009-battle-rooms-finish'
 import { up as upSkillEffectsMigration } from '../../src/adapters/outbound/persistence/migrations/016-battle-rooms-skill-effects'
 import { up as upHeroLevelMigration } from '../../src/adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
+import { up as upTournamentMigration } from '../../src/adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
 import {
   ACCOUNT_BATTLE_PROFILE,
   type AccountBattleProfilePort,
@@ -44,8 +45,10 @@ import {
   migrateToLatest,
 } from '../../src/infrastructure/persistence/database'
 import { BATTLE_HERO_COMMITMENTS } from '../../src/application/ports/BattleHeroCommitmentPort'
+import { BATTLE_DROP_INVENTORY } from '../../src/application/ports/BattleDropInventoryPort'
 import { indexForEffect, indexForFace } from '../fixtures/basic-attack'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
+import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
 import {
   equippedHeroFixture,
   shieldStrikeAbility,
@@ -272,6 +275,8 @@ describe('HU-19 de extremo a extremo (protocolo): habilidades entre dos clientes
       // propia prueba unitaria).
       .overrideProvider(BATTLE_HERO_COMMITMENTS)
       .useValue(recordingBattleCommitments())
+      .overrideProvider(BATTLE_DROP_INVENTORY)
+      .useValue(recordingBattleDropInventory())
       .overrideProvider(BATTLE_RANDOM_SEQUENCE)
       .useValue(sequence)
       .compile()
@@ -1064,6 +1069,7 @@ describe('HU-19 de extremo a extremo (protocolo): habilidades entre dos clientes
         await upFinishMigration(db)
         await upSkillEffectsMigration(db)
         await upHeroLevelMigration(db)
+        await upTournamentMigration(db)
       }
 
       await expect(

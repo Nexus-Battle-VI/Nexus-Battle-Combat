@@ -39,15 +39,27 @@ export class CreateRewardWorkflows {
         continue
       }
 
-      const victoryCreditsAmount =
-        participant.result === ParticipantResultKind.Won ? participant.credits : 0
+      const won = participant.result === ParticipantResultKind.Won
+      // HU-14.1 (RF-14/CA-01): la recompensa CONFIGURADA de la sala es un
+      // premio ADICIONAL para quien gane, nunca una apuesta del creador
+      // (eso es HU-23, un campo distinto) -- `configuredReward.amount` ya
+      // viaja en la notificacion (HU-21 §9) pero antes de este fix nunca se
+      // sumaba al credito real: el ganador siempre recibia solo la base de
+      // `BattleCreditsPolicy` (2/4), sin importar lo que la sala configurara.
+      // `victoryCreditsAmount` queda IGUAL que antes (solo la base): es la
+      // senal de "victoria" que Wallet usa para el progreso del cofre
+      // (HU-22), no el monto total acreditado.
+      const victoryCreditsAmount = won ? participant.credits : 0
+      const creditsAmount = won
+        ? participant.credits + notification.configuredReward.amount
+        : participant.credits
 
       const intent: RewardWorkflowIntent = {
         battleId: notification.roomId,
         playerId: participant.playerId,
         teamLabel: participant.teamLabel,
         seat: participant.seat,
-        creditsAmount: participant.credits,
+        creditsAmount,
         victoryCreditsAmount,
         finishedAt: new Date(notification.finishedAt),
       }

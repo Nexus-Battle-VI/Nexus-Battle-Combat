@@ -27,7 +27,13 @@ export type ActiveSkillEffect =
   | {
       readonly sourceAbilityId: string
       readonly sourceCombatant: CombatantKey
-      readonly statistic: 'ATTACK' | 'DAMAGE' | 'DEFENSE' | 'HEALING'
+      /**
+       * `CRITICAL_CHANCE`/`POWER` (correccion HU-19/HU-31, `EpicSkillPolicy`): se
+       * REGISTRAN y decrementan igual que cualquier otro, pero `statBonus` solo
+       * CONSULTA `ATTACK`/`DAMAGE`/`DEFENSE` -- brecha pre-existente del motor
+       * (misma categoria que `IMMUNITY`), documentada, no oculta.
+       */
+      readonly statistic: 'ATTACK' | 'DAMAGE' | 'DEFENSE' | 'HEALING' | 'CRITICAL_CHANCE' | 'POWER'
       readonly operation: 'INCREASE' | 'DECREASE'
       readonly amount: number
       readonly remainingOwnTurns: number
@@ -255,6 +261,12 @@ export class Combatant {
     return power
   }
 
+  /**
+   * Una recarga se guarda bajo `abilityId` (habilidad) o `epicProductId` (correccion
+   * HU-19/HU-31: la epica equipada reutiliza el MISMO mapa de recargas, sin un
+   * segundo mecanismo): ambos son `productId`s de Catalog de familias distintas y
+   * nunca coinciden.
+   */
   private static restoreCooldowns(
     profile: CombatProfile,
     cooldowns: Readonly<Record<string, number>> | undefined,
@@ -269,22 +281,31 @@ export class Combatant {
 
     const restored: Record<string, number> = {}
 
-    for (const [abilityId, remaining] of Object.entries(cooldowns)) {
-      const ability = profile.abilities?.find((candidate) => candidate.abilityId === abilityId)
+    for (const [id, remaining] of Object.entries(cooldowns)) {
+      const ability = profile.abilities?.find((candidate) => candidate.abilityId === id)
+      const maxChargeTurns =
+        ability !== undefined
+          ? ability.chargeTurns
+          : profile.epic?.epicProductId === id
+            ? profile.epic.cooldownTurns
+            : undefined
 
-      if (ability === undefined) {
-        throw new DomainError('Una recarga pertenece a una habilidad que el heroe no tiene.')
-      }
-
-      // `chargeTurns + 1` es el valor transitorio con el que `applySkill` marca la recarga
-      // antes de cerrar el turno propio; una batalla persistida siempre trae <= chargeTurns.
-      if (!Number.isInteger(remaining) || remaining < 1 || remaining > ability.chargeTurns + 1) {
+      if (maxChargeTurns === undefined) {
         throw new DomainError(
-          `La recarga de una habilidad debe ser un entero entre 1 y ${String(ability.chargeTurns + 1)}.`,
+          'Una recarga pertenece a una habilidad o epica que el heroe no tiene.',
         )
       }
 
-      restored[abilityId] = remaining
+      // `chargeTurns + 1` / `cooldownTurns + 1` es el valor transitorio con el que
+      // `applySkill`/`applyEpic` marca la recarga antes de cerrar el turno propio;
+      // una batalla persistida siempre trae <= ese maximo.
+      if (!Number.isInteger(remaining) || remaining < 1 || remaining > maxChargeTurns + 1) {
+        throw new DomainError(
+          `La recarga debe ser un entero entre 1 y ${String(maxChargeTurns + 1)}.`,
+        )
+      }
+
+      restored[id] = remaining
     }
 
     return Object.freeze(restored)
