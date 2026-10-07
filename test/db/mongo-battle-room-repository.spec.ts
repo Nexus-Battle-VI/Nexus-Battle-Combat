@@ -1,4 +1,5 @@
 import 'reflect-metadata'
+import { randomUUID } from 'node:crypto'
 
 import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb'
 import { type Collection, type Db, type MongoClient } from 'mongodb'
@@ -32,7 +33,7 @@ import {
  * malformados, y que el bloqueo optimista de `save` sea real.
  */
 describe('MongoBattleRoomRepository', () => {
-  let container: StartedMongoDBContainer
+  let container: StartedMongoDBContainer | undefined
   let client: MongoClient
   let db: Db
   let repository: MongoBattleRoomRepository
@@ -57,8 +58,12 @@ describe('MongoBattleRoomRepository', () => {
     db.collection<Record<string, unknown> & { _id: string }>('battle-rooms')
 
   beforeAll(async () => {
-    container = await new MongoDBContainer('mongo:8.0').start()
-    const options = { uri: `${container.getConnectionString()}/?directConnection=true` }
+    const externalUri = process.env.MONGO_TEST_URI
+    if (externalUri === undefined) container = await new MongoDBContainer('mongo:8.0').start()
+    const options = {
+      uri: externalUri ?? `${container!.getConnectionString()}/?directConnection=true`,
+      databaseName: `combat_rooms_${randomUUID().replaceAll('-', '')}`,
+    }
 
     client = createMongoClient(options)
     await client.connect()
@@ -73,8 +78,9 @@ describe('MongoBattleRoomRepository', () => {
   }, 180_000)
 
   afterAll(async () => {
+    await db.dropDatabase()
     await client.close()
-    await container.stop()
+    await container?.stop()
   })
 
   it('la migracion crea la coleccion con los indices esperados', async () => {

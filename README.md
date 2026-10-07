@@ -67,6 +67,15 @@ Este repositorio contiene código y Pull Requests. No contiene Issues ni Product
 
 **Implementado** sobre el WebSocket de ADR-020 (`/api/v1/combat/realtime`), dentro del gateway existente: dos contextos —el **lobby** (la vista general de Jugar Online, un canal global) y **cada sala** (solo sus participantes humanos, mientras la sala esté activa)—, con comandos `chat.subscribe` / `chat.send` / `chat.unsubscribe`, procesado una sola vez por `commandId`, `seq` por canal, persistencia **antes** de difundir y recuperación con `lastSeq`. Longitud 500, frecuencia 5 cada 10 s y retención configurables (las cifras las ratificó el PO por chat; **la retención de 7 días no tiene ninguna fuente y el PO debe fijarla**). **Censura server-side del lenguaje ofensivo** con `#` antes de persistir y difundir (`ChatProfanityPolicy`; el mensaje no se rechaza), **sin desplegar** (`main` va por detrás de `develop`; exige la migración `006`, que va después de la `005` de HU-17) y **una sola réplica** (ADR-020). El chat de la sala queda **abierto también durante la batalla** (`IN_BATTLE`) y **se cierra al finalizar** (`FINISHED`, HU-21): decisiones técnicas derivadas de «sala activa», pendientes de confirmar por el PO. Al empezar se encontraron dos defectos de HU-15.2 que dejaban sin funcionar el WebSocket entero; HU-17 corrigió por su cuenta el registro del gateway y la carrera de `auth` desapareció con el ticket de un solo uso. Ver [docs/hu-13-chat.md](docs/hu-13-chat.md).
 
+### Salas internas de torneo SOLO/DUO/TRIO (HU-85)
+
+Preparación e inicio de justas con dos lados completos de 1, 2 o 3 humanos,
+mediante las rutas internas HMAC autorizadas exclusivamente a Tournament.
+Contrato histórico DUO compatible; ampliación v3 con modalidad/tamaño explícitos,
+huella de intención versionada y migración aditiva 026. Reutiliza StartBattle y
+el límite global de seis minutos. Ver
+[contrato, migración y evidencia](docs/hu-85-tournament-cardinality.md).
+
 ## Qué posee este contexto
 
 - Salas y lobby: modalidad, cupo, composición humana/IA, recompensa, estado.

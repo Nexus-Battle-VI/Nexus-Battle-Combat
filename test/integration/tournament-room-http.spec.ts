@@ -31,6 +31,12 @@ import { AppModule } from '../../src/infrastructure/bootstrap/app.module'
 import { equippedHeroFixture } from '../fixtures/equipped-hero'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
+import { tournamentRequest } from '../fixtures/tournament-cardinality'
+import {
+  AccountProfileMissingError,
+  UpstreamServiceError,
+} from '../../src/application/errors/UpstreamErrors'
+import { equippedProductNotOwnedBlocker } from '../fixtures/equipped-hero'
 
 /**
  * Rutas internas de torneo (Management#517, EN `tournament-rooms`):
@@ -186,6 +192,268 @@ describe('Management#517: rutas internas de tournament-rooms', () => {
 
   const createRoom = (body: Record<string, unknown> = CREATE_BODY()) =>
     signed('post', BASE_PATH, body)
+
+  describe('extension v3 de cardinalidad', () => {
+    it.each(['SOLO', 'DUO', 'TRIO'] as const)(
+      'acepta %s canonico sin contractVersion y su replay con marcador 3',
+      async (mode) => {
+        const request = tournamentRequest(mode, `canonical-wire-${mode}`)
+        const body = {
+          operationId: request.operationId,
+          tournamentId: request.tournamentId,
+          encounterId: request.encounterId,
+          mode: request.mode,
+          teamSize: request.teamSize,
+          teams: request.teams,
+        }
+        const created = await signed('post', BASE_PATH, body)
+        expect(created.status).toBe(201)
+        expect(created.body.tournament).toEqual({
+          contractVersion: 3,
+          mode,
+          teamSize: request.teamSize,
+        })
+        const replay = await signed('post', BASE_PATH, request)
+        expect(replay.status).toBe(201)
+        expect(replay.body.id).toBe(created.body.id)
+      },
+    )
+
+    it.each(['account-missing', 'inventory-unavailable', 'hero-missing'] as const)(
+      'TRIO propaga %s del sexto humano sin crear sala',
+      async (failure) => {
+        const body = tournamentRequest('TRIO', failure)
+        const sixth = `${failure}-b3`
+        const accountSpy = jest
+          .spyOn(accounts, 'getBattleProfile')
+          .mockImplementation((subject) =>
+            subject === sixth && failure === 'account-missing'
+              ? Promise.reject(new AccountProfileMissingError(subject))
+              : Promise.resolve({ subject, displayName: `Nombre ${subject}`, avatarUrl: null }),
+          )
+        const heroSpy = jest
+          .spyOn(heroes, 'getEquippedHero')
+          .mockImplementation((playerId) =>
+            playerId === sixth
+              ? failure === 'inventory-unavailable'
+                ? Promise.reject(new UpstreamServiceError('player-inventory', 'timeout'))
+                : failure === 'hero-missing'
+                  ? Promise.resolve(null)
+                  : Promise.resolve(
+                      equippedHeroFixture({ playerId, heroId: `heroe-de-${playerId}` }),
+                    )
+              : Promise.resolve(equippedHeroFixture({ playerId, heroId: `heroe-de-${playerId}` })),
+          )
+        try {
+          const response = await signed('post', BASE_PATH, body)
+          expect(response.status).toBe(failure === 'inventory-unavailable' ? 503 : 422)
+          if (failure !== 'inventory-unavailable')
+            expect(response.body.code).toBe(
+              failure === 'account-missing' ? 'ACCOUNT_PROFILE_NOT_FOUND' : 'HERO_NOT_SELECTED',
+            )
+          const rooms = app.get<BattleRoomRepositoryPort>(BATTLE_ROOM_REPOSITORY)
+          expect(await rooms.findByTournamentOperationId(body.operationId)).toBeNull()
+        } finally {
+          accountSpy.mockRestore()
+          heroSpy.mockRestore()
+        }
+      },
+    )
+
+    it('TRIO devuelve los blockers del sexto humano al iniciar y conserva PREPARING', async () => {
+      const body = tournamentRequest('TRIO', 'blocked-start')
+      const created = await signed('post', BASE_PATH, body)
+      const heroSpy = jest.spyOn(heroes, 'getEquippedHero').mockImplementation((playerId) =>
+        Promise.resolve(
+          equippedHeroFixture({
+            playerId,
+            heroId: `heroe-de-${playerId}`,
+            ready: playerId !== 'blocked-start-b3',
+            blockers: playerId === 'blocked-start-b3' ? [equippedProductNotOwnedBlocker] : [],
+          }),
+        ),
+      )
+      try {
+        const start = await signed('post', `${BASE_PATH}/${String(created.body.id)}/start`, {
+          operationId: `${body.operationId}:start`,
+          tournamentId: body.tournamentId,
+          encounterId: body.encounterId,
+        })
+        expect(start.status).toBe(422)
+        expect(start.body.blockers).toEqual([equippedProductNotOwnedBlocker])
+        const record = await signed('get', `${BASE_PATH}/${String(created.body.id)}/record`)
+        expect(record.body.status).toBe('PREPARING')
+        expect(record.body.events.items).toEqual([])
+        expect(commitments.commits).toHaveLength(0)
+      } finally {
+        heroSpy.mockRestore()
+      }
+    })
+
+    it.each(['SOLO', 'DUO', 'TRIO'] as const)(
+      '%s crea e inicia por HMAC con todos sus humanos',
+      async (mode) => {
+        const body = tournamentRequest(mode, `http-${mode}`)
+        const created = await signed('post', BASE_PATH, body)
+        expect(created.status).toBe(201)
+        expect(created.body.tournament).toEqual({
+          contractVersion: 3,
+          mode,
+          teamSize: body.teamSize,
+        })
+        const startPath = `${BASE_PATH}/${String(created.body.id)}/start`
+        const startBody = {
+          operationId: `${body.operationId}:start`,
+          tournamentId: body.tournamentId,
+          encounterId: body.encounterId,
+        }
+        expect((await signed('post', startPath, startBody, 'combat')).status).toBe(401)
+        expect(
+          (await http().post(startPath).set('Authorization', auth('token-p1')).send(startBody))
+            .status,
+        ).toBe(401)
+        const started = await signed('post', startPath, startBody)
+        expect(started.status).toBe(200)
+        expect(started.body.battle.turnOrder).toHaveLength(2 * (body.teamSize ?? 0))
+        expect(started.body.battle.combatants).toHaveLength(2 * (body.teamSize ?? 0))
+        expect(commitments.commits).toHaveLength(2 * (body.teamSize ?? 0))
+        const record = await signed('get', `${BASE_PATH}/${String(created.body.id)}/record`)
+        expect(
+          record.body.teams.flatMap((team: { participants: unknown[] }) => team.participants),
+        ).toHaveLength(2 * (body.teamSize ?? 0))
+      },
+    )
+
+    it.each([
+      [400, { mode: 'PVP' }],
+      [400, { teamSize: '3' }],
+      [400, { winnerTeamId: 'A' }],
+      [400, { roomId: 'forjada' }],
+      [
+        400,
+        {
+          teams: [
+            { teamId: 'A', memberIds: [{ kind: 'AI' }] },
+            { teamId: 'B', memberIds: ['b'] },
+          ],
+        },
+      ],
+      [
+        400,
+        {
+          teams: [
+            { teamId: 'A', memberIds: [' '] },
+            { teamId: 'B', memberIds: ['b'] },
+          ],
+        },
+      ],
+      [422, { teamSize: 0 }],
+      [422, { teamSize: 4 }],
+      [
+        422,
+        {
+          teams: [
+            { teamId: 'A', memberIds: [] },
+            { teamId: 'B', memberIds: [] },
+          ],
+        },
+      ],
+      [
+        422,
+        {
+          teams: [
+            { teamId: 'A', memberIds: ['a', 'b', 'c', 'd'] },
+            { teamId: 'B', memberIds: ['e', 'f', 'g', 'h'] },
+          ],
+        },
+      ],
+      [
+        422,
+        {
+          teams: [
+            { teamId: 'A', memberIds: ['a'] },
+            { teamId: 'B', memberIds: ['b', 'c'] },
+          ],
+        },
+      ],
+      [
+        422,
+        {
+          teams: [
+            { teamId: 'A', memberIds: ['a', 'b'] },
+            { teamId: 'B', memberIds: ['c', 'd', 'e'] },
+          ],
+        },
+      ],
+      [
+        422,
+        {
+          teams: [
+            { teamId: 'A', memberIds: ['a', 'b', 'c'] },
+            { teamId: 'B', memberIds: [' a ', 'd', 'e'] },
+          ],
+        },
+      ],
+    ] as const)(
+      'mantiene la frontera HTTP %i para %j sin consultar upstream',
+      async (status, override) => {
+        const profiles = jest.spyOn(accounts, 'getBattleProfile')
+        const inventory = jest.spyOn(heroes, 'getEquippedHero')
+        const response = await signed('post', BASE_PATH, {
+          ...tournamentRequest('TRIO', 'invalid'),
+          ...override,
+        })
+        expect(response.status).toBe(status)
+        expect(profiles).not.toHaveBeenCalled()
+        expect(inventory).not.toHaveBeenCalled()
+        profiles.mockRestore()
+        inventory.mockRestore()
+      },
+    )
+
+    it('una firma valida no permite alterar el cuerpo y el JWT no prepara salas internas', async () => {
+      const body = tournamentRequest('TRIO', 'tampered')
+      const timestamp = String(Date.now())
+      const signature = signInternalRequest(SECRET, {
+        service: 'tournament',
+        method: 'POST',
+        path: BASE_PATH,
+        timestamp,
+        body,
+      })
+      const response = await http()
+        .post(BASE_PATH)
+        .send({ ...body, teamSize: 2 })
+        .set('x-internal-service', 'tournament')
+        .set('x-internal-timestamp', timestamp)
+        .set('x-internal-signature', signature)
+      expect(response.status).toBe(401)
+      expect(
+        (await http().post(BASE_PATH).set('Authorization', auth('token-p1')).send(body)).status,
+      ).toBe(401)
+    })
+
+    it('TRIO conserva aislamiento de join/leave publicos', async () => {
+      const body = {
+        ...tournamentRequest('TRIO', 'isolated'),
+        teams: [
+          { teamId: 'A', memberIds: ['p1', 'p2', 'p3'] },
+          { teamId: 'B', memberIds: ['p4', 'p5', 'p6'] },
+        ],
+      }
+      const created = await signed('post', BASE_PATH, body)
+      expect(created.status).toBe(201)
+      const roomPath = `${ROOMS_PATH}/${String(created.body.id)}`
+      expect(
+        (await http().post(`${roomPath}/join`).set('Authorization', auth('token-p1')).send({}))
+          .status,
+      ).toBe(409)
+      expect(
+        (await http().post(`${roomPath}/leave`).set('Authorization', auth('token-p1')).send({}))
+          .status,
+      ).toBe(409)
+    })
+  })
 
   describe('POST /tournament-rooms', () => {
     it('rechaza llamadas sin firma o de un servicio no autorizado', async () => {

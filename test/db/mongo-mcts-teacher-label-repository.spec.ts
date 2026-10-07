@@ -80,7 +80,10 @@ describe('MongoMctsTeacherLabelRepository (EN-036.2 #566, correccion de alcance 
   })
 
   it('registers migration 025 after the frozen migration history', () => {
-    expect(MIGRATIONS.at(-1)?.name).toBe('025-mcts-teacher-labels')
+    expect(MIGRATIONS.slice(23, 25).map((migration) => migration.name)).toEqual([
+      '024-combat-decision-events-end-turn',
+      '025-mcts-teacher-labels',
+    ])
   })
 
   it('creates the append-only index on battleId/decisionSequence', async () => {
