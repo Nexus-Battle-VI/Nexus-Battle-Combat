@@ -18,12 +18,15 @@ export interface SelectedPolicyAction {
  * Selecciona con una primaria OPCIONAL y, solo si no hay primaria, o esta falla
  * o inventa una accion, usa el fallback.
  *
- * Hoy (EN-035/EN-036 aun sin `NeuralPolicy` entrenada) no hay primaria: se
- * construye con `primary: null` y el fallback es `RuleBasedPolicy` (Management
- * #558: "si la politica neuronal no esta disponible, falla o no produce una
- * decision utilizable -> `RuleBasedPolicy`"). El dia que exista una politica
- * entrenable real, esa sera la primaria y `RuleBasedPolicy` sigue siendo el
- * mismo fallback fijo, sin tocar esta clase.
+ * Desde EN-036.4 (#568): por defecto (`NEURAL_POLICY_ENABLED=false`) se
+ * construye con `primary: null`, exactamente como antes. Con la variable
+ * activa y un artefacto ONNX valido/con hash verificado, la primaria es
+ * `NeuralPolicy` (ver `infrastructure/ai/NeuralModelArtifactLoader.ts`). En
+ * cualquier otro caso (deshabilitada, carga fallida, schema incompatible,
+ * runtime nativo no disponible) sigue siendo `null`. El fallback SIEMPRE es
+ * `RuleBasedPolicy` (Management #558: "si la politica neuronal no esta
+ * disponible, falla o no produce una decision utilizable ->
+ * `RuleBasedPolicy`") -- esta clase no cambia segun cual sea la primaria.
  */
 export class DecisionPolicySelector {
   constructor(
