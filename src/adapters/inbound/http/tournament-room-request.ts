@@ -48,7 +48,8 @@ export const tournamentRoomCreateRequestOf = (body: unknown): CreateTournamentRo
   const mode = request.mode
 
   if (extended) {
-    if (request.contractVersion !== 3) invalid('contractVersion')
+    if (request.contractVersion !== undefined && request.contractVersion !== 3)
+      invalid('contractVersion')
     if (mode !== 'SOLO' && mode !== 'DUO' && mode !== 'TRIO') invalid('mode')
     if (typeof request.teamSize !== 'number' || !Number.isInteger(request.teamSize))
       invalid('teamSize')

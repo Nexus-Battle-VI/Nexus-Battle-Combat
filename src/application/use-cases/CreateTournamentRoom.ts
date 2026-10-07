@@ -52,7 +52,7 @@ export interface CreateTournamentRoomRequest {
  *     `requestHash` distinto -> `TournamentRoomOperationReusedError` (409).
  *  2. Si no existe: resuelve identidad (`AccountBattleProfilePort`) y heroe
  *     equipado (`PlayerInventoryEquippedHeroPort`) de CADA humano (2/4/6)
- *     jugadores humanos -- LOS MISMOS PUERTOS que `JoinBattleRoom` usa en el
+ *     -- LOS MISMOS PUERTOS que `JoinBattleRoom` usa en el
  *     flujo normal, nunca reinventados aqui. Sin heroe equipado ->
  *     `PlayerWithoutEquippedHeroError` (422), igual que al unirse por el
  *     lobby publico. La elegibilidad precombate (readiness, formato) NO se

@@ -7,13 +7,12 @@ límite global de seis minutos. El tamaño del bracket permanece en Tournament.
 ## Solicitud y respuesta
 
 Se conserva `POST /api/internal/v1/combat/tournament-rooms`, HMAC y caller
-`tournament`. La ampliación sigue la propuesta compartida
-`Nexus-Battle-Infrastructure/docs/contracts/hu-85-83-tournament-combat-v3.md`;
+`tournament`. La ampliación sigue el contrato compartido, revisión 2,
+`Nexus-Battle-Infrastructure/docs/contracts/torneos-v3.0.0.md`;
 la integración/publicación de ese contrato corresponde al chat A.
 
 ```json
 {
-  "contractVersion": 3,
   "operationId": "T1:E1",
   "tournamentId": "T1",
   "encounterId": "E1",
@@ -26,7 +25,8 @@ la integración/publicación de ese contrato corresponde al chat A.
 }
 ```
 
-Las tres propiedades `contractVersion`, `mode` y `teamSize` se envían juntas.
+`mode` y `teamSize` se envían juntos. El marcador numérico `contractVersion: 3`
+del borrador anterior es opcional y no altera la intención ni su replay.
 Los IDs son referencias opacas de texto, como en el contrato anterior. Combat
 resuelve nombres desde Account y héroes desde Player-Inventory. No acepta campos
 para escoger héroe, ganador, sala, stake, capacidad o participantes de IA. En v3
@@ -41,14 +41,14 @@ de cada Team coincide con su roster, recompensa de lobby = 0, sin stake.
 
 ## Compatibilidad e idempotencia
 
-Una petición sin las tres propiedades nuevas mantiene exactamente dos miembros
+Una petición sin las propiedades nuevas mantiene exactamente dos miembros
 por lado y la forma histórica de la respuesta. Seis miembros sin modalidad no
 se interpretan como DUO. No se infiere TRIO de la longitud.
 
 - Hash histórico: `canonicalBodyHash(cuerpo HTTP completo)`, incluida cualquier
   extensión antigua. `requestHashVersion` ausente equivale a 1. No se reescribe.
 - Hash v3: SHA-256 de la solicitud validada, con IDs sin espacios exteriores,
-  modalidad, tamaño y versión contractual. Se guarda `requestHashVersion: 2`.
+  modalidad, tamaño y versión contractual derivada (3). Se guarda `requestHashVersion: 2`.
   El orden de equipos y miembros se conserva: determina lados y asientos.
 - Mismo operationId y huella/versión devuelve la sala vigente, incluso finalizada;
   una intención distinta responde 409. Los reintentos históricos conservan su

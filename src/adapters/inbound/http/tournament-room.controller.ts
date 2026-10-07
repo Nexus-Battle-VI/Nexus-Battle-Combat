@@ -88,7 +88,7 @@ export class TournamentRoomController {
   @ApiOperation({
     summary: 'Reserva una justa SOLO/DUO/TRIO con 2/4/6 humanos',
     description:
-      'Contrato v3: contractVersion=3, mode y teamSize; sin estos campos conserva DUO historico. ' +
+      'Contrato v3: mode y teamSize (contractVersion=3 opcional); sin ellos conserva DUO historico. ' +
       'Idempotente por operationId e intencion normalizada v3 (cuerpo original historico). ' +
       'Una intencion distinta responde 409. Resuelve displayName ' +
       '(Account) y heroe equipado (Player-Inventory) de cada humano contra los ' +

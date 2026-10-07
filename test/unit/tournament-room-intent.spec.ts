@@ -109,9 +109,31 @@ describe('contrato y huella de intencion de salas de torneo', () => {
     ).toThrow(InvalidTournamentRoomRequestError)
   })
 
-  it('exige mode/teamSize/contractVersion juntos en solicitudes nuevas', () => {
+  it('exige mode/teamSize juntos en solicitudes nuevas', () => {
     expect(() => tournamentRoomCreateRequestOf({ ...legacy(), mode: 'TRIO' })).toThrow(
       InvalidTournamentRoomRequestError,
     )
   })
+
+  it.each(['SOLO', 'DUO', 'TRIO'] as const)(
+    '%s canonico sin marcador de version y el borrador con 3 comparten intencion',
+    async (mode) => {
+      const request = tournamentRequest(mode)
+      const body = {
+        operationId: request.operationId,
+        tournamentId: request.tournamentId,
+        encounterId: request.encounterId,
+        mode: request.mode,
+        teamSize: request.teamSize,
+        teams: request.teams,
+      }
+      const h = tournamentHarness(new InMemoryBattleRoomRepository())
+      const created = await h.create(body)
+      expect(created.tournament).toEqual({ contractVersion: 3, mode, teamSize: request.teamSize })
+      expect((await h.create(request)).id).toBe(created.id)
+      expect(h.accounts.getBattleProfile).toHaveBeenCalledTimes(
+        request.teams.flatMap((team) => team.memberIds).length,
+      )
+    },
+  )
 })

@@ -194,6 +194,31 @@ describe('Management#517: rutas internas de tournament-rooms', () => {
     signed('post', BASE_PATH, body)
 
   describe('extension v3 de cardinalidad', () => {
+    it.each(['SOLO', 'DUO', 'TRIO'] as const)(
+      'acepta %s canonico sin contractVersion y su replay con marcador 3',
+      async (mode) => {
+        const request = tournamentRequest(mode, `canonical-wire-${mode}`)
+        const body = {
+          operationId: request.operationId,
+          tournamentId: request.tournamentId,
+          encounterId: request.encounterId,
+          mode: request.mode,
+          teamSize: request.teamSize,
+          teams: request.teams,
+        }
+        const created = await signed('post', BASE_PATH, body)
+        expect(created.status).toBe(201)
+        expect(created.body.tournament).toEqual({
+          contractVersion: 3,
+          mode,
+          teamSize: request.teamSize,
+        })
+        const replay = await signed('post', BASE_PATH, request)
+        expect(replay.status).toBe(201)
+        expect(replay.body.id).toBe(created.body.id)
+      },
+    )
+
     it.each(['account-missing', 'inventory-unavailable', 'hero-missing'] as const)(
       'TRIO propaga %s del sexto humano sin crear sala',
       async (failure) => {
