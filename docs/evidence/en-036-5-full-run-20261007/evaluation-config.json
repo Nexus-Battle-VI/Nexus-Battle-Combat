@@ -1,1 +1,39 @@
-{"configVersion":"evaluation-config-v1","matchups":[["RANDOM","RULE_BASED"],["MCTS","RANDOM"],["MCTS","RULE_BASED"],["NEURAL","RANDOM"],["NEURAL","RULE_BASED"],["NEURAL","MCTS"]],"maxPlies":500,"mctsConfig":{"explorationConstant":1.4142135623730951,"maxDepthPlies":6,"rolloutPolicyVersion":"rule-based-v1","rollouts":128,"teacherVersion":"mcts-teacher-v1","utilityVersion":"pve-utility-v1"},"mctsSeedCount":8,"mirrorEnabled":true,"neuralArtifact":{"allowSmokeModel":true,"inferenceTimeoutMs":2000,"manifestPath":"C:\\Users\\sjose\\AppData\\Local\\Temp\\ai-training-artifacts-569\\candidate-mlp-v1-223178020ea4\\training-manifest.json","onnxPath":"C:\\Users\\sjose\\AppData\\Local\\Temp\\ai-training-artifacts-569\\candidate-mlp-v1-223178020ea4\\model.onnx"},"purpose":"FULL_EVALUATION","scenarioIds":["basic-attack-mirror","offensive-abilities","support-vs-offensive","epic-vs-offensive"],"seedCount":50,"seedStart":3000000,"skipExpensiveMcts":false,"sourceCommit":"abedfca1f7dae0bc4d6c98cac8e5200ccec97108"}
+{
+  "configVersion": "evaluation-config-v1",
+  "matchups": [
+    ["RANDOM", "RULE_BASED"],
+    ["MCTS", "RANDOM"],
+    ["MCTS", "RULE_BASED"],
+    ["NEURAL", "RANDOM"],
+    ["NEURAL", "RULE_BASED"],
+    ["NEURAL", "MCTS"]
+  ],
+  "maxPlies": 500,
+  "mctsConfig": {
+    "explorationConstant": 1.4142135623730951,
+    "maxDepthPlies": 6,
+    "rolloutPolicyVersion": "rule-based-v1",
+    "rollouts": 128,
+    "teacherVersion": "mcts-teacher-v1",
+    "utilityVersion": "pve-utility-v1"
+  },
+  "mctsSeedCount": 8,
+  "mirrorEnabled": true,
+  "neuralArtifact": {
+    "allowSmokeModel": true,
+    "inferenceTimeoutMs": 2000,
+    "manifestPath": "C:\\Users\\sjose\\AppData\\Local\\Temp\\ai-training-artifacts-569\\candidate-mlp-v1-223178020ea4\\training-manifest.json",
+    "onnxPath": "C:\\Users\\sjose\\AppData\\Local\\Temp\\ai-training-artifacts-569\\candidate-mlp-v1-223178020ea4\\model.onnx"
+  },
+  "purpose": "FULL_EVALUATION",
+  "scenarioIds": [
+    "basic-attack-mirror",
+    "offensive-abilities",
+    "support-vs-offensive",
+    "epic-vs-offensive"
+  ],
+  "seedCount": 50,
+  "seedStart": 3000000,
+  "skipExpensiveMcts": false,
+  "sourceCommit": "abedfca1f7dae0bc4d6c98cac8e5200ccec97108"
+}
