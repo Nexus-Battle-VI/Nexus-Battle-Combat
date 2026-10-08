@@ -109,7 +109,11 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
     // `evaluation/battle/AcceleratedBattleRunner.ts` resume
     // `evaluationId:matchId` a un prefijo corto de `commandId` (el motor
     // exige <= 100 caracteres, #569 §43) -- las cuatro son del harness
-    // OFFLINE de evaluacion, nunca tocan una batalla real ni su RNG
+    // OFFLINE de evaluacion, nunca tocan una batalla real ni su RNG, y
+    // `application/services/AiModelRegistry.ts` (EN-037.1, #570 §34)
+    // hashea bytes de artifact/metricas ya recibidos para comprobar su
+    // integridad contra el manifest -- verificacion criptografica, nunca
+    // una fuente de aleatoriedad ni una decision de juego.
     // productivo.
     expect(users).toEqual([
       'adapters/outbound/http/inventory-grant-operation-id.ts',
@@ -118,6 +122,7 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
       'adapters/outbound/system/HmacMissionSeedFactory.ts',
       'adapters/outbound/system/Sha256CommandIdFingerprint.ts',
       'adapters/outbound/system/UuidGenerator.ts',
+      'application/services/AiModelRegistry.ts',
       'evaluation/battle/AcceleratedBattleRunner.ts',
       'evaluation/battle/EvaluationBattleFactory.ts',
       'evaluation/canonical/CanonicalJson.ts',

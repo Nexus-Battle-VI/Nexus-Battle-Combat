@@ -2,3 +2,10 @@ dist/
 coverage/
 node_modules/
 package-lock.json
+
+# EN-037.1 (#570): fixtures REALES (bytes exactos del pipeline de #567),
+# nunca reformateadas -- `metrics.json` esta hasheado por
+# `training-manifest.json` (`metricsFileSha256`); reformatearlo rompe esa
+# verificacion de integridad en las pruebas.
+test/fixtures/ai-model-registry/metrics.json
+test/fixtures/ai-model-registry/training-manifest.json
