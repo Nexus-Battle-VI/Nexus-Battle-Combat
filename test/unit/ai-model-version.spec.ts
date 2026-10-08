@@ -5,6 +5,8 @@ import {
 } from '../../src/domain/entities/AiModelVersion'
 import { AiModelState } from '../../src/domain/value-objects/AiModelState'
 import {
+  ArtifactPurposeNotCandidateError,
+  CorruptAiModelVersionError,
   InvalidModelStateTransitionError,
   ModelSchemaIncompatibleError,
 } from '../../src/domain/errors/AiModelRegistryErrors'
@@ -27,6 +29,9 @@ const trainingLineage: AiModelTrainingLineage = {
   datasetOutputFingerprint: hex('2'),
   datasetCutoff: '2027-01-01T00:00:00Z',
   datasetSeed: 42,
+  // Deliberadamente distinto de `datasetSeed` (revision de codigo, #570):
+  // nunca se debe asumir que ambos coinciden solo porque hoy sea comodo.
+  trainingSeed: 7,
   trainingConfigSha256: hex('3'),
 }
 
@@ -36,11 +41,10 @@ const candidateArtifactLineage: AiModelArtifactLineage = {
   pytorchArtifactSha256: hex('6'),
   metricsFileSha256: hex('7'),
   artifactPurpose: 'CANDIDATE',
-}
-
-const smokeArtifactLineage: AiModelArtifactLineage = {
-  ...candidateArtifactLineage,
-  artifactPurpose: 'SMOKE_TEST',
+  trainingManifestSha256: hex('8'),
+  trainingConfig: { trainingSeed: 7 },
+  datasetCounts: { battles: 4 },
+  metrics: { testLoss: 0.1 },
 }
 
 describe('AiModelVersion (EN-037.1, Management #570 §9-19, §49-58)', () => {
@@ -177,14 +181,24 @@ describe('AiModelVersion (EN-037.1, Management #570 §9-19, §49-58)', () => {
     ])
   })
 
-  it('#570 §19, §37, §88: SMOKE_TEST puede llegar a CANDIDATE/EVALUATING pero NUNCA a ACTIVE', () => {
-    const evaluatingSmoke = AiModelVersion.startTraining(trainingLineage, AT)
-      .registerCandidate(smokeArtifactLineage, AT)
-      .beginEvaluation(AT)
+  it('revision de codigo (#570): SMOKE_TEST NUNCA puede registrarse como CANDIDATE', () => {
+    const training = AiModelVersion.startTraining(trainingLineage, AT)
+    const smokeArtifactLineage: AiModelArtifactLineage = {
+      ...candidateArtifactLineage,
+      artifactPurpose: 'SMOKE_TEST',
+    }
 
-    expect(evaluatingSmoke.state).toBe(AiModelState.Evaluating)
-    expect(evaluatingSmoke.artifactLineage?.artifactPurpose).toBe('SMOKE_TEST')
-    expect(() => evaluatingSmoke.activate(LATER)).toThrow(ModelSchemaIncompatibleError)
+    expect(() => training.registerCandidate(smokeArtifactLineage, AT)).toThrow(
+      ArtifactPurposeNotCandidateError,
+    )
+    // El training permanece intacto (nunca una CANDIDATE a medias).
+    expect(training.state).toBe(AiModelState.Training)
+  })
+
+  it('revision de codigo (#570 §17): "modelVersion" distinto de "trainingRunId" se rechaza', () => {
+    expect(() =>
+      AiModelVersion.startTraining({ ...trainingLineage, trainingRunId: 'otro-run-id' }, AT),
+    ).toThrow(TypeError)
   })
 
   it('activate() sin artifact lineage se rechaza siempre (defensa en profundidad)', () => {
@@ -206,5 +220,155 @@ describe('AiModelVersion (EN-037.1, Management #570 §9-19, §49-58)', () => {
     })
 
     expect(() => evaluatingWithoutArtifact.activate(LATER)).toThrow(ModelSchemaIncompatibleError)
+  })
+
+  describe('restore() revalida invariantes semanticas ante corrupcion (#570 §34, revision de codigo)', () => {
+    const validHistory = [
+      { from: null, to: AiModelState.Training, at: AT },
+      { from: AiModelState.Training, to: AiModelState.Candidate, at: AT },
+      { from: AiModelState.Candidate, to: AiModelState.Evaluating, at: AT },
+    ]
+
+    it('rechaza modelVersion !== trainingRunId', () => {
+      expect(() =>
+        AiModelVersion.restore({
+          trainingLineage: { ...trainingLineage, modelVersion: 'otro' },
+          artifactLineage: null,
+          state: AiModelState.Training,
+          revision: 0,
+          createdAt: AT,
+          updatedAt: AT,
+          stateHistory: [{ from: null, to: AiModelState.Training, at: AT }],
+          rejection: null,
+        }),
+      ).toThrow(CorruptAiModelVersionError)
+    })
+
+    it('rechaza una revision negativa', () => {
+      expect(() =>
+        AiModelVersion.restore({
+          trainingLineage,
+          artifactLineage: null,
+          state: AiModelState.Training,
+          revision: -1,
+          createdAt: AT,
+          updatedAt: AT,
+          stateHistory: [{ from: null, to: AiModelState.Training, at: AT }],
+          rejection: null,
+        }),
+      ).toThrow(CorruptAiModelVersionError)
+    })
+
+    it('rechaza un stateHistory cuyo ultimo "to" no coincide con "state"', () => {
+      expect(() =>
+        AiModelVersion.restore({
+          trainingLineage,
+          artifactLineage: null,
+          state: AiModelState.Evaluating,
+          revision: 2,
+          createdAt: AT,
+          updatedAt: AT,
+          stateHistory: validHistory,
+          rejection: null,
+        }),
+      ).not.toThrow()
+
+      expect(() =>
+        AiModelVersion.restore({
+          trainingLineage,
+          artifactLineage: null,
+          state: AiModelState.Candidate,
+          revision: 2,
+          createdAt: AT,
+          updatedAt: AT,
+          stateHistory: validHistory,
+          rejection: null,
+        }),
+      ).toThrow(CorruptAiModelVersionError)
+    })
+
+    it('rechaza una transicion invalida dentro del historial (p. ej. TRAINING -> ACTIVE directo)', () => {
+      expect(() =>
+        AiModelVersion.restore({
+          trainingLineage,
+          artifactLineage: candidateArtifactLineage,
+          state: AiModelState.Active,
+          revision: 1,
+          createdAt: AT,
+          updatedAt: AT,
+          stateHistory: [
+            { from: null, to: AiModelState.Training, at: AT },
+            { from: AiModelState.Training, to: AiModelState.Active, at: AT },
+          ],
+          rejection: null,
+        }),
+      ).toThrow(CorruptAiModelVersionError)
+    })
+
+    it('rechaza ACTIVE sin artifact lineage', () => {
+      expect(() =>
+        AiModelVersion.restore({
+          trainingLineage,
+          artifactLineage: null,
+          state: AiModelState.Active,
+          revision: 3,
+          createdAt: AT,
+          updatedAt: AT,
+          stateHistory: [
+            ...validHistory,
+            { from: AiModelState.Evaluating, to: AiModelState.Active, at: AT },
+          ],
+          rejection: null,
+        }),
+      ).toThrow(CorruptAiModelVersionError)
+    })
+
+    it('rechaza un artifactLineage con artifactPurpose distinto de CANDIDATE', () => {
+      expect(() =>
+        AiModelVersion.restore({
+          trainingLineage,
+          artifactLineage: { ...candidateArtifactLineage, artifactPurpose: 'SMOKE_TEST' },
+          state: AiModelState.Candidate,
+          revision: 1,
+          createdAt: AT,
+          updatedAt: AT,
+          stateHistory: validHistory.slice(0, 2),
+          rejection: null,
+        }),
+      ).toThrow(CorruptAiModelVersionError)
+    })
+
+    it('rechaza REJECTED sin informacion de rechazo', () => {
+      expect(() =>
+        AiModelVersion.restore({
+          trainingLineage,
+          artifactLineage: null,
+          state: AiModelState.Rejected,
+          revision: 1,
+          createdAt: AT,
+          updatedAt: AT,
+          stateHistory: [
+            { from: null, to: AiModelState.Training, at: AT },
+            { from: AiModelState.Training, to: AiModelState.Rejected, at: AT },
+          ],
+          rejection: null,
+        }),
+      ).toThrow(CorruptAiModelVersionError)
+    })
+
+    it('rechaza un estado no terminal con informacion de rechazo presente', () => {
+      expect(() =>
+        AiModelVersion.restore({
+          trainingLineage,
+          artifactLineage: null,
+          state: AiModelState.Training,
+          revision: 0,
+          createdAt: AT,
+          updatedAt: AT,
+          stateHistory: [{ from: null, to: AiModelState.Training, at: AT }],
+          rejection: { reasonCode: 'TRAINING_FAILED', reason: 'x', rejectedAt: AT },
+        }),
+      ).toThrow(CorruptAiModelVersionError)
+    })
   })
 })

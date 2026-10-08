@@ -127,18 +127,94 @@ trabajo vive en un solo sitio.
 real detras de un entrenamiento. El registry nunca infiere
 `modelIsTrusted = true` a partir de `artifactPurpose === 'CANDIDATE'`.
 
-`registerCandidate()` acepta **ambos** valores por igual — el mismo
-artefacto `SMOKE_TEST` que ya produce CI (`candidate-mlp-v1-smoke`,
-reutilizado tambien por `#568`/`#569`) debe poder ejercitar honestamente el
-almacenamiento/hash/registro real sin falsearse como `CANDIDATE`. El
-bloqueo DURO ocurre exclusivamente en `activate()` (a nivel de dominio Y de
-servicio, defensa en profundidad): un `artifactPurpose=SMOKE_TEST` **nunca**
-puede llegar a `ACTIVE`, sin importar que su hash/esquema/ONNX sean
-validos. Probado en
+**Revision de codigo tras la primera version de este PR**: `registerCandidate()`
+exige `artifactPurpose === 'CANDIDATE'` — un `SMOKE_TEST` **nunca** entra al
+ciclo de vida productivo, ni siquiera como `CANDIDATE`/`EVALUATING` (la
+version anterior de este documento decia que SMOKE_TEST podia llegar hasta
+ahi y se bloqueaba solo en `activate()`; eso dejaba un `CANDIDATE`/
+`EVALUATING` falso en el historial, con significado de lifecycle
+equivocado). El rechazo ocurre en `assertArtifactLineage` (dominio,
+`AiModelVersion.registerCandidate`) y se revalida en cada reconstruccion
+(`assertRestoredInvariants`, constructor) — nunca solo en `activate()`.
+
+El artefacto `SMOKE_TEST` real que ya produce CI
+(`candidate-mlp-v1-smoke`, reutilizado tambien por `#568`/`#569`) sigue
+pudiendo ejercitar honestamente almacenamiento/hash/roundtrip —
+directamente contra `AiModelArtifactRepositoryPort.put`/`getBySha256`, sin
+pasar por el registry ni falsear su proposito. Probado en
 [`ai-model-version.spec.ts`](../test/unit/ai-model-version.spec.ts),
 [`ai-model-registry.spec.ts`](../test/unit/ai-model-registry.spec.ts) y
 contra Mongo real en
 [`mongo-ai-model-registry.spec.ts`](../test/db/mongo-ai-model-registry.spec.ts).
+
+## Binding manifest ↔ training lineage (revision de codigo)
+
+Un hallazgo de revision identifico que `registerCandidate()` solo
+comprobaba los hashes de `model.onnx`/`metrics.json` contra el manifest,
+pero NUNCA comprobaba que el manifest perteneciera REALMENTE al
+`AiModelVersion` en `TRAINING` que lo recibe. Eso permitiria,
+conceptualmente, registrar el artifact lineage del training B sobre el
+training lineage del training A, siempre que los bytes de ONNX/metricas
+coincidieran con SUS PROPIOS hashes declarados — rompiendo exactamente la
+trazabilidad que es el proposito central de `#570`.
+
+`AiModelRegistry.registerCandidate()` ahora compara, fail-closed, estos
+campos del manifest contra `current.trainingLineage` ANTES de persistir
+nada (`assertManifestMatchesTrainingLineage`):
+`modelArchitectureVersion`, `featureSchemaVersion`, `teacherVersion`,
+`utilityVersion`, `trainingSourceCommit`, `datasetSourceCommit`,
+`datasetInputFingerprint`, `datasetOutputFingerprint`, `datasetCutoff`,
+`datasetSeed`, `trainingConfigSha256` y `trainingSeed`. Cualquier
+discrepancia lanza `ModelTrainingLineageMismatchError` y el training
+permanece intacto en `TRAINING` (nunca una `CANDIDATE` a medias). Probado
+con un fixture real en
+[`mongo-ai-model-registry.spec.ts`](../test/db/mongo-ai-model-registry.spec.ts)
+(`training A + manifest alterado -> reject`).
+
+## `trainingSeed` y metadata reproducible (revision de codigo)
+
+`datasetSeed` y `trainingSeed` son conceptos distintos que la primera
+version de este PR confundia implicitamente: `datasetSeed` gobierna el
+split/build del dataset; `trainingSeed` (`TrainingConfig.trainingSeed` en
+`ai/src/nexus_combat_ai`) gobierna la inicializacion de
+PyTorch/DataLoader/entrenamiento. Que hoy ambos valgan 42 en el fixture
+sintetico es una coincidencia, nunca una garantia.
+
+`AiModelTrainingLineage` ahora persiste `trainingSeed` explicitamente
+(extraido de `trainingConfig.trainingSeed`, validado como parte del
+binding de arriba). Ademas, `metrics.json` ya NO se descarta tras
+hashearlo: `AiModelArtifactLineage` persiste su contenido parseado
+(`metrics`), junto con `trainingConfig` y `datasetCounts` (opacos, igual
+criterio que `CombatEpic.baseEffect`: el registry nunca interpreta su
+contenido salvo para extraer `trainingSeed`, solo lo persiste para
+auditoria) y `trainingManifestSha256` (el SHA-256 real de
+`training-manifest.json` completo, para demostrar que la metadata
+registrada corresponde exactamente al manifest real recibido). No se
+persiste `model.pt`: el runtime solo necesita `model.onnx` (`#567`/`#568`).
+
+## `restore()` revalida invariantes semanticas (revision de codigo)
+
+La version anterior de `AiModelVersion.restore()` confiaba en que Mongo ya
+habia garantizado todas las invariantes de la maquina de estados. Pero el
+validador `$jsonSchema` de Mongo solo protege la FORMA estructural
+(tipos, enums, campos requeridos) — nunca la coherencia semantica entre
+`state`/`stateHistory`/`artifactLineage`/`rejection` (por ejemplo, nada en
+el validador impedia estructuralmente un documento `state: 'ACTIVE'` con
+`artifactLineage: null`, o un `stateHistory` cuyo ultimo elemento no
+coincidiera con `state`).
+
+Toda construccion de `AiModelVersion` (desde `startTraining`, `restore`, o
+cualquier transicion interna) ahora pasa por
+`assertRestoredInvariants` en el constructor privado, que comprueba:
+`modelVersion === trainingRunId`; `revision` entero no negativo;
+`stateHistory` no vacio, empieza en `TRAINING`, es una cadena continua
+(`entry.from === previous.to`) y cada paso es una transicion permitida por
+`isAllowedAiModelStateTransition`; el ultimo `stateHistory.to` coincide
+con `state`; `artifactLineage` no nulo siempre tiene
+`artifactPurpose=CANDIDATE`; `ACTIVE` exige artifact lineage; `REJECTED`
+exige informacion de rechazo y ningun otro estado la admite. El validador
+de Mongo sigue siendo defensa en profundidad adicional, nunca la unica
+autoridad de la maquina de estados.
 
 ## Decision de almacenamiento: BSON Binary, no GridFS
 

@@ -5,6 +5,8 @@ import {
 } from '../value-objects/AiModelState'
 import { assertSha256Hex } from '../value-objects/Sha256Hex'
 import {
+  ArtifactPurposeNotCandidateError,
+  CorruptAiModelVersionError,
   InvalidModelStateTransitionError,
   ModelSchemaIncompatibleError,
 } from '../errors/AiModelRegistryErrors'
@@ -49,6 +51,14 @@ export interface AiModelTrainingLineage {
   readonly datasetOutputFingerprint: string
   readonly datasetCutoff: string
   readonly datasetSeed: number
+  /**
+   * Distinto de `datasetSeed` (revision de codigo, #570): `datasetSeed`
+   * gobierna el split/build del dataset; `trainingSeed` gobierna la
+   * inicializacion de PyTorch/DataLoader/entrenamiento
+   * (`TrainingConfig.trainingSeed` en `ai/src/nexus_combat_ai`). Nunca se
+   * asume que coinciden solo porque hoy ambos valgan 42.
+   */
+  readonly trainingSeed: number
   readonly trainingConfigSha256: string
 }
 
@@ -61,6 +71,13 @@ export interface AiModelArtifactLineage {
   readonly pytorchArtifactSha256: string
   readonly metricsFileSha256: string
   readonly artifactPurpose: AiModelArtifactPurpose
+  /** SHA-256 del `training-manifest.json` completo (revision #570): prueba que la metadata registrada corresponde exactamente al manifest real. */
+  readonly trainingManifestSha256: string
+  /** Opaco (igual criterio que `CombatEpic.baseEffect`): el registry nunca interpreta su contenido, solo lo persiste para auditoria/reproducibilidad. */
+  readonly trainingConfig: Readonly<Record<string, unknown>>
+  readonly datasetCounts: Readonly<Record<string, unknown>>
+  /** Contenido parseado de `metrics.json` (revision #570): antes solo se hasheaba y se descartaba; ahora se persiste para reproducibilidad real. */
+  readonly metrics: Readonly<Record<string, unknown>>
 }
 
 export interface AiModelStateHistoryEntry {
@@ -97,9 +114,18 @@ const assertTrainingLineage = (lineage: AiModelTrainingLineage): AiModelTraining
   if (lineage.trainingRunId.trim().length === 0) {
     throw new TypeError('"trainingRunId" no puede estar vacio.')
   }
+  // (#570, revision de codigo): la documentacion y #570 §17 afirman que
+  // `modelVersion` reutiliza DIRECTAMENTE `trainingRunId` -- el codigo debe
+  // hacerlo cumplir, nunca solo documentarlo.
+  if (lineage.modelVersion !== lineage.trainingRunId) {
+    throw new TypeError('"modelVersion" debe reutilizar directamente "trainingRunId" (#570 §17).')
+  }
   assertSha256Hex(lineage.trainingConfigSha256, 'trainingConfigSha256')
   if (!Number.isInteger(lineage.datasetSeed) || lineage.datasetSeed < 0) {
     throw new TypeError('"datasetSeed" debe ser un entero no negativo.')
+  }
+  if (!Number.isInteger(lineage.trainingSeed) || lineage.trainingSeed < 0) {
+    throw new TypeError('"trainingSeed" debe ser un entero no negativo.')
   }
   return lineage
 }
@@ -111,6 +137,12 @@ const assertTrainingLineage = (lineage: AiModelTrainingLineage): AiModelTraining
  * tipo estatico: `AiModelRegistry.registerCandidate` lo construye con un
  * `as AiModelArtifactPurpose` sobre un valor que YA viene de fuera
  * (manifest), y esta es la ultima defensa si ese cast fuera incorrecto.
+ *
+ * (#570, revision de codigo): `registerCandidate` exige
+ * `artifactPurpose === 'CANDIDATE'` -- SMOKE_TEST NUNCA entra al ciclo de
+ * vida productivo (ni CANDIDATE ni EVALUATING), no solo se bloquea en
+ * `activate()`. El artifact store de SMOKE_TEST se prueba directamente
+ * contra `AiModelArtifactRepositoryPort`, sin pasar por el registry.
  */
 const assertArtifactLineage = (
   lineage: Omit<AiModelArtifactLineage, 'artifactPurpose'> & { readonly artifactPurpose: string },
@@ -119,16 +151,73 @@ const assertArtifactLineage = (
   assertSha256Hex(lineage.onnxArtifactSha256, 'onnxArtifactSha256')
   assertSha256Hex(lineage.pytorchArtifactSha256, 'pytorchArtifactSha256')
   assertSha256Hex(lineage.metricsFileSha256, 'metricsFileSha256')
-  if (lineage.artifactPurpose !== 'SMOKE_TEST' && lineage.artifactPurpose !== 'CANDIDATE') {
-    throw new TypeError(
-      `"artifactPurpose" = "${lineage.artifactPurpose}" no es un valor reconocido.`,
-    )
+  assertSha256Hex(lineage.trainingManifestSha256, 'trainingManifestSha256')
+  if (lineage.artifactPurpose !== 'CANDIDATE') {
+    throw new ArtifactPurposeNotCandidateError(lineage.artifactPurpose)
   }
   return { ...lineage, artifactPurpose: lineage.artifactPurpose }
 }
 
+/**
+ * Invariantes semanticas que el validador `$jsonSchema` de Mongo NO puede
+ * expresar (solo comprueba forma estructural, #570 revision de codigo):
+ * se comprueban en CADA construccion (desde `startTraining`, `restore`, o
+ * una transicion interna), nunca solo "se confia en que Mongo lo
+ * garantizo al escribir". El validador de Mongo sigue siendo defensa en
+ * profundidad adicional, no la unica autoridad de la maquina de estados.
+ */
+const assertRestoredInvariants = (props: AiModelVersionProps): void => {
+  if (props.trainingLineage.modelVersion !== props.trainingLineage.trainingRunId) {
+    throw new CorruptAiModelVersionError('"modelVersion" no coincide con "trainingRunId".')
+  }
+  if (!Number.isInteger(props.revision) || props.revision < 0) {
+    throw new CorruptAiModelVersionError('"revision" debe ser un entero no negativo.')
+  }
+  const [first, ...rest] = props.stateHistory
+  if (first === undefined) {
+    throw new CorruptAiModelVersionError('"stateHistory" no puede estar vacio.')
+  }
+  if (first.from !== null || first.to !== AiModelState.Training) {
+    throw new CorruptAiModelVersionError('"stateHistory" debe empezar en TRAINING.')
+  }
+
+  let previous = first
+  for (const entry of rest) {
+    if (entry.from !== previous.to) {
+      throw new CorruptAiModelVersionError('"stateHistory" no es una cadena continua.')
+    }
+    if (!isAllowedAiModelStateTransition(previous.to, entry.to)) {
+      throw new CorruptAiModelVersionError(
+        `"stateHistory" contiene una transicion invalida: "${previous.to}" -> "${entry.to}".`,
+      )
+    }
+    previous = entry
+  }
+
+  if (previous.to !== props.state) {
+    throw new CorruptAiModelVersionError('el ultimo "stateHistory" no coincide con "state".')
+  }
+
+  if (props.artifactLineage !== null && props.artifactLineage.artifactPurpose !== 'CANDIDATE') {
+    throw new CorruptAiModelVersionError('"artifactLineage.artifactPurpose" distinto de CANDIDATE.')
+  }
+  if (props.state === AiModelState.Active && props.artifactLineage === null) {
+    throw new CorruptAiModelVersionError('"ACTIVE" exige artifact lineage.')
+  }
+
+  if (props.state === AiModelState.Rejected) {
+    if (props.rejection === null) {
+      throw new CorruptAiModelVersionError('"REJECTED" exige informacion de rechazo.')
+    }
+  } else if (props.rejection !== null) {
+    throw new CorruptAiModelVersionError(`"${props.state}" no admite informacion de rechazo.`)
+  }
+}
+
 export class AiModelVersion {
-  private constructor(private readonly props: AiModelVersionProps) {}
+  private constructor(private readonly props: AiModelVersionProps) {
+    assertRestoredInvariants(props)
+  }
 
   /** Crea la version en `TRAINING` (#570 §9, §53): revision 0, sin artifact lineage todavia. */
   static startTraining(trainingLineage: AiModelTrainingLineage, at: Date): AiModelVersion {
@@ -145,7 +234,13 @@ export class AiModelVersion {
     })
   }
 
-  /** Reconstruccion desde persistencia (#570 §90): nunca revalida invariantes ya garantizadas al escribir. */
+  /**
+   * Reconstruccion desde persistencia (#570 §90). El validador `$jsonSchema`
+   * de Mongo solo protege la forma estructural -- esta reconstruccion SI
+   * revalida las invariantes semanticas de la maquina de estados
+   * (`assertRestoredInvariants`, en el constructor) ante corrupcion o
+   * manipulacion directa de la coleccion (#570 §34, revision de codigo).
+   */
   static restore(props: AiModelVersionProps): AiModelVersion {
     return new AiModelVersion(props)
   }
@@ -228,10 +323,14 @@ export class AiModelVersion {
 
   /**
    * `EVALUATING -> ACTIVE` (#570 §14, §55): la PRIMITIVA SEGURA, nunca la
-   * decision de activar. Defensa en profundidad incluso si el caller (una
-   * futura `#572`) se equivocara: jamas permite activar sin artifact
-   * lineage, ni un `artifactPurpose=SMOKE_TEST` (#570 §19, §37, §88) --
-   * esto NO es un gate de calidad, es una invariante de integridad.
+   * decision de activar. Defensa en profundidad: jamas permite activar sin
+   * artifact lineage -- esto NO es un gate de calidad, es una invariante
+   * de integridad. (#570, revision de codigo): el bloqueo de
+   * `artifactPurpose=SMOKE_TEST` ya no vive aqui -- `registerCandidate`
+   * exige CANDIDATE desde el principio (`assertArtifactLineage`) y
+   * `assertRestoredInvariants` (constructor) vuelve a comprobarlo en cada
+   * reconstruccion, asi que un `artifactLineage` no nulo SIEMPRE tiene
+   * `artifactPurpose=CANDIDATE` por construccion.
    */
   activate(at: Date): AiModelVersion {
     if (!isAllowedAiModelStateTransition(this.props.state, AiModelState.Active)) {
@@ -240,11 +339,6 @@ export class AiModelVersion {
     if (this.props.artifactLineage === null) {
       throw new ModelSchemaIncompatibleError(
         'no se puede activar sin artifact lineage (CANDIDATE).',
-      )
-    }
-    if (this.props.artifactLineage.artifactPurpose !== 'CANDIDATE') {
-      throw new ModelSchemaIncompatibleError(
-        `artifactPurpose="${this.props.artifactLineage.artifactPurpose}" nunca puede llegar a ACTIVE.`,
       )
     }
     return this.transitionTo(AiModelState.Active, at)

@@ -11,6 +11,8 @@ import type { ClockPort } from '../../src/application/ports/ClockPort'
 import type { AiModelTrainingLineage } from '../../src/domain/entities/AiModelVersion'
 import {
   ActiveModelConflictError,
+  ArtifactPurposeNotCandidateError,
+  ModelTrainingLineageMismatchError,
   ModelVersionConflictError,
 } from '../../src/domain/errors/AiModelRegistryErrors'
 import {
@@ -35,18 +37,25 @@ const fixedClock = (): ClockPort => ({ now: () => AT })
 const FIXTURE_DIR = join(__dirname, '../fixtures/ai-model-registry')
 const realOnnxBytes = readFileSync(join(FIXTURE_DIR, 'model.onnx'))
 const realMetricsBytes = readFileSync(join(FIXTURE_DIR, 'metrics.json'))
+const realManifestBytes = readFileSync(join(FIXTURE_DIR, 'training-manifest.json'))
 const realManifest = parseAndValidateModelTrainingManifest(
-  JSON.parse(readFileSync(join(FIXTURE_DIR, 'training-manifest.json'), 'utf8')),
+  JSON.parse(realManifestBytes.toString('utf8')),
 )
+const realTrainingSeed = realManifest.trainingConfig.trainingSeed as number
 
+/**
+ * El fixture real de `#567` trae `artifactPurpose=SMOKE_TEST` (es honesto:
+ * un dataset sintetico de CI, #570 §117-119) -- desde la revision de
+ * codigo de este PR, `registerCandidate` exige CANDIDATE, asi que CADA
+ * prueba que registra un candidate exitosamente debe sobreescribirlo
+ * explicitamente. La UNICA prueba que usa el valor real sin tocar es la
+ * que demuestra que SMOKE_TEST se rechaza.
+ */
 const candidateManifest = (
   overrides: Partial<CandidateArtifactManifest> = {},
 ): CandidateArtifactManifest => ({
-  modelStateSha256: realManifest.modelStateSha256,
-  onnxArtifactSha256: realManifest.onnxArtifactSha256,
-  pytorchArtifactSha256: realManifest.pytorchArtifactSha256,
-  metricsFileSha256: realManifest.metricsFileSha256,
-  artifactPurpose: realManifest.artifactPurpose,
+  ...realManifest,
+  artifactPurpose: 'CANDIDATE',
   ...overrides,
 })
 
@@ -63,6 +72,7 @@ const trainingLineage = (modelVersion: string): AiModelTrainingLineage => ({
   datasetOutputFingerprint: realManifest.datasetOutputFingerprint,
   datasetCutoff: realManifest.datasetCutoff,
   datasetSeed: realManifest.datasetSeed,
+  trainingSeed: realTrainingSeed,
   trainingConfigSha256: realManifest.trainingConfigSha256,
 })
 
@@ -147,13 +157,19 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
     const candidate = await registry.registerCandidate({
       modelVersion: 'real-fixture-1',
       manifest: candidateManifest(),
+      manifestBytes: realManifestBytes,
       onnxBytes: realOnnxBytes,
       metricsBytes: realMetricsBytes,
     })
 
     expect(candidate.state).toBe('CANDIDATE')
     expect(candidate.artifactLineage?.onnxArtifactSha256).toBe(realManifest.onnxArtifactSha256)
-    expect(candidate.artifactLineage?.artifactPurpose).toBe('SMOKE_TEST')
+    expect(candidate.artifactLineage?.artifactPurpose).toBe('CANDIDATE')
+    expect(candidate.artifactLineage?.metrics).toEqual(
+      JSON.parse(realMetricsBytes.toString('utf8')),
+    )
+    expect(candidate.artifactLineage?.trainingConfig).toEqual(realManifest.trainingConfig)
+    expect(candidate.artifactLineage?.trainingManifestSha256).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('a byte-corrupted ONNX never reaches CANDIDATE (hash mismatch, rejected before any state change)', async () => {
@@ -166,6 +182,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
       registry.registerCandidate({
         modelVersion: 'corrupt-onnx',
         manifest: candidateManifest(),
+        manifestBytes: realManifestBytes,
         onnxBytes: corrupted,
         metricsBytes: realMetricsBytes,
       }),
@@ -184,6 +201,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
       registry.registerCandidate({
         modelVersion: 'corrupt-metrics',
         manifest: candidateManifest(),
+        manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: corrupted,
       }),
@@ -194,31 +212,59 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
   })
 
   it('a feature-schema-incompatible manifest is rejected at the parsing boundary, never reaches CANDIDATE', () => {
-    const raw = JSON.parse(
-      readFileSync(join(FIXTURE_DIR, 'training-manifest.json'), 'utf8'),
-    ) as Record<string, unknown>
+    const raw = JSON.parse(realManifestBytes.toString('utf8')) as Record<string, unknown>
 
     expect(() =>
       parseAndValidateModelTrainingManifest({ ...raw, featureSchemaVersion: 'v999' }),
     ).toThrow()
   })
 
-  it('SMOKE_TEST reaches CANDIDATE/EVALUATING honestly but NEVER ACTIVE (#570 §19, §37, §88, §117-119)', async () => {
+  it('SMOKE_TEST is rejected at registerCandidate, never reaches CANDIDATE (revision de codigo, #570 §19, §37, §88, §117-119)', async () => {
     const registry = newRegistry()
-    await registry.startTraining(trainingLineage('smoke-never-active'))
-    await registry.registerCandidate({
-      modelVersion: 'smoke-never-active',
-      manifest: candidateManifest(),
-      onnxBytes: realOnnxBytes,
-      metricsBytes: realMetricsBytes,
-    })
-    const evaluating = await registry.beginEvaluation('smoke-never-active')
-    expect(evaluating.artifactLineage?.artifactPurpose).toBe('SMOKE_TEST')
+    await registry.startTraining(trainingLineage('smoke-never-candidate'))
 
-    await expect(registry.activate('smoke-never-active')).rejects.toThrow(/SMOKE_TEST/)
+    // Manifest REAL, SIN sobreescribir artifactPurpose: el fixture de CI es
+    // honestamente SMOKE_TEST.
+    await expect(
+      registry.registerCandidate({
+        modelVersion: 'smoke-never-candidate',
+        manifest: candidateManifest({ artifactPurpose: realManifest.artifactPurpose }),
+        manifestBytes: realManifestBytes,
+        onnxBytes: realOnnxBytes,
+        metricsBytes: realMetricsBytes,
+      }),
+    ).rejects.toBeInstanceOf(ArtifactPurposeNotCandidateError)
 
-    const stillNotActive = await registry.findByVersion('smoke-never-active')
-    expect(stillNotActive?.state).toBe('EVALUATING')
+    const stillTraining = await registry.findByVersion('smoke-never-candidate')
+    expect(stillTraining?.state).toBe('TRAINING')
+  })
+
+  it('a manifest that does not belong to the registered training lineage is rejected (lineage binding)', async () => {
+    const registry = newRegistry()
+    await registry.startTraining(trainingLineage('lineage-binding'))
+
+    await expect(
+      registry.registerCandidate({
+        modelVersion: 'lineage-binding',
+        manifest: candidateManifest({ datasetSourceCommit: 'un-commit-de-otro-training-run' }),
+        manifestBytes: realManifestBytes,
+        onnxBytes: realOnnxBytes,
+        metricsBytes: realMetricsBytes,
+      }),
+    ).rejects.toBeInstanceOf(ModelTrainingLineageMismatchError)
+
+    const stillTraining = await registry.findByVersion('lineage-binding')
+    expect(stillTraining?.state).toBe('TRAINING')
+  })
+
+  it('the artifact store itself can still exercise a REAL SMOKE_TEST artifact directly, without the registry lifecycle', async () => {
+    const artifactRepository = new MongoAiModelArtifactRepository(db!)
+
+    await artifactRepository.put(realManifest.onnxArtifactSha256, realOnnxBytes, AT)
+    const roundTripped = await artifactRepository.getBySha256(realManifest.onnxArtifactSha256)
+
+    expect(roundTripped).not.toBeNull()
+    expect(Buffer.compare(roundTripped!.bytes, realOnnxBytes)).toBe(0)
   })
 
   it('exactly one of two concurrent activate() calls wins the REAL Mongo partial unique ACTIVE index', async () => {
@@ -227,7 +273,8 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
       await registry.startTraining(trainingLineage(modelVersion))
       await registry.registerCandidate({
         modelVersion,
-        manifest: candidateManifest({ artifactPurpose: 'CANDIDATE' }),
+        manifest: candidateManifest(),
+        manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: realMetricsBytes,
       })
@@ -255,6 +302,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
     await firstProcessRegistry.registerCandidate({
       modelVersion: 'restart-check',
       manifest: candidateManifest(),
+      manifestBytes: realManifestBytes,
       onnxBytes: realOnnxBytes,
       metricsBytes: realMetricsBytes,
     })
@@ -309,6 +357,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
     const candidate = await registry.registerCandidate({
       modelVersion: 'revision-race',
       manifest: candidateManifest(),
+      manifestBytes: realManifestBytes,
       onnxBytes: realOnnxBytes,
       metricsBytes: realMetricsBytes,
     })
@@ -352,6 +401,36 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         },
         artifactLineage: null,
         stateHistory: [{ from: null, to: 'TRAINING', at: AT }],
+        rejection: null,
+        createdAt: AT,
+        updatedAt: AT,
+      } as never),
+    ).rejects.toMatchObject({ code: 121 })
+  })
+
+  it('a direct insert with an artifactPurpose other than CANDIDATE on a non-null artifactLineage is rejected by the Mongo validator', async () => {
+    await expect(
+      db!.collection(AI_MODEL_VERSIONS_COLLECTION).insertOne({
+        _id: 'direct-insert-bad-purpose',
+        schemaVersion: 1,
+        state: 'CANDIDATE',
+        revision: 1,
+        trainingLineage: trainingLineage('direct-insert-bad-purpose'),
+        artifactLineage: {
+          modelStateSha256: realManifest.modelStateSha256,
+          onnxArtifactSha256: realManifest.onnxArtifactSha256,
+          pytorchArtifactSha256: realManifest.pytorchArtifactSha256,
+          metricsFileSha256: realManifest.metricsFileSha256,
+          artifactPurpose: 'SMOKE_TEST',
+          trainingManifestSha256: realManifest.onnxArtifactSha256,
+          trainingConfig: {},
+          datasetCounts: {},
+          metrics: {},
+        },
+        stateHistory: [
+          { from: null, to: 'TRAINING', at: AT },
+          { from: 'TRAINING', to: 'CANDIDATE', at: AT },
+        ],
         rejection: null,
         createdAt: AT,
         updatedAt: AT,

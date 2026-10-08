@@ -23,6 +23,7 @@ const trainingLineageSchema = {
     'datasetOutputFingerprint',
     'datasetCutoff',
     'datasetSeed',
+    'trainingSeed',
     'trainingConfigSha256',
   ],
   properties: {
@@ -38,6 +39,9 @@ const trainingLineageSchema = {
     datasetOutputFingerprint: sha256HexSchema,
     datasetCutoff: textSchema,
     datasetSeed: nonNegativeIntSchema,
+    // Distinto de `datasetSeed` (revision de codigo, #570): gobierna
+    // PyTorch/DataLoader/entrenamiento, nunca el split/build del dataset.
+    trainingSeed: nonNegativeIntSchema,
     trainingConfigSha256: sha256HexSchema,
   },
 } as const
@@ -54,13 +58,27 @@ const artifactLineageSchema = {
         'pytorchArtifactSha256',
         'metricsFileSha256',
         'artifactPurpose',
+        'trainingManifestSha256',
+        'trainingConfig',
+        'datasetCounts',
+        'metrics',
       ],
       properties: {
         modelStateSha256: sha256HexSchema,
         onnxArtifactSha256: sha256HexSchema,
         pytorchArtifactSha256: sha256HexSchema,
         metricsFileSha256: sha256HexSchema,
-        artifactPurpose: { bsonType: 'string', enum: ['SMOKE_TEST', 'CANDIDATE'] },
+        // Revision de codigo (#570): `registerCandidate` exige CANDIDATE --
+        // SMOKE_TEST nunca llega a persistirse con un artifactLineage no
+        // nulo, asi que el validador tambien lo exige como defensa extra.
+        artifactPurpose: { bsonType: 'string', enum: ['CANDIDATE'] },
+        trainingManifestSha256: sha256HexSchema,
+        // Opaco (#570): el registry nunca interpreta su contenido salvo
+        // para extraer `trainingConfig.trainingSeed`, solo lo persiste
+        // para auditoria/reproducibilidad.
+        trainingConfig: { bsonType: 'object' },
+        datasetCounts: { bsonType: 'object' },
+        metrics: { bsonType: 'object' },
       },
     },
   ],

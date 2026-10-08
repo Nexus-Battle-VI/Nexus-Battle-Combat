@@ -9,8 +9,10 @@ import type { AiModelTrainingLineage } from '../../src/domain/entities/AiModelVe
 import {
   ActiveModelConflictError,
   ArtifactConflictError,
+  ArtifactPurposeNotCandidateError,
   ModelArtifactHashMismatchError,
   ModelArtifactNotFoundError,
+  ModelTrainingLineageMismatchError,
   ModelVersionConflictError,
 } from '../../src/domain/errors/AiModelRegistryErrors'
 import { InMemoryAiModelRegistryRepository } from '../../src/adapters/outbound/persistence/InMemoryAiModelRegistryRepository'
@@ -23,12 +25,12 @@ const hex = (digit: string): string => digit.repeat(64)
 
 const onnxBytes = Buffer.from('fake-onnx-bytes-for-ai-model-registry-unit-test')
 const metricsBytes = Buffer.from('{"winRate":null}')
+const manifestBytes = Buffer.from('{"fake":"manifest-bytes-for-unit-test"}')
 const onnxArtifactSha256 = createHash('sha256').update(onnxBytes).digest('hex')
 const metricsFileSha256 = createHash('sha256').update(metricsBytes).digest('hex')
 
-const trainingLineage = (modelVersion: string): AiModelTrainingLineage => ({
-  modelVersion,
-  trainingRunId: modelVersion,
+/** Fuente UNICA para training lineage + manifest, para que nunca diverjan por accidente entre tests. */
+const FIXED_TRAINING_FIELDS = {
   modelArchitectureVersion: 'candidate-mlp-v1',
   featureSchemaVersion: 'feature-schema-v1',
   teacherVersion: 'mcts-teacher-v1',
@@ -40,11 +42,31 @@ const trainingLineage = (modelVersion: string): AiModelTrainingLineage => ({
   datasetCutoff: '2027-01-01T00:00:00Z',
   datasetSeed: 42,
   trainingConfigSha256: hex('3'),
+  trainingSeed: 7,
+}
+
+const trainingLineage = (modelVersion: string): AiModelTrainingLineage => ({
+  modelVersion,
+  trainingRunId: modelVersion,
+  ...FIXED_TRAINING_FIELDS,
 })
 
 const manifest = (
   overrides: Partial<CandidateArtifactManifest> = {},
 ): CandidateArtifactManifest => ({
+  modelArchitectureVersion: FIXED_TRAINING_FIELDS.modelArchitectureVersion,
+  featureSchemaVersion: FIXED_TRAINING_FIELDS.featureSchemaVersion,
+  teacherVersion: FIXED_TRAINING_FIELDS.teacherVersion,
+  utilityVersion: FIXED_TRAINING_FIELDS.utilityVersion,
+  trainingSourceCommit: FIXED_TRAINING_FIELDS.trainingSourceCommit,
+  datasetSourceCommit: FIXED_TRAINING_FIELDS.datasetSourceCommit,
+  datasetInputFingerprint: FIXED_TRAINING_FIELDS.datasetInputFingerprint,
+  datasetOutputFingerprint: FIXED_TRAINING_FIELDS.datasetOutputFingerprint,
+  datasetCutoff: FIXED_TRAINING_FIELDS.datasetCutoff,
+  datasetSeed: FIXED_TRAINING_FIELDS.datasetSeed,
+  trainingConfigSha256: FIXED_TRAINING_FIELDS.trainingConfigSha256,
+  trainingConfig: { trainingSeed: FIXED_TRAINING_FIELDS.trainingSeed },
+  datasetCounts: { battles: 4 },
   modelStateSha256: hex('4'),
   onnxArtifactSha256,
   pytorchArtifactSha256: hex('6'),
@@ -68,12 +90,17 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
     const candidate = await registry.registerCandidate({
       modelVersion: 'm-1',
       manifest: manifest(),
+      manifestBytes,
       onnxBytes,
       metricsBytes,
     })
 
     expect(candidate.state).toBe('CANDIDATE')
     expect(candidate.artifactLineage?.onnxArtifactSha256).toBe(onnxArtifactSha256)
+    expect(candidate.artifactLineage?.metrics).toEqual({ winRate: null })
+    expect(candidate.artifactLineage?.trainingManifestSha256).toBe(
+      createHash('sha256').update(manifestBytes).digest('hex'),
+    )
   })
 
   it('rejects registration when the real ONNX byte hash does not match the manifest', async () => {
@@ -84,6 +111,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       registry.registerCandidate({
         modelVersion: 'm-2',
         manifest: manifest({ onnxArtifactSha256: hex('9') }),
+        manifestBytes,
         onnxBytes,
         metricsBytes,
       }),
@@ -98,24 +126,59 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       registry.registerCandidate({
         modelVersion: 'm-3',
         manifest: manifest({ metricsFileSha256: hex('9') }),
+        manifestBytes,
         onnxBytes,
         metricsBytes,
       }),
     ).rejects.toBeInstanceOf(ModelArtifactHashMismatchError)
   })
 
-  it('accepts SMOKE_TEST at registerCandidate but activate() rejects it (#570 §19, §37, §88)', async () => {
+  it('rejects SMOKE_TEST at registerCandidate (revision de codigo: nunca entra al ciclo productivo)', async () => {
     const registry = newRegistry()
     await registry.startTraining(trainingLineage('m-4'))
-    await registry.registerCandidate({
-      modelVersion: 'm-4',
-      manifest: manifest({ artifactPurpose: 'SMOKE_TEST' }),
-      onnxBytes,
-      metricsBytes,
-    })
-    await registry.beginEvaluation('m-4')
 
-    await expect(registry.activate('m-4')).rejects.toThrow(/SMOKE_TEST/)
+    await expect(
+      registry.registerCandidate({
+        modelVersion: 'm-4',
+        manifest: manifest({ artifactPurpose: 'SMOKE_TEST' }),
+        manifestBytes,
+        onnxBytes,
+        metricsBytes,
+      }),
+    ).rejects.toBeInstanceOf(ArtifactPurposeNotCandidateError)
+
+    const stillTraining = await registry.findByVersion('m-4')
+    expect(stillTraining?.state).toBe('TRAINING')
+  })
+
+  it('rejects a manifest whose training fields do not match the registered training lineage (lineage binding)', async () => {
+    const registry = newRegistry()
+    await registry.startTraining(trainingLineage('m-binding'))
+
+    await expect(
+      registry.registerCandidate({
+        modelVersion: 'm-binding',
+        manifest: manifest({ trainingSourceCommit: 'un-commit-de-otro-training' }),
+        manifestBytes,
+        onnxBytes,
+        metricsBytes,
+      }),
+    ).rejects.toBeInstanceOf(ModelTrainingLineageMismatchError)
+  })
+
+  it('rejects a manifest whose trainingConfig.trainingSeed does not match the registered trainingSeed', async () => {
+    const registry = newRegistry()
+    await registry.startTraining(trainingLineage('m-seed-mismatch'))
+
+    await expect(
+      registry.registerCandidate({
+        modelVersion: 'm-seed-mismatch',
+        manifest: manifest({ trainingConfig: { trainingSeed: 999 } }),
+        manifestBytes,
+        onnxBytes,
+        metricsBytes,
+      }),
+    ).rejects.toBeInstanceOf(ModelTrainingLineageMismatchError)
   })
 
   it('full happy path TRAINING -> CANDIDATE -> EVALUATING -> ACTIVE', async () => {
@@ -124,6 +187,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
     await registry.registerCandidate({
       modelVersion: 'm-5',
       manifest: manifest(),
+      manifestBytes,
       onnxBytes,
       metricsBytes,
     })
@@ -145,6 +209,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
     await registry.registerCandidate({
       modelVersion: 'm-6',
       manifest: manifest(),
+      manifestBytes,
       onnxBytes,
       metricsBytes,
     })
@@ -170,6 +235,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       await registry.registerCandidate({
         modelVersion,
         manifest: manifest(),
+        manifestBytes,
         onnxBytes,
         metricsBytes,
       })
@@ -188,6 +254,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
     await registry.registerCandidate({
       modelVersion: 'm-8a',
       manifest: manifest(),
+      manifestBytes,
       onnxBytes,
       metricsBytes,
     })
@@ -195,6 +262,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       registry.registerCandidate({
         modelVersion: 'm-8b',
         manifest: manifest(),
+        manifestBytes,
         onnxBytes,
         metricsBytes,
       }),
@@ -219,6 +287,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       registry.registerCandidate({
         modelVersion: 'm-9',
         manifest: manifest(),
+        manifestBytes,
         onnxBytes,
         metricsBytes,
       }),
@@ -236,6 +305,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
     const candidate = await registry.registerCandidate({
       modelVersion: 'm-10',
       manifest: manifest(),
+      manifestBytes,
       onnxBytes,
       metricsBytes,
     })

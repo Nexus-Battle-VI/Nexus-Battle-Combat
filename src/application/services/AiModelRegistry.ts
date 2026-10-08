@@ -8,6 +8,8 @@ import {
 import {
   ModelArtifactHashMismatchError,
   ModelArtifactNotFoundError,
+  ModelSchemaIncompatibleError,
+  ModelTrainingLineageMismatchError,
   ModelVersionConflictError,
 } from '../../domain/errors/AiModelRegistryErrors'
 import type { ClockPort } from '../ports/ClockPort'
@@ -24,8 +26,27 @@ const sha256HexOf = (bytes: Buffer): string => createHash('sha256').update(bytes
  * ya parseo/valido el manifest completo con `parseAndValidateModelTrainingManifest`
  * y pasa aqui los campos que la union estructural de TypeScript ya
  * satisface sin mapeo explicito.
+ *
+ * Incluye los campos de `AiModelTrainingLineage` (revision de codigo,
+ * #570): `registerCandidate` los compara contra `current.trainingLineage`
+ * para demostrar que el manifest pertenece REALMENTE al training
+ * registrado -- nunca solo que los hashes de ONNX/metricas coinciden.
  */
 export interface CandidateArtifactManifest {
+  readonly modelArchitectureVersion: string
+  readonly featureSchemaVersion: string
+  readonly teacherVersion: string
+  readonly utilityVersion: string
+  readonly trainingSourceCommit: string
+  readonly datasetSourceCommit: string
+  readonly datasetInputFingerprint: string
+  readonly datasetOutputFingerprint: string
+  readonly datasetCutoff: string
+  readonly datasetSeed: number
+  readonly trainingConfigSha256: string
+  /** Opaco (revision de codigo, #570): nunca interpretado salvo para extraer `trainingSeed`. */
+  readonly trainingConfig: Readonly<Record<string, unknown>>
+  readonly datasetCounts: Readonly<Record<string, unknown>>
   readonly modelStateSha256: string
   readonly onnxArtifactSha256: string
   readonly pytorchArtifactSha256: string
@@ -37,8 +58,76 @@ export interface RegisterCandidateParams {
   readonly modelVersion: string
   /** YA parseado/validado contra el contrato de runtime (#567/#568) por el caller. */
   readonly manifest: CandidateArtifactManifest
+  /** Bytes REALES de `training-manifest.json` (revision #570): su SHA-256 se persiste como `trainingManifestSha256`. */
+  readonly manifestBytes: Buffer
   readonly onnxBytes: Buffer
   readonly metricsBytes: Buffer
+}
+
+/** `trainingConfig.trainingSeed` (revision #570): distinto de `datasetSeed`, nunca asumido igual. */
+const requireTrainingSeed = (trainingConfig: Readonly<Record<string, unknown>>): number => {
+  const value = trainingConfig.trainingSeed
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ModelTrainingLineageMismatchError(
+      'trainingConfig.trainingSeed',
+      'number',
+      typeof value,
+    )
+  }
+  return value
+}
+
+/**
+ * Comprueba fail-closed que el manifest recibido pertenece REALMENTE al
+ * training registrado en `current.trainingLineage` (revision de codigo,
+ * #570): sin esto, un artifact lineage del training B podria ligarse al
+ * training lineage de una version A con solo tener bytes de ONNX/metricas
+ * que coincidan con SUS PROPIOS hashes declarados.
+ */
+const assertManifestMatchesTrainingLineage = (
+  lineage: AiModelTrainingLineage,
+  manifest: CandidateArtifactManifest,
+): void => {
+  const trainingSeed = requireTrainingSeed(manifest.trainingConfig)
+  const checks: readonly (readonly [string, unknown, unknown])[] = [
+    [
+      'modelArchitectureVersion',
+      lineage.modelArchitectureVersion,
+      manifest.modelArchitectureVersion,
+    ],
+    ['featureSchemaVersion', lineage.featureSchemaVersion, manifest.featureSchemaVersion],
+    ['teacherVersion', lineage.teacherVersion, manifest.teacherVersion],
+    ['utilityVersion', lineage.utilityVersion, manifest.utilityVersion],
+    ['trainingSourceCommit', lineage.trainingSourceCommit, manifest.trainingSourceCommit],
+    ['datasetSourceCommit', lineage.datasetSourceCommit, manifest.datasetSourceCommit],
+    ['datasetInputFingerprint', lineage.datasetInputFingerprint, manifest.datasetInputFingerprint],
+    [
+      'datasetOutputFingerprint',
+      lineage.datasetOutputFingerprint,
+      manifest.datasetOutputFingerprint,
+    ],
+    ['datasetCutoff', lineage.datasetCutoff, manifest.datasetCutoff],
+    ['datasetSeed', lineage.datasetSeed, manifest.datasetSeed],
+    ['trainingConfigSha256', lineage.trainingConfigSha256, manifest.trainingConfigSha256],
+    ['trainingSeed', lineage.trainingSeed, trainingSeed],
+  ]
+  for (const [field, expected, actual] of checks) {
+    if (expected !== actual) throw new ModelTrainingLineageMismatchError(field, expected, actual)
+  }
+}
+
+/** `metrics.json` ya no se descarta tras hashearlo (revision #570): se parsea y persiste para reproducibilidad real. */
+const parseOpaqueJsonObject = (bytes: Buffer, label: string): Readonly<Record<string, unknown>> => {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(bytes.toString('utf8'))
+  } catch {
+    throw new ModelSchemaIncompatibleError(`"${label}" no es JSON valido.`)
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new ModelSchemaIncompatibleError(`"${label}" debe ser un objeto JSON.`)
+  }
+  return parsed as Readonly<Record<string, unknown>>
 }
 
 /**
@@ -69,17 +158,21 @@ export class AiModelRegistry {
 
   /**
    * `TRAINING -> CANDIDATE` (#570 §53-54): recalcula el SHA-256 REAL de
-   * `onnxBytes`/`metricsBytes` (nunca confia en el valor declarado del
-   * manifest sin comprobarlo) y persiste el artifact ONNX de forma
-   * content-addressed ANTES del cambio de estado -- si la transicion
-   * fallara despues, un artifact huerfano content-addressed no corrompe
-   * nada y es reutilizable (#570 §54).
+   * `onnxBytes`/`metricsBytes`/`manifestBytes` (nunca confia en el valor
+   * declarado del manifest sin comprobarlo), comprueba fail-closed que el
+   * manifest pertenece REALMENTE al training registrado
+   * (`assertManifestMatchesTrainingLineage`, revision de codigo #570 --
+   * antes solo se comprobaban los hashes de artefacto, nunca que el
+   * manifest fuera del training correcto), y persiste el artifact ONNX de
+   * forma content-addressed ANTES del cambio de estado -- si la
+   * transicion fallara despues, un artifact huerfano content-addressed no
+   * corrompe nada y es reutilizable (#570 §54).
    *
-   * Acepta `artifactPurpose=SMOKE_TEST` o `CANDIDATE` por igual (#570
-   * §117-119: el mismo artefacto SMOKE_TEST de CI debe poder ejercitar
-   * esta validacion real sin falsearse como CANDIDATE) -- el bloqueo
-   * duro de SMOKE_TEST ocurre en `activate()`, nunca aqui (defensa en
-   * profundidad en el ULTIMO punto seguro, #570 §37, §88).
+   * Exige `artifactPurpose=CANDIDATE` (revision de codigo, #570): un
+   * `SMOKE_TEST` NUNCA entra al ciclo de vida productivo, ni siquiera como
+   * CANDIDATE/EVALUATING -- `assertArtifactLineage` (dominio) lo rechaza.
+   * El artifact store de un `SMOKE_TEST` real se prueba directamente
+   * contra `AiModelArtifactRepositoryPort`, sin pasar por el registry.
    */
   async registerCandidate(params: RegisterCandidateParams): Promise<AiModelVersion> {
     const current = await this.requireByVersion(params.modelVersion)
@@ -97,6 +190,11 @@ export class AiModelRegistry {
       )
     }
 
+    assertManifestMatchesTrainingLineage(current.trainingLineage, params.manifest)
+
+    const metrics = parseOpaqueJsonObject(params.metricsBytes, 'metrics.json')
+    const trainingManifestSha256 = sha256HexOf(params.manifestBytes)
+
     const at = this.clock.now()
     await this.artifactRepository.put(actualOnnxSha256, params.onnxBytes, at)
 
@@ -107,6 +205,10 @@ export class AiModelRegistry {
         pytorchArtifactSha256: params.manifest.pytorchArtifactSha256,
         metricsFileSha256: actualMetricsSha256,
         artifactPurpose: params.manifest.artifactPurpose as AiModelArtifactPurpose,
+        trainingManifestSha256,
+        trainingConfig: params.manifest.trainingConfig,
+        datasetCounts: params.manifest.datasetCounts,
+        metrics,
       },
       at,
     )

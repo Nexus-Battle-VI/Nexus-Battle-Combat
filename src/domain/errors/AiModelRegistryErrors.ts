@@ -70,3 +70,51 @@ export class ModelSchemaIncompatibleError extends DomainError {
     this.name = 'ModelSchemaIncompatibleError'
   }
 }
+
+/**
+ * `registerCandidate` exige `artifactPurpose === 'CANDIDATE'` (revision de
+ * codigo, #570): SMOKE_TEST es una declaracion legitima para probar
+ * artifact storage/hash/manifest, pero nunca entra al ciclo de vida
+ * productivo (ni CANDIDATE ni EVALUATING) -- bloquearlo solo en
+ * `activate()` dejaba un CANDIDATE/EVALUATING falso en el historial.
+ */
+export class ArtifactPurposeNotCandidateError extends DomainError {
+  constructor(artifactPurpose: string) {
+    super(
+      `artifactPurpose="${artifactPurpose}" no es CANDIDATE: SMOKE_TEST nunca puede ` +
+        'registrarse como candidate productivo.',
+    )
+    this.name = 'ArtifactPurposeNotCandidateError'
+  }
+}
+
+/**
+ * El manifest recibido en `registerCandidate` no pertenece al training
+ * registrado (revision de codigo, #570): sin esta comprobacion, un
+ * artifact lineage del training B podria ligarse al training lineage de
+ * una version A, rompiendo la trazabilidad que es el proposito central
+ * del registry.
+ */
+export class ModelTrainingLineageMismatchError extends DomainError {
+  constructor(field: string, expected: unknown, actual: unknown) {
+    super(
+      `El manifest no coincide con el training lineage registrado en "${field}" ` +
+        `(esperado="${String(expected)}", recibido="${String(actual)}").`,
+    )
+    this.name = 'ModelTrainingLineageMismatchError'
+  }
+}
+
+/**
+ * `AiModelVersion.restore()` detecto un documento que viola una invariante
+ * semantica de la maquina de estados (revision de codigo, #570 §34): el
+ * validador `$jsonSchema` de Mongo solo protege la forma estructural,
+ * nunca la coherencia de `stateHistory`/`state`/`artifactLineage`/
+ * `rejection` entre si.
+ */
+export class CorruptAiModelVersionError extends DomainError {
+  constructor(reason: string) {
+    super(`Estado de AiModelVersion corrupto: ${reason}`)
+    this.name = 'CorruptAiModelVersionError'
+  }
+}
