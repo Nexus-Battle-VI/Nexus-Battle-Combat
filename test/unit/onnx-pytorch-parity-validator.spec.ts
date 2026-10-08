@@ -16,7 +16,8 @@ class FakeInferencePort implements NeuralInferencePort {
   }
 }
 
-const vector = (value: number): readonly number[] => Array.from({ length: FEATURE_DIMENSION }, () => value)
+const vector = (value: number): readonly number[] =>
+  Array.from({ length: FEATURE_DIMENSION }, () => value)
 
 const buildReference = (
   cases: ParityReference['cases'],
@@ -60,7 +61,11 @@ describe('runParityValidation (EN-036.5, Management #569 §86-98)', () => {
 
   it('PA-06: argmax en desacuerdo marca passed=false aunque los scores esten cerca', async () => {
     const reference = buildReference([
-      { caseId: 'c1', candidateFeatures: [vector(0.1), vector(0.2)], pytorchScores: [0.50001, 0.5] },
+      {
+        caseId: 'c1',
+        candidateFeatures: [vector(0.1), vector(0.2)],
+        pytorchScores: [0.50001, 0.5],
+      },
     ])
     // ONNX invierte cual es mayor, dentro de tolerancia absoluta pero cambia el argmax.
     const inference = new FakeInferencePort(() => Float32Array.from([0.5, 0.50001]))
@@ -74,7 +79,11 @@ describe('runParityValidation (EN-036.5, Management #569 §86-98)', () => {
   it('multiples casos: argmaxAgreement es la fraccion de casos con acuerdo, no de scores', async () => {
     const reference = buildReference([
       { caseId: 'agree', candidateFeatures: [vector(0.1), vector(0.2)], pytorchScores: [0.1, 0.9] },
-      { caseId: 'disagree', candidateFeatures: [vector(0.1), vector(0.2)], pytorchScores: [0.9, 0.1] },
+      {
+        caseId: 'disagree',
+        candidateFeatures: [vector(0.1), vector(0.2)],
+        pytorchScores: [0.9, 0.1],
+      },
     ])
     const inference = new FakeInferencePort((_features, count) =>
       count === 2 ? Float32Array.from([0.1, 0.9]) : Float32Array.from([0]),
@@ -88,13 +97,22 @@ describe('runParityValidation (EN-036.5, Management #569 §86-98)', () => {
   it('PA-02/PA-07: assertSameTrainingRun rechaza una referencia de OTRO modelo (hash distinto)', () => {
     const reference = buildReference([])
     expect(() => {
-      assertSameTrainingRun(reference, { modelStateSha256: 'otro-hash', onnxArtifactSha256: 'onnx-hash' })
+      assertSameTrainingRun(reference, {
+        modelStateSha256: 'otro-hash',
+        onnxArtifactSha256: 'onnx-hash',
+      })
     }).toThrow(ParityReferenceMismatchError)
     expect(() => {
-      assertSameTrainingRun(reference, { modelStateSha256: 'state-hash', onnxArtifactSha256: 'otro-onnx' })
+      assertSameTrainingRun(reference, {
+        modelStateSha256: 'state-hash',
+        onnxArtifactSha256: 'otro-onnx',
+      })
     }).toThrow(ParityReferenceMismatchError)
     expect(() => {
-      assertSameTrainingRun(reference, { modelStateSha256: 'state-hash', onnxArtifactSha256: 'onnx-hash' })
+      assertSameTrainingRun(reference, {
+        modelStateSha256: 'state-hash',
+        onnxArtifactSha256: 'onnx-hash',
+      })
     }).not.toThrow()
   })
 })

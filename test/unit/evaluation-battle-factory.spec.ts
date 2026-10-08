@@ -33,7 +33,10 @@ describe('buildEvaluationBattleRoom (EN-036.5, Management #569 §40)', () => {
     expect(room.battle).not.toBeNull()
     const combatants = room.battle?.combatants ?? []
     expect(combatants).toHaveLength(2)
-    expect(combatants.map((c) => c.teamLabel).sort()).toEqual([EVALUATION_TEAM_A_LABEL, EVALUATION_TEAM_B_LABEL])
+    expect(combatants.map((c) => c.teamLabel).sort()).toEqual([
+      EVALUATION_TEAM_A_LABEL,
+      EVALUATION_TEAM_B_LABEL,
+    ])
   })
 
   it('cada escenario del catalogo produce una sala IN_BATTLE legal', () => {

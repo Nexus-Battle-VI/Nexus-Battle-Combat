@@ -26,7 +26,8 @@ describe('scheduleMirroredMatches (EN-036.5, Management #569 §30-31, §83)', ()
   it('MI-01/MI-02: cada par espejado asigna P y Q a AMBOS lados (A/B) con el MISMO root seed', () => {
     const plans = scheduleMirroredMatches(baseConfig)
     const randomVsRule = plans.filter(
-      (p) => p.matchupIdValue === matchupId(['RANDOM', 'RULE_BASED']) && p.scenarioId === 'scenario-1',
+      (p) =>
+        p.matchupIdValue === matchupId(['RANDOM', 'RULE_BASED']) && p.scenarioId === 'scenario-1',
     )
 
     const byPairId = new Map<string, typeof randomVsRule>()
@@ -47,10 +48,14 @@ describe('scheduleMirroredMatches (EN-036.5, Management #569 §30-31, §83)', ()
   it('usa seedCount para matchups sin MCTS y mctsSeedCount (distinto) para matchups con MCTS', () => {
     const plans = scheduleMirroredMatches(baseConfig)
     const randomVsRuleSeeds = new Set(
-      plans.filter((p) => p.matchupIdValue === matchupId(['RANDOM', 'RULE_BASED'])).map((p) => p.matchSeed),
+      plans
+        .filter((p) => p.matchupIdValue === matchupId(['RANDOM', 'RULE_BASED']))
+        .map((p) => p.matchSeed),
     )
     const mctsVsRandomSeeds = new Set(
-      plans.filter((p) => p.matchupIdValue === matchupId(['MCTS', 'RANDOM'])).map((p) => p.matchSeed),
+      plans
+        .filter((p) => p.matchupIdValue === matchupId(['MCTS', 'RANDOM']))
+        .map((p) => p.matchSeed),
     )
 
     expect(randomVsRuleSeeds.size).toBe(baseConfig.seedCount)

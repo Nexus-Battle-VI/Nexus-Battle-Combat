@@ -73,7 +73,7 @@ describe('runAcceleratedBattle (EN-036.5, Management #569): motor real, 0 invari
     const first = await run()
     const second = await run()
 
-    expect(second.plies).toBe(first.plies);
+    expect(second.plies).toBe(first.plies)
     expect(second.outcome).toEqual(first.outcome)
     expect(second.metricsBySide).toEqual(first.metricsBySide)
   })

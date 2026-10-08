@@ -72,8 +72,22 @@ describe('MctsEvaluationPolicy (EN-036.5, Management #569 §19-21, §110)', () =
     const state = assembler.assemble(room)
     const policy = new MctsEvaluationPolicy(buildTeacher(16))
 
-    const first = await policy.decide({ room, state, legalActions, matchSeed: 5, decisionIndex: 0, side: 'A' })
-    const second = await policy.decide({ room, state, legalActions, matchSeed: 5, decisionIndex: 1, side: 'A' })
+    const first = await policy.decide({
+      room,
+      state,
+      legalActions,
+      matchSeed: 5,
+      decisionIndex: 0,
+      side: 'A',
+    })
+    const second = await policy.decide({
+      room,
+      state,
+      legalActions,
+      matchSeed: 5,
+      decisionIndex: 1,
+      side: 'A',
+    })
 
     expect(legalActions.map(legalActionIdentity)).toContain(legalActionIdentity(first))
     expect(legalActions.map(legalActionIdentity)).toContain(legalActionIdentity(second))

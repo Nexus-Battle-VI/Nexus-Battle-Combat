@@ -1,5 +1,8 @@
 import { MCTS_TEACHER_V1_CONFIG } from '../../src/domain/decision/MctsTeacherResult'
-import { EVALUATION_MATCH_RESULT_VERSION, type EvaluationMatchResultV1 } from '../../src/evaluation/battle/EvaluationMatchResult'
+import {
+  EVALUATION_MATCH_RESULT_VERSION,
+  type EvaluationMatchResultV1,
+} from '../../src/evaluation/battle/EvaluationMatchResult'
 import type { EvaluationConfig } from '../../src/evaluation/experiment/EvaluationConfig'
 import {
   buildEvaluationSummary,
@@ -67,8 +70,20 @@ const match = (overrides: Partial<EvaluationMatchResultV1> = {}): EvaluationMatc
 
 describe('EvaluationReport (EN-036.5, Management #569 §46-47, §58, §81, §176)', () => {
   it('RP-01/RP-02: los conteos de summary reconcilian con los resultados', () => {
-    const results = [match(), match({ matchId: 'match-2', outcome: { outcome: 'WIN', winnerSide: 'B', reason: 'ELIMINATION' } })]
-    const summary = buildEvaluationSummary({ evaluationId: 'eval-test', config, results, model: null, parity: null })
+    const results = [
+      match(),
+      match({
+        matchId: 'match-2',
+        outcome: { outcome: 'WIN', winnerSide: 'B', reason: 'ELIMINATION' },
+      }),
+    ]
+    const summary = buildEvaluationSummary({
+      evaluationId: 'eval-test',
+      config,
+      results,
+      model: null,
+      parity: null,
+    })
 
     expect(summary.totalMatches).toBe(2)
     const randomRow = summary.policySummary.find((r) => r.policyId === 'RANDOM')
@@ -77,18 +92,39 @@ describe('EvaluationReport (EN-036.5, Management #569 §46-47, §58, §81, §176
     expect(ruleRow).toMatchObject({ battles: 2, wins: 1, losses: 1, draws: 0, failures: 0 })
 
     const matchupRow = summary.matchupSummary[0]
-    expect(matchupRow).toMatchObject({ n: 2, firstPolicyWins: 1, secondPolicyWins: 1, draws: 0, failures: 0 })
+    expect(matchupRow).toMatchObject({
+      n: 2,
+      firstPolicyWins: 1,
+      secondPolicyWins: 1,
+      draws: 0,
+      failures: 0,
+    })
   })
 
   it('RP-03: invalidPolicySelections global es la suma de las individuales', () => {
-    const results = [match({ invalidPolicySelections: 1 }), match({ matchId: 'm2', invalidPolicySelections: 2 })]
-    const summary = buildEvaluationSummary({ evaluationId: 'eval-test', config, results, model: null, parity: null })
+    const results = [
+      match({ invalidPolicySelections: 1 }),
+      match({ matchId: 'm2', invalidPolicySelections: 2 }),
+    ]
+    const summary = buildEvaluationSummary({
+      evaluationId: 'eval-test',
+      config,
+      results,
+      model: null,
+      parity: null,
+    })
     expect(summary.globalInvalidPolicySelections).toBe(3)
   })
 
   it('MT-07: una partida FAILED no entra silenciosamente en wins/losses, cuenta como failure', () => {
     const results = [match({ status: 'ENGINE_FAILURE', outcome: null, failedSide: null })]
-    const summary = buildEvaluationSummary({ evaluationId: 'eval-test', config, results, model: null, parity: null })
+    const summary = buildEvaluationSummary({
+      evaluationId: 'eval-test',
+      config,
+      results,
+      model: null,
+      parity: null,
+    })
     const randomRow = summary.policySummary.find((r) => r.policyId === 'RANDOM')
     expect(randomRow).toMatchObject({ wins: 0, losses: 0, draws: 0, failures: 1, battles: 1 })
     expect(randomRow?.winRate).toBeNull()
@@ -96,7 +132,13 @@ describe('EvaluationReport (EN-036.5, Management #569 §46-47, §58, §81, §176
 
   it('#569 §176: un promedio sin datos es null, nunca NaN/Infinity', () => {
     const results = [match({ status: 'POLICY_FAILURE', outcome: null, failedSide: 'A' })]
-    const summary = buildEvaluationSummary({ evaluationId: 'eval-test', config, results, model: null, parity: null })
+    const summary = buildEvaluationSummary({
+      evaluationId: 'eval-test',
+      config,
+      results,
+      model: null,
+      parity: null,
+    })
     const randomRow = summary.policySummary.find((r) => r.policyId === 'RANDOM')
     expect(randomRow?.avgDamageDealt).toBeNull()
     expect(Number.isNaN(randomRow?.avgDamageDealt)).toBe(false)
@@ -118,7 +160,13 @@ describe('EvaluationReport (EN-036.5, Management #569 §46-47, §58, §81, §176
 
   it('matchup SKIPPED_COST (sin partidas) se marca explicitamente, nunca como 0 resultados silencioso', () => {
     const configWithMcts: EvaluationConfig = { ...config, matchups: [['MCTS', 'RANDOM']] }
-    const summary = buildEvaluationSummary({ evaluationId: 'eval-test', config: configWithMcts, results: [], model: null, parity: null })
+    const summary = buildEvaluationSummary({
+      evaluationId: 'eval-test',
+      config: configWithMcts,
+      results: [],
+      model: null,
+      parity: null,
+    })
     expect(summary.matchupSummary[0]).toMatchObject({ skippedForCost: true, n: 0 })
   })
 })

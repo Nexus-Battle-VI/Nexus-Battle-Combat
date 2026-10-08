@@ -45,7 +45,12 @@ describe('EvaluationMetricsExtraction (EN-036.5, Management #569 §48-53)', () =
       completedPosition: 0,
       actor: A,
       target: B,
-      skill: { abilityId: 'storm', name: 'Tormenta', powerCost: { mode: 'FIXED', amount: 6 }, chargeTurns: 1 },
+      skill: {
+        abilityId: 'storm',
+        name: 'Tormenta',
+        powerCost: { mode: 'FIXED', amount: 6 },
+        chargeTurns: 1,
+      },
       power: { before: 10, after: 4 },
       cooldown: { remainingTurns: 0 },
       bonus: { attack: 9, damage: 2 },
@@ -73,7 +78,12 @@ describe('EvaluationMetricsExtraction (EN-036.5, Management #569 §48-53)', () =
       completedPosition: 0,
       actor: A,
       target: A,
-      skill: { abilityId: 'life-touch', name: 'Toque de la Vida', powerCost: { mode: 'FIXED', amount: 3 }, chargeTurns: 1 },
+      skill: {
+        abilityId: 'life-touch',
+        name: 'Toque de la Vida',
+        powerCost: { mode: 'FIXED', amount: 3 },
+        chargeTurns: 1,
+      },
       power: { before: 10, after: 7 },
       cooldown: { remainingTurns: 0 },
       heal: { amount: 2 },
@@ -92,7 +102,12 @@ describe('EvaluationMetricsExtraction (EN-036.5, Management #569 §48-53)', () =
       completedPosition: 0,
       actor: A,
       target: A,
-      skill: { abilityId: 'forest-song', name: 'Canto del Bosque', powerCost: { mode: 'FIXED', amount: 6 }, chargeTurns: 1 },
+      skill: {
+        abilityId: 'forest-song',
+        name: 'Canto del Bosque',
+        powerCost: { mode: 'FIXED', amount: 6 },
+        chargeTurns: 1,
+      },
       power: { before: 10, after: 4 },
       cooldown: { remainingTurns: 0 },
       heal: { amount: 4 },
@@ -110,7 +125,12 @@ describe('EvaluationMetricsExtraction (EN-036.5, Management #569 §48-53)', () =
       completedPosition: 0,
       actor: A,
       target: B,
-      skill: { abilityId: 'agony', name: 'Agonia', powerCost: { mode: 'FIXED', amount: 3 }, chargeTurns: 1 },
+      skill: {
+        abilityId: 'agony',
+        name: 'Agonia',
+        powerCost: { mode: 'FIXED', amount: 3 },
+        chargeTurns: 1,
+      },
       power: { before: 10, after: 7 },
       cooldown: { remainingTurns: 0 },
       damage: { calculatedDamage: 11, appliedDamage: 9 },
@@ -153,7 +173,10 @@ describe('EvaluationMetricsExtraction (EN-036.5, Management #569 §48-53)', () =
   })
 
   it('turnAdvanced/battleFinished no transportan dano, curacion ni Poder', () => {
-    const turnAdvanced = event(BattleEventType.TurnAdvanced, { completedPosition: 0, battle: BATTLE_VIEW })
+    const turnAdvanced = event(BattleEventType.TurnAdvanced, {
+      completedPosition: 0,
+      battle: BATTLE_VIEW,
+    })
     expect(extractDamage(turnAdvanced)).toBeNull()
     expect(extractHeal(turnAdvanced)).toBeNull()
     expect(extractPowerAfter(turnAdvanced)).toBeNull()

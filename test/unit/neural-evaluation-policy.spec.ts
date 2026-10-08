@@ -18,9 +18,7 @@ const legalActionGenerator = new LegalActionGenerator()
 const assembler = new BattleDecisionStateAssembler()
 
 class FakeInferencePort implements NeuralInferencePort {
-  constructor(
-    private readonly behavior: (count: number) => Promise<Float32Array> | Float32Array,
-  ) {}
+  constructor(private readonly behavior: (count: number) => Promise<Float32Array> | Float32Array) {}
 
   async score(_features: Float32Array, count: number): Promise<Float32Array> {
     const result = this.behavior(count)
