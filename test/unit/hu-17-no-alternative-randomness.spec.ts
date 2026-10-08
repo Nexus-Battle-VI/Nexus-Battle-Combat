@@ -112,9 +112,11 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
     // OFFLINE de evaluacion, nunca tocan una batalla real ni su RNG, y
     // `application/services/AiModelRegistry.ts` (EN-037.1, #570 §34)
     // hashea bytes de artifact/metricas ya recibidos para comprobar su
-    // integridad contra el manifest -- verificacion criptografica, nunca
-    // una fuente de aleatoriedad ni una decision de juego.
-    // productivo.
+    // integridad contra el manifest, y
+    // `infrastructure/training/ContinuousTrainingPipeline.ts` (EN-037.2,
+    // #571 §6.1) deriva un `ownerId` unico de lease con `randomBytes` --
+    // identificador tecnico de propietario de un worker standalone, nunca
+    // una fuente de aleatoriedad del motor ni una decision de juego.
     expect(users).toEqual([
       'adapters/outbound/http/inventory-grant-operation-id.ts',
       'adapters/outbound/identity/internal-signature.ts',
@@ -128,6 +130,7 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
       'evaluation/canonical/CanonicalJson.ts',
       'evaluation/experiment/EvaluationSeedSchedule.ts',
       'infrastructure/ai/NeuralModelArtifactLoader.ts',
+      'infrastructure/training/ContinuousTrainingPipeline.ts',
     ])
   })
 

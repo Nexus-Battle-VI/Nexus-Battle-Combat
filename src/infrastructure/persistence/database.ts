@@ -27,6 +27,7 @@ import * as combatDecisionEventsEndTurnMigration from '../../adapters/outbound/p
 import * as mctsTeacherLabelsMigration from '../../adapters/outbound/persistence/migrations/025-mcts-teacher-labels'
 import * as tournamentCardinalityMigration from '../../adapters/outbound/persistence/migrations/026-battle-rooms-tournament-cardinality'
 import * as aiModelRegistryMigration from '../../adapters/outbound/persistence/migrations/027-ai-model-registry'
+import * as aiTrainingCoordinatorMigration from '../../adapters/outbound/persistence/migrations/028-ai-training-coordinator'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -108,6 +109,7 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '025-mcts-teacher-labels', up: mctsTeacherLabelsMigration.up },
   { name: '026-battle-rooms-tournament-cardinality', up: tournamentCardinalityMigration.up },
   { name: '027-ai-model-registry', up: aiModelRegistryMigration.up },
+  { name: '028-ai-training-coordinator', up: aiTrainingCoordinatorMigration.up },
 ]
 
 const REGISTRY = '_migrations'
