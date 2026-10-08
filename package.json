@@ -26,6 +26,7 @@
     "test:coverage": "jest --coverage",
     "migrate": "node dist/infrastructure/persistence/migrate.js",
     "validate:neural-artifact": "node dist/infrastructure/ai/validate-neural-artifact.js",
+    "evaluate:ai": "node dist/infrastructure/evaluation/run-ai-evaluation.js",
     "test:db": "jest --config jest.db.config.ts --coverage",
     "test:perf": "jest --config jest.perf.config.ts",
     "test:e2e:hu-29": "jest --config jest.e2e-hu29.config.ts",

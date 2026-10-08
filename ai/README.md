@@ -172,3 +172,20 @@ El contrato ONNX que `#568` cargará (`candidate_features [N,72] float32` ->
 sigmoid) está en `training-manifest.json.modelContract` de cada run, y
 documentado en
 [`docs/en-036-neural-training.md`](../docs/en-036-neural-training.md).
+
+## Paridad PyTorch ↔ ONNX (EN-036.5 #569)
+
+```bash
+uv run nexus-combat-parity-reference \
+  --artifact-dir ./artifacts/<run-id> \
+  --output ./artifacts/<run-id>/pytorch-parity-reference.json
+```
+
+Carga el `model.pt` de ese run (nunca lo reentrena), verifica que su
+`modelStateSha256` recalculado coincide con el del manifest, y corre los
+vectores de feature fijos de `tests/fixtures/golden-*.json` para producir
+`pytorch-parity-reference.json` -- lo que el harness de evaluación de
+Node (`npm run evaluate:ai` en el repo Node) compara contra el MISMO
+`model.onnx` corrido por `onnxruntime-node`, el runtime real de
+producción. Nunca instala `onnxruntime` en Python. Detalle completo en
+[`docs/en-036-ai-evaluation.md`](../docs/en-036-ai-evaluation.md).

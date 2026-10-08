@@ -50,3 +50,9 @@ ai/artifacts/
 ai/**/__pycache__/
 *.pt
 *.onnx
+
+# Evaluacion offline de politicas de IA (EN-036.5, Management #569 §77): salida de
+# `npm run evaluate:ai`, nunca versionada (miles de resultados por corrida FULL).
+evaluation-out/
+ai/evaluation-out/
+*.evaluation.jsonl

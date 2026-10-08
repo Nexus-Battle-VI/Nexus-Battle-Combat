@@ -12,12 +12,28 @@ import {
 import { describeError } from '../observability/describe-error'
 import {
   ARTIFACT_PURPOSE_SMOKE_TEST,
+  type NeuralModelDescriptor,
+  type NeuralTrainingManifestV1,
   parseAndValidateTrainingManifest,
   toNeuralModelDescriptor,
 } from './NeuralTrainingManifestV1'
 import { OnnxRuntimeNeuralInferenceAdapter } from './OnnxRuntimeNeuralInferenceAdapter'
 
 export type NeuralPrimaryBinding = DecisionPolicyBinding & { readonly source: 'NEURAL' }
+
+export interface NeuralArtifactLoadOptions {
+  readonly onnxPath: string
+  readonly manifestPath: string
+  readonly nodeEnv: string
+  readonly allowSmokeModel: boolean
+  readonly inferenceTimeoutMs: number
+}
+
+export interface ValidatedNeuralArtifact {
+  readonly policy: NeuralPolicy
+  readonly descriptor: NeuralModelDescriptor
+  readonly manifest: NeuralTrainingManifestV1
+}
 
 const requireRegularFile = async (path: string, label: string): Promise<void> => {
   // #568 §101: solo abre paths de configuracion del operador, nunca de un
@@ -37,20 +53,65 @@ const requireRegularFile = async (path: string, label: string): Promise<void> =>
 }
 
 /**
+ * Cadena de validacion (defense in depth, #568 §41-45, §89-92), extraida
+ * (EN-036.5, Management #569 §157-160) para que produccion (abajo) Y el
+ * harness de evaluacion offline (`src/evaluation/`) sean el MISMO y UNICO
+ * punto de autoridad del contrato -- nunca dos parsers/validadores
+ * distintos del mismo `training-manifest.json` (#569 §159).
+ *
+ * Orden: manifest JSON -> contrato congelado por #567 (versiones/dimension/
+ * modelContract exactos) -> `artifactPurpose` (SMOKE_TEST nunca con
+ * `nodeEnv==='production'`, sin excepcion ni con `allowSmokeModel`) ->
+ * SHA-256 real de `model.onnx` contra `onnxArtifactSha256` ->
+ * `InferenceSession.create()` + smoke real `[1,72]` (dentro de
+ * `OnnxRuntimeNeuralInferenceAdapter.create`). Nunca propaga a `null`: a
+ * diferencia de `loadNeuralPrimaryPolicy`, ESTA funcion SI lanza (#569
+ * §169: si un matchup requiere Neural y el artefacto no carga, el harness
+ * debe fallar antes de arrancar combates, nunca saltarlo en silencio).
+ */
+export const loadValidatedNeuralArtifact = async (
+  options: NeuralArtifactLoadOptions,
+): Promise<ValidatedNeuralArtifact> => {
+  await requireRegularFile(options.manifestPath, 'manifestPath')
+  await requireRegularFile(options.onnxPath, 'onnxPath')
+
+  const manifestRaw = await readFile(options.manifestPath, 'utf-8')
+  const manifest = parseAndValidateTrainingManifest(JSON.parse(manifestRaw) as unknown)
+
+  if (manifest.artifactPurpose === ARTIFACT_PURPOSE_SMOKE_TEST) {
+    if (options.nodeEnv === 'production') {
+      throw new NeuralModelArtifactError(
+        'artifactPurpose=SMOKE_TEST nunca se activa con nodeEnv=production.',
+      )
+    }
+    if (!options.allowSmokeModel) {
+      throw new NeuralModelArtifactError(
+        'artifactPurpose=SMOKE_TEST requiere allowSmokeModel=true explicito fuera de produccion.',
+      )
+    }
+  }
+
+  const onnxBytes = await readFile(options.onnxPath)
+  const actualHash = createHash('sha256').update(onnxBytes).digest('hex')
+  if (actualHash !== manifest.onnxArtifactSha256) {
+    throw new NeuralModelHashMismatchError()
+  }
+
+  const adapter = await OnnxRuntimeNeuralInferenceAdapter.create(options.onnxPath)
+  const policy = new NeuralPolicy(new FeatureEncoderV1(), adapter, options.inferenceTimeoutMs)
+  const descriptor = toNeuralModelDescriptor(manifest)
+
+  return { policy, descriptor, manifest }
+}
+
+/**
  * Carga, valida y activa `NeuralPolicy` como primaria UNA sola vez durante
  * el bootstrap (EN-036.4, Management #568 §40-48, §71, §79-80). Fail-closed
  * en el sentido de "nunca activa un modelo invalido", pero fail-OPEN para
- * la disponibilidad del servicio (#568 §45): CUALQUIER fallo de aqui
- * devuelve `null` (log `neural_model_unavailable`) en vez de propagar --
- * Combat arranca igual, `RuleBasedPolicy` sigue siendo el fallback fijo.
- *
- * Orden de validacion (defense in depth, #568 §41-45, §89-92): manifest
- * JSON -> contrato congelado por #567 (versiones/dimension/modelContract
- * exactos) -> `artifactPurpose` (SMOKE_TEST nunca en produccion, #568 §73,
- * sin excepcion ni con `NEURAL_ALLOW_SMOKE_MODEL=true`) -> SHA-256 real de
- * `model.onnx` contra `onnxArtifactSha256` -> `InferenceSession.create()` +
- * smoke real `[1,72]` (dentro de `OnnxRuntimeNeuralInferenceAdapter.create`).
- * Nunca se le da a ONNX Runtime la primera linea de defensa (#568 §91).
+ * la disponibilidad del servicio (#568 §45): CUALQUIER fallo de
+ * `loadValidatedNeuralArtifact` devuelve `null` (log
+ * `neural_model_unavailable`) en vez de propagar -- Combat arranca igual,
+ * `RuleBasedPolicy` sigue siendo el fallback fijo.
  */
 export const loadNeuralPrimaryPolicy = async (
   config: AppConfig,
@@ -67,40 +128,14 @@ export const loadNeuralPrimaryPolicy = async (
       )
     }
 
-    await requireRegularFile(config.neuralModelManifestPath, 'NEURAL_MODEL_MANIFEST_PATH')
-    await requireRegularFile(config.neuralModelOnnxPath, 'NEURAL_MODEL_ONNX_PATH')
+    const { policy, descriptor } = await loadValidatedNeuralArtifact({
+      onnxPath: config.neuralModelOnnxPath,
+      manifestPath: config.neuralModelManifestPath,
+      nodeEnv: config.nodeEnv,
+      allowSmokeModel: config.neuralAllowSmokeModel,
+      inferenceTimeoutMs: config.neuralInferenceTimeoutMs,
+    })
 
-    const manifestRaw = await readFile(config.neuralModelManifestPath, 'utf-8')
-    const manifest = parseAndValidateTrainingManifest(JSON.parse(manifestRaw) as unknown)
-
-    if (manifest.artifactPurpose === ARTIFACT_PURPOSE_SMOKE_TEST) {
-      if (config.nodeEnv === 'production') {
-        throw new NeuralModelArtifactError(
-          'artifactPurpose=SMOKE_TEST nunca se activa con NODE_ENV=production.',
-        )
-      }
-      if (!config.neuralAllowSmokeModel) {
-        throw new NeuralModelArtifactError(
-          'artifactPurpose=SMOKE_TEST requiere NEURAL_ALLOW_SMOKE_MODEL=true explicito fuera de ' +
-            'produccion.',
-        )
-      }
-    }
-
-    const onnxBytes = await readFile(config.neuralModelOnnxPath)
-    const actualHash = createHash('sha256').update(onnxBytes).digest('hex')
-    if (actualHash !== manifest.onnxArtifactSha256) {
-      throw new NeuralModelHashMismatchError()
-    }
-
-    const adapter = await OnnxRuntimeNeuralInferenceAdapter.create(config.neuralModelOnnxPath)
-    const policy = new NeuralPolicy(
-      new FeatureEncoderV1(),
-      adapter,
-      config.neuralInferenceTimeoutMs,
-    )
-
-    const descriptor = toNeuralModelDescriptor(manifest)
     logger.info('neural_model_loaded', {
       modelArchitectureVersion: descriptor.modelArchitectureVersion,
       featureSchemaVersion: descriptor.featureSchemaVersion,
