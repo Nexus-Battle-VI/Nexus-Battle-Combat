@@ -136,6 +136,26 @@ vacía), así que todo run usa el dataset sintético de
 `tests/fixtures/training/`. `--artifact-purpose CANDIDATE` existe para
 cuando exista dataset real suficiente.
 
+### `--emit-identity-only` (EN-037.2, Management #571)
+
+```bash
+uv run nexus-combat-train \
+  --dataset-dir ./out \
+  --output ./unused \
+  --source-commit "$(git -C .. rev-parse HEAD)" \
+  --seed 42 \
+  --emit-identity-only
+```
+
+Calcula y escribe en stdout `{runId, trainingConfigSha256,
+datasetOutputFingerprint}` **sin entrenar** (reutiliza exactamente el mismo
+`_run_id`/`TrainingConfig.fingerprint()` que el training real, nunca un
+cálculo aparte). El worker de reentrenamiento continuo de Combat
+(`npm run train:continuous` en la raíz del repo, ver
+[`docs/en-037-continuous-training-worker.md`](../docs/en-037-continuous-training-worker.md))
+lo usa para registrar `TRAINING` en el Model Registry de EN-037.1 ANTES de
+invocar PyTorch, sin duplicar el cálculo de identidad en TypeScript.
+
 ## Regenerar los fixtures/golden vectors
 
 Los fixtures de `tests/fixtures/*.jsonl` y los golden vectors de
