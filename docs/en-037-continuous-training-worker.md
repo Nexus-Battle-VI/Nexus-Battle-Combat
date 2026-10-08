@@ -117,12 +117,26 @@ pudieran quedar inconsistentes entre si.
   corte N+1 (o cualquier corte posterior), simplemente porque la coleccion
   cruda es append-only y el builder nunca descarta el pasado.
 - `processedThrough`: el cutoff REALMENTE usado por el ultimo run
-  terminado (exitoso o `NOT_TRAINABLE`). Cuando `requestedThrough <=
+  terminado (exitoso o `NOT_TRAINABLE` definitivo). Cuando `requestedThrough <=
 processedThrough`, no hay trabajo pendiente (IDLE).
 
 No se uso un booleano `new_data_pending=True` en memoria (#571 §5.1 lo
 descarta explicitamente): no sobrevive a reinicios ni coordina varias
 instancias. `requestedThrough`/`processedThrough` en Mongo si.
+
+**`requestedThrough` (cursor de battle rooms procesadas) es DISTINTO del
+cutoff que se pasa a `nexus-combat-dataset build`** (revision de codigo,
+#571): el cutoff real usado es `requestedThrough + gracePeriodMs` (nunca
+mas alla de "ahora"), no `requestedThrough` tal cual. Razon: el `finishedAt`
+de la battle room es solo la senal de "hay trabajo pendiente", pero
+`CombatDecisionEvent`/`MctsTeacherLabel` se persisten de forma asincrona
+(telemetria best-effort, `LiveMctsTeacherLabeler`) y pueden escribirse
+segundos DESPUES de `finishedAt`. Usar `finishedAt` tal cual como cutoff
+excluiria esos labels (el dataset builder ya falla cerrado ante labels
+faltantes), provocando un `DATASET_BUILD_FAILED`/`NOT_TRAINABLE` recurrente
+aunque el label SI exista, solo un poco mas tarde. El mismo periodo de
+gracia que protege `requestedThrough` se reutiliza como margen EXPLICITO
+sobre el valor del cutoff en si.
 
 ## 5. Coalescing
 
@@ -169,6 +183,33 @@ ai-training-coordinator { leaseState, leaseOwnerId, fencingToken, leaseExpiresAt
   ventana en la que un propietario que acaba de perder el lease podria
   escribir alli.
 
+### Limite declarado (fencing no atomico con el Model Registry, revision de codigo)
+
+Las dos verificaciones anteriores ACOTAN la ventana, pero NO la eliminan:
+el coordinador (`ai-training-coordinator`) y el Model Registry
+(`ai-model-versions`) son DOS colecciones Mongo separadas, y `#570`
+deliberadamente no sabe nada de leases (el registry no puede ni debe
+conocer conceptos de coordinacion de un worker externo). No se usan
+transacciones multi-documento para unirlas: ademas de anadir complejidad
+no justificada por el resto del diseño, el contenedor Mongo standalone
+usado en pruebas (`mongo:8.0` sin replica set) ni siquiera las soporta.
+
+Esto significa que, en la ventana estrecha ENTRE que `renewLease()` ultimo
+confirma la propiedad y que `registry.registerCandidate()` termina de
+escribir, un propietario que PIERDE el lease justo en ese instante puede
+ver su escritura al registry prosperar igual -- su posterior
+`recordSuccess()` fallara (fencing), pero el `CANDIDATE` ya quedo escrito.
+¿Es esto daño real? NO, por construccion: `trainingRunId` es determinista
+(mismo dataset+config+seed -> mismo id), asi que esa escritura "obsoleta"
+es EXACTAMENTE la misma que el propietario legitimo habria producido. El
+fix de recuperacion idempotente (§10) hace que el SIGUIENTE worker que
+reclame el lease encuentre la version YA `CANDIDATE` y la confirme sin
+reentrenar ni violar la maquina de estados -- el sistema converge
+correctamente aunque la escritura "obsoleta" haya prosperado. Probado
+explicitamente con una carrera inducida en esa ventana exacta
+(`continuous-training-pipeline.spec.ts`, "a stale registerCandidate()
+write still converges correctly once a legitimate worker recovers").
+
 ### Limite declarado (split brain, #571 §6.2)
 
 Un lease distribuido, por si solo, **no mata un proceso PyTorch que ya esta
@@ -201,10 +242,21 @@ se reutilizan sin tocar.
 `counts.{train,validation,test}Decisions > 0` -- el mismo criterio exacto
 de `DatasetNotTrainableError` en Python (`training/dataset_loader.py`), sin
 duplicar su logica de exclusion, solo reutilizando el campo que el
-manifest YA expone. Si algun split esta vacio: `NOT_TRAINABLE`, el cutoff
-se marca como `processedThrough` igualmente (para no reintentar
-inutilmente el MISMO corte sin datos nuevos) y el worker nunca inventa
-labels ni fabrica una `CANDIDATE` falsa.
+manifest YA expone. El worker nunca inventa labels ni fabrica una
+`CANDIDATE` falsa.
+
+**`NOT_TRAINABLE` es reintentable, nunca definitivo de inmediato**
+(revision de codigo, #571): "no entrenable" puede ser una condicion
+TEMPORAL -- los labels de ESTE cutoff todavia podrian estar en vuelo
+(ver el cutoff ampliado mas abajo) -- no necesariamente que los datos
+sean permanentemente insuficientes. Avanzar `processedThrough` en la
+PRIMERA deteccion podria dejar ese corte sin reintentarse nunca si no
+llega ninguna partida nueva despues (nada mas haria crecer
+`requestedThrough`). El worker reintenta el MISMO cutoff (con el mismo
+backoff exponencial que un `FAILED`, via `consecutiveFailureCount`)
+hasta `--max-not-trainable-retries` veces (default 3) antes de darlo
+por definitivo y recien entonces avanzar `processedThrough` -- bounded,
+nunca un bucle infinito.
 
 **`MctsTeacherLabel` no es automatico**: auditado explicitamente
 (`LiveMctsTeacherLabeler`, `MCTS_LIVE_TEACHER_LABELING_ENABLED`,
@@ -265,15 +317,15 @@ esta Task.
 
 ## 10. Idempotencia y recuperacion
 
-| Punto de interrupcion                                             | Comportamiento al reintentar                                                                                                                                                                                                                                                                                                                                                       |
-| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Antes de reclamar el lease                                        | Sin efecto; la siguiente iteracion vuelve a intentar.                                                                                                                                                                                                                                                                                                                              |
-| Dataset construido, training no iniciado                          | Un reintento (nuevo proceso, mismo cutoff) reconstruye el MISMO dataset (determinista) y produce la MISMA identidad.                                                                                                                                                                                                                                                               |
-| `registry.startTraining()` llamado, proceso cae antes de entrenar | La version queda en `TRAINING` (abandonada, ver §9). Un reintento con el mismo dataset/seed llama `startTraining` de nuevo: idempotente (mismo lineage), no-op.                                                                                                                                                                                                                    |
-| ONNX escrito en disco, registry aun no actualizado                | El directorio de trabajo es temporal (`workRootDir`, borrado en el `finally`); un reintento regenera los artefactos deterministicamente.                                                                                                                                                                                                                                           |
-| `registerCandidate` confirmado, cursor aun no actualizado         | `recordSuccess` solo se llama DESPUES de `registerCandidate` exitoso; si el proceso cae ANTES de esa llamada, el cursor queda sin avanzar, pero la version YA esta en `CANDIDATE` -- un reintento intentaria `startTraining`/`registerCandidate` de nuevo para el MISMO `modelVersion`: ambos son idempotentes para lineage/artifact identicos (`#570`), asi que no corrompe nada. |
-| Cursor actualizado, worker cae inmediatamente despues             | Sin efecto: el siguiente arranque simplemente ve `processedThrough` ya al dia.                                                                                                                                                                                                                                                                                                     |
-| Lease perdido a mitad de un run                                   | El heartbeat detecta la perdida (`renewLease` devuelve `false`), cancela el subproceso en curso, y el run se clasifica `FAILED`/`LEASE_LOST` sin tocar el registry ni el cursor con un resultado stale (ver §6).                                                                                                                                                                   |
+| Punto de interrupcion                                                                                     | Comportamiento al reintentar                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Antes de reclamar el lease                                                                                | Sin efecto; la siguiente iteracion vuelve a intentar.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Dataset construido, training no iniciado                                                                  | Un reintento (nuevo proceso, mismo cutoff) reconstruye el MISMO dataset (determinista) y produce la MISMA identidad.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `registry.startTraining()` llamado, proceso cae antes de entrenar                                         | La version queda en `TRAINING` (abandonada, ver §9). Un reintento con el mismo dataset/seed llama `startTraining` de nuevo: idempotente (mismo lineage), no-op; luego SI vuelve a entrenar (la version sigue en `TRAINING`, nada que recuperar todavia).                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ONNX escrito en disco, registry aun no actualizado                                                        | El directorio de trabajo es temporal (`workRootDir`, creado y borrado DENTRO del mismo `try/finally` que el heartbeat, revision de codigo); un reintento regenera los artefactos deterministicamente.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `registerCandidate` confirmado, cursor aun no actualizado                                                 | **Corregido tras revision de codigo**: `AiModelVersion.registerCandidate` SOLO permite `TRAINING -> CANDIDATE` -- llamar `registerCandidate` de nuevo sobre una version que YA esta en `CANDIDATE` lanzaria `InvalidModelStateTransitionError`, nunca seria un no-op. El pipeline ahora consulta `registry.findByVersion(identity.runId)` justo despues de emitir la identidad (ANTES de entrenar de nuevo): si la version ya existe y ya no esta en `TRAINING`, el reintento se SALTA entrenamiento+registro por completo y llama `coordinator.recordSuccess(...)` directamente con esa version -- recuperacion real, nunca una re-transicion invalida. |
+| Cursor actualizado, worker cae inmediatamente despues                                                     | Sin efecto: el siguiente arranque simplemente ve `processedThrough` ya al dia.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Lease perdido a mitad de un run (incluida la ventana estrecha justo antes de `registerCandidate`, ver §6) | El heartbeat/las revalidaciones de lease detectan la perdida y el run se clasifica `FAILED`/`LEASE_LOST` sin que el coordinador confirme un resultado obsoleto. Si la escritura al registry alcanzo a prosperar igual (ventana no atomica, §6), el SIGUIENTE worker que reclame el lease recupera esa version via la fila anterior -- nunca reentrena, nunca duplica, el sistema converge.                                                                                                                                                                                                                                                               |
 
 ## 11. Configuracion y variables de entorno
 
@@ -300,7 +352,7 @@ Flags disponibles: `--once`, `--max-iterations <n>`, `--ai-dir <path>`,
 `--lease-duration-ms`, `--heartbeat-interval-ms`, `--poll-interval-ms`,
 `--dataset-build-timeout-ms`, `--training-timeout-ms`,
 `--identity-timeout-ms`, `--work-root-dir`, `--backoff-base-ms`,
-`--backoff-max-ms`. Sin `--once`, corre en bucle indefinido (poll +
+`--backoff-max-ms`, `--max-not-trainable-retries` (default 3, §7). Sin `--once`, corre en bucle indefinido (poll +
 backoff exponencial ante fallos), respondiendo a `SIGINT`/`SIGTERM` para
 un apagado ordenado (termina la iteracion en curso, no acepta una nueva).
 
@@ -310,10 +362,18 @@ Sin medicion de topologia/recursos de produccion todavia (eso es
 `#573`/`#574`): los timeouts de subprocesos (`--dataset-build-timeout-ms`,
 `--training-timeout-ms`, `--identity-timeout-ms`) son configurables, no
 hardcodeados "porque si", y existen para que un `uv run` colgado no
-bloquee el worker indefinidamente -- `ChildProcessRunner` cancela
-(`SIGTERM`) y rechaza con un error claro al expirar. El output
-stdout/stderr capturado por subproceso esta acotado (2 MiB por stream por
-defecto) para no crecer sin limite en una corrida larga.
+bloquee el worker indefinidamente. El output stdout/stderr capturado por
+subproceso esta acotado (2 MiB por stream por defecto) para no crecer sin
+limite en una corrida larga.
+
+**Escalamiento a `SIGKILL`** (revision de codigo, #571): `ChildProcessRunner`
+envia `SIGTERM` primero (al expirar el timeout o al cancelar por perdida
+de lease), pero `SIGTERM` NO garantiza terminacion -- un proceso Python
+puede estar en medio de una llamada C/CUDA no interrumpible y simplemente
+ignorarlo, dejando el timeout original sin efecto real (la `Promise`
+nunca se resolveria). Si el proceso sigue vivo 10s despues de `SIGTERM`
+(`SIGKILL_GRACE_MS`), se escala a `SIGKILL`. Esto aplica tanto al timeout
+interno como al `cancel()` externo que dispara la perdida de lease.
 
 ## 14. Observabilidad
 
@@ -343,15 +403,23 @@ registra `MONGODB_URI`, credenciales, ni payloads de telemetria sensibles
   `test/unit/continuous-training-pipeline.spec.ts`): parseo del dataset
   manifest, y la logica completa de UNA iteracion
   (`runContinuousTrainingIteration`) con un `ChildProcessRunner` FALSO --
-  IDLE, LEASE_BUSY, NOT_TRAINABLE, exito feliz, clasificacion de fallos
-  (`DATASET_BUILD_FAILED`, `TRAINING_PROCESS_FAILED`), y perdida de lease
-  a mitad de un run (nunca confirma un resultado obsoleto).
+  IDLE, LEASE_BUSY, NOT_TRAINABLE (reintentable Y definitivo tras agotar
+  `maxNotTrainableRetries`), exito feliz, clasificacion de fallos
+  (`DATASET_BUILD_FAILED`, `TRAINING_PROCESS_FAILED` con version
+  abandonada en `TRAINING`), perdida de lease a mitad de un run (nunca
+  confirma un resultado obsoleto), el cutoff real = `finishedAt +
+gracePeriodMs` (nunca el `finishedAt` crudo), y una carrera inducida
+  especificamente en la ventana entre la ultima revalidacion de lease y
+  `registerCandidate()` (revision de codigo, §6): la escritura "obsoleta"
+  prospera, pero un segundo worker recupera la version YA `CANDIDATE` y
+  confirma el exito sin reentrenar ni violar la maquina de estados.
 - **Mongo real** (`test/db/mongo-continuous-training-coordinator.spec.ts`):
-  11 pruebas, incluyendo las criticas de concurrencia (CT-07..11): dos
+  13 pruebas, incluyendo las criticas de concurrencia (CT-07..11): dos
   reclamos concurrentes reales (`Promise.all`) con exactamente un
   ganador, lease expirado recuperable, fencing bloqueando renovacion y
-  escritura de resultado de un propietario obsoleto, validador de Mongo
-  rechazando un documento invalido.
+  escritura de resultado (incluido `recordNotTrainableRetry`) de un
+  propietario obsoleto, validador de Mongo rechazando un documento
+  invalido.
 - **Integrada de punta a punta** (`test/db/continuous-training-worker-e2e.spec.ts`):
   Mongo REAL (testcontainers) + `CombatDecisionEvent`/`MctsTeacherLabel`
   reales en forma (fixture CONTROLADO de

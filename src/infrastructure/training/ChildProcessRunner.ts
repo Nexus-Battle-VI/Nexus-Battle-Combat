@@ -26,7 +26,7 @@ export interface ChildProcessOptions {
 
 export interface RunningChildProcess {
   readonly result: Promise<ChildProcessResult>
-  /** Termina el subproceso (#571 §6.2, CT-12): best-effort -- `SIGTERM` primero, nunca garantiza terminacion instantanea de un proceso Python ya en medio de un calculo de CPU. */
+  /** Termina el subproceso (#571 §6.2, CT-12): `SIGTERM` primero, escalado a `SIGKILL` tras `SIGKILL_GRACE_MS` si el proceso lo ignora -- nunca instantaneo, pero nunca indefinido tampoco. */
   readonly cancel: (signal?: NodeJS.Signals) => void
 }
 
@@ -49,6 +49,14 @@ export class ChildProcessExitError extends Error {
 }
 
 const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024
+/**
+ * `SIGTERM` no garantiza terminacion (revision de codigo, #571): un
+ * proceso Python puede estar en medio de una llamada C/CUDA no
+ * interrumpible y simplemente ignorarla, dejando el timeout original sin
+ * efecto real (la Promise nunca se resuelve). Tras este margen sin que
+ * `close` dispare, se escala a `SIGKILL`.
+ */
+const SIGKILL_GRACE_MS = 10_000
 
 /** Tipo de la dependencia inyectable (#571): la logica de pipeline nunca llama a `spawn` directamente, siempre a traves de esta funcion. */
 export type ChildProcessRunner = (
@@ -63,10 +71,26 @@ export const spawnChildProcess: ChildProcessRunner = (command, args, options) =>
   let stdout = ''
   let stderr = ''
   let timedOut = false
+  let killHandle: ReturnType<typeof setTimeout> | null = null
+  let exited = false
+
+  /**
+   * Envia `signal` y, si el proceso sigue vivo tras `SIGKILL_GRACE_MS`,
+   * escala a `SIGKILL` (revision de codigo, #571): un `SIGTERM` ignorado
+   * ya no deja el cancelador (ni el timeout) sin efecto real.
+   */
+  const killWithEscalation = (signal: NodeJS.Signals): void => {
+    child.kill(signal)
+    if (signal !== 'SIGKILL' && killHandle === null) {
+      killHandle = setTimeout(() => {
+        if (!exited) child.kill('SIGKILL')
+      }, SIGKILL_GRACE_MS)
+    }
+  }
 
   const timeoutHandle = setTimeout(() => {
     timedOut = true
-    child.kill('SIGTERM')
+    killWithEscalation('SIGTERM')
   }, options.timeoutMs)
 
   child.stdout.on('data', (chunk: Buffer) => {
@@ -78,11 +102,15 @@ export const spawnChildProcess: ChildProcessRunner = (command, args, options) =>
 
   const result = new Promise<ChildProcessResult>((resolve, reject) => {
     child.on('error', (error: Error) => {
+      exited = true
       clearTimeout(timeoutHandle)
+      if (killHandle !== null) clearTimeout(killHandle)
       reject(error)
     })
     child.on('close', (code: number | null) => {
+      exited = true
       clearTimeout(timeoutHandle)
+      if (killHandle !== null) clearTimeout(killHandle)
       if (timedOut) {
         reject(new ChildProcessTimeoutError(command, options.timeoutMs))
         return
@@ -91,7 +119,12 @@ export const spawnChildProcess: ChildProcessRunner = (command, args, options) =>
     })
   })
 
-  return { result, cancel: (signal: NodeJS.Signals = 'SIGTERM') => child.kill(signal) }
+  return {
+    result,
+    cancel: (signal: NodeJS.Signals = 'SIGTERM') => {
+      killWithEscalation(signal)
+    },
+  }
 }
 
 /** Azucar para el caso comun "corre y exige exit code 0" (#571): sigue devolviendo el resultado completo para que el caller pueda leer stdout. */

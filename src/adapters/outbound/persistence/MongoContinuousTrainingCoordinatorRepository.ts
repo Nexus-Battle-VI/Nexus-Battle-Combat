@@ -166,6 +166,26 @@ export class MongoContinuousTrainingCoordinatorRepository implements ContinuousT
     return result.matchedCount === 1
   }
 
+  async recordNotTrainableRetry(
+    claim: TrainingLeaseClaim,
+    reason: string,
+    at: Date,
+  ): Promise<boolean> {
+    const result = await this.coordinator.updateOne(this.ownedByFilter(claim), {
+      $set: {
+        ...releasedLeaseFields,
+        lastRunOutcome: 'NOT_TRAINABLE',
+        lastRunAt: at,
+        lastRunModelVersion: null,
+        lastFailureReasonCode: null,
+        lastFailureReason: reason,
+        updatedAt: at,
+      },
+      $inc: { consecutiveFailureCount: new Int32(1) },
+    })
+    return result.matchedCount === 1
+  }
+
   async recordFailure(
     claim: TrainingLeaseClaim,
     reasonCode: ContinuousTrainingFailureReasonCode,

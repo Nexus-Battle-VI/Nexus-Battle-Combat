@@ -17,6 +17,12 @@ import { AiModelRegistry } from '../../src/application/services/AiModelRegistry'
 import { InMemoryAiModelRegistryRepository } from '../../src/adapters/outbound/persistence/InMemoryAiModelRegistryRepository'
 import { InMemoryAiModelArtifactRepository } from '../../src/adapters/outbound/persistence/InMemoryAiModelArtifactRepository'
 import { InMemoryContinuousTrainingCoordinatorRepository } from '../../src/adapters/outbound/persistence/InMemoryContinuousTrainingCoordinatorRepository'
+import type {
+  ContinuousTrainingCoordinatorPort,
+  ContinuousTrainingCoordinatorSnapshot,
+  ContinuousTrainingFailureReasonCode,
+  TrainingLeaseClaim,
+} from '../../src/application/ports/ContinuousTrainingCoordinatorPort'
 import { inBattleRoom, silentLogger } from '../fixtures/battle'
 import type { BattleRoom } from '../../src/domain/entities/BattleRoom'
 import type { BattleRoomRepositoryPort } from '../../src/application/ports/BattleRoomRepositoryPort'
@@ -156,6 +162,7 @@ interface FakePythonFixture {
   readonly failDatasetBuild?: boolean
   readonly failTraining?: boolean
   readonly onTrainingStart?: () => void
+  readonly onDatasetBuildArgs?: (args: readonly string[]) => void
 }
 
 const argAfter = (args: readonly string[], flag: string): string => {
@@ -174,6 +181,7 @@ const fakeResult = (outcome: ChildProcessResult): RunningChildProcess => ({
 const createFakePythonRunner = (fixture: FakePythonFixture): ChildProcessRunner => {
   return (_command, args) => {
     if (args.includes('nexus-combat-dataset')) {
+      fixture.onDatasetBuildArgs?.(args)
       const promise = (async (): Promise<ChildProcessResult> => {
         if (fixture.failDatasetBuild === true) {
           return { exitCode: 1, stdout: '', stderr: 'error: fake dataset build failure' }
@@ -230,6 +238,7 @@ const baseConfig = (workRootDir: string): ContinuousTrainingPipelineConfig => ({
   trainingTimeoutMs: 10_000,
   identityTimeoutMs: 10_000,
   workRootDir,
+  maxNotTrainableRetries: 3,
 })
 
 describe('runContinuousTrainingIteration (EN-037.2, Management #571)', () => {
@@ -293,6 +302,7 @@ describe('runContinuousTrainingIteration (EN-037.2, Management #571)', () => {
     })
     const deps = newDeps(new FakeBattleRoomRepository([battleRoom]), runner)
 
+    const before = await deps.coordinator.getSnapshot()
     const { outcome } = await runContinuousTrainingIteration(
       deps,
       baseConfig(workRootDir),
@@ -303,6 +313,38 @@ describe('runContinuousTrainingIteration (EN-037.2, Management #571)', () => {
     const snapshot = await deps.coordinator.getSnapshot()
     expect(snapshot.leaseState).toBe('IDLE')
     expect(snapshot.lastRunOutcome).toBe('NOT_TRAINABLE')
+    // Revision de codigo (#571 §7.3): la PRIMERA deteccion reintenta, nunca
+    // avanza `processedThrough` de inmediato (podria ser una condicion
+    // temporal -- labels todavia en vuelo).
+    expect(snapshot.processedThrough).toEqual(before.processedThrough)
+    expect(snapshot.consecutiveFailureCount).toBe(1)
+  })
+
+  it('revision de codigo (#571 §7.3): NOT_TRAINABLE reintenta el MISMO cutoff hasta maxNotTrainableRetries, luego lo da por definitivo', async () => {
+    const battleRoom = finishedRoomAt(new Date('2026-12-01T00:00:00.000Z'))
+    const runner = createFakePythonRunner({
+      datasetManifest: DATASET_MANIFEST_NOT_TRAINABLE,
+      identity: IDENTITY,
+      trainingManifest: trainingManifestFor(IDENTITY),
+    })
+    const deps = newDeps(new FakeBattleRoomRepository([battleRoom]), runner)
+    const config = { ...baseConfig(workRootDir), maxNotTrainableRetries: 2 }
+
+    // Intentos 1 y 2: reintenta (nunca avanza processedThrough).
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const { outcome } = await runContinuousTrainingIteration(deps, config, new Date(0))
+      expect(outcome.kind).toBe('NOT_TRAINABLE')
+      const snapshot = await deps.coordinator.getSnapshot()
+      expect(snapshot.processedThrough.getTime()).toBe(0)
+      expect(snapshot.consecutiveFailureCount).toBe(attempt)
+    }
+
+    // Intento 3: agota los reintentos, lo da por definitivo y avanza el cursor.
+    const { outcome } = await runContinuousTrainingIteration(deps, config, new Date(0))
+    expect(outcome.kind).toBe('NOT_TRAINABLE')
+    const finalSnapshot = await deps.coordinator.getSnapshot()
+    expect(finalSnapshot.processedThrough.getTime()).toBeGreaterThan(0)
+    expect(finalSnapshot.consecutiveFailureCount).toBe(0)
   })
 
   it('full happy path: builds the dataset, registers TRAINING, trains, and registers CANDIDATE', async () => {
@@ -329,6 +371,27 @@ describe('runContinuousTrainingIteration (EN-037.2, Management #571)', () => {
     expect(snapshot.leaseState).toBe('IDLE')
     expect(snapshot.lastRunOutcome).toBe('SUCCESS')
     expect(snapshot.lastRunModelVersion).toBe(IDENTITY.runId)
+  })
+
+  it('revision de codigo (#571 §4/§7.3): the dataset cutoff is finishedAt + gracePeriodMs, not the raw battle finishedAt', async () => {
+    const finishedAt = new Date('2026-12-01T00:00:00.000Z')
+    const battleRoom = finishedRoomAt(finishedAt)
+    let capturedCutoff: string | null = null
+    const runner = createFakePythonRunner({
+      datasetManifest: DATASET_MANIFEST_TRAINABLE,
+      identity: IDENTITY,
+      trainingManifest: trainingManifestFor(IDENTITY),
+      onDatasetBuildArgs: (args) => {
+        capturedCutoff = argAfter(args, '--cutoff')
+      },
+    })
+    const deps = newDeps(new FakeBattleRoomRepository([battleRoom]), runner)
+    const config = baseConfig(workRootDir)
+
+    await runContinuousTrainingIteration(deps, config, new Date(0))
+
+    expect(capturedCutoff).not.toBeNull()
+    expect(new Date(capturedCutoff!).getTime()).toBe(finishedAt.getTime() + config.gracePeriodMs)
   })
 
   it('classifies a dataset build failure as DATASET_BUILD_FAILED and never advances processedThrough', async () => {
@@ -412,5 +475,158 @@ describe('runContinuousTrainingIteration (EN-037.2, Management #571)', () => {
 
     const registered = await deps.registry.findByVersion(IDENTITY.runId)
     expect(registered?.state === 'CANDIDATE').toBe(false)
+  })
+
+  /**
+   * Decorador SOLO de prueba (revision de codigo, #571 §6.2): intercepta la
+   * SEGUNDA llamada a `renewLease` -- exactamente la comprobacion
+   * "stillOwnerBeforeRegistering" justo antes de `registry.registerCandidate()`
+   * -- para que prospere normalmente (el claim original SIGUE siendo
+   * valido en ese instante) y SOLO DESPUES fuerce que otro propietario
+   * reclame el lease. Esto simula la ventana real que la revision senalo:
+   * el fencing del coordinador no puede ser atomico con la escritura del
+   * Model Registry (son dos sistemas separados, #570 nunca sabe de leases),
+   * asi que esa ventana estrecha existe de verdad. Lo que se demuestra
+   * aqui es que, AUNQUE la escritura del propietario obsoleto prospere, el
+   * sistema converge correctamente: el coordinador nunca confirma el
+   * resultado de ese propietario, y un segundo worker (identidad
+   * deterministica) recupera la version YA registrada sin repetir el
+   * entrenamiento ni violar la maquina de estados (ver el fix de
+   * recuperacion idempotente mas arriba en `ContinuousTrainingPipeline.ts`).
+   */
+  class RaceInjectingCoordinator implements ContinuousTrainingCoordinatorPort {
+    private renewCount = 0
+
+    constructor(
+      private readonly inner: ContinuousTrainingCoordinatorPort,
+      private readonly onSecondRenewSucceeded: () => void,
+    ) {}
+
+    advanceRequestedThrough(candidateThrough: Date, at: Date): Promise<void> {
+      return this.inner.advanceRequestedThrough(candidateThrough, at)
+    }
+    getSnapshot(): Promise<ContinuousTrainingCoordinatorSnapshot> {
+      return this.inner.getSnapshot()
+    }
+    tryClaimLease(
+      ownerId: string,
+      leaseDurationMs: number,
+      at: Date,
+    ): Promise<TrainingLeaseClaim | null> {
+      return this.inner.tryClaimLease(ownerId, leaseDurationMs, at)
+    }
+    async renewLease(
+      claim: TrainingLeaseClaim,
+      leaseDurationMs: number,
+      at: Date,
+    ): Promise<boolean> {
+      this.renewCount += 1
+      const result = await this.inner.renewLease(claim, leaseDurationMs, at)
+      if (this.renewCount === 2 && result) this.onSecondRenewSucceeded()
+      return result
+    }
+    releaseLease(claim: TrainingLeaseClaim, at: Date): Promise<void> {
+      return this.inner.releaseLease(claim, at)
+    }
+    recordSuccess(
+      claim: TrainingLeaseClaim,
+      processedThrough: Date,
+      modelVersion: string,
+      at: Date,
+    ): Promise<boolean> {
+      return this.inner.recordSuccess(claim, processedThrough, modelVersion, at)
+    }
+    recordNotTrainable(
+      claim: TrainingLeaseClaim,
+      processedThrough: Date,
+      reason: string,
+      at: Date,
+    ): Promise<boolean> {
+      return this.inner.recordNotTrainable(claim, processedThrough, reason, at)
+    }
+    recordNotTrainableRetry(claim: TrainingLeaseClaim, reason: string, at: Date): Promise<boolean> {
+      return this.inner.recordNotTrainableRetry(claim, reason, at)
+    }
+    recordFailure(
+      claim: TrainingLeaseClaim,
+      reasonCode: ContinuousTrainingFailureReasonCode,
+      reason: string,
+      at: Date,
+    ): Promise<boolean> {
+      return this.inner.recordFailure(claim, reasonCode, reason, at)
+    }
+  }
+
+  it('revision de codigo (#571 §6.2): a stale registerCandidate() write still converges correctly once a legitimate worker recovers', async () => {
+    const battleRoom = finishedRoomAt(new Date('2026-12-01T00:00:00.000Z'))
+    const innerCoordinator = new InMemoryContinuousTrainingCoordinatorRepository()
+    const raceCoordinator = new RaceInjectingCoordinator(innerCoordinator, () => {
+      innerCoordinator.__testOnlyForceReclaim('intruder-worker')
+    })
+
+    const runnerA = createFakePythonRunner({
+      datasetManifest: DATASET_MANIFEST_TRAINABLE,
+      identity: IDENTITY,
+      trainingManifest: trainingManifestFor(IDENTITY),
+    })
+    const registry = new AiModelRegistry(
+      new InMemoryAiModelRegistryRepository(),
+      new InMemoryAiModelArtifactRepository(),
+      fixedClock,
+    )
+    const depsA: ContinuousTrainingPipelineDeps = {
+      battleRooms: new FakeBattleRoomRepository([battleRoom]),
+      coordinator: raceCoordinator,
+      registry,
+      clock: fixedClock,
+      logger: silentLogger,
+      runChildProcess: runnerA,
+    }
+
+    const { outcome: outcomeA } = await runContinuousTrainingIteration(
+      depsA,
+      baseConfig(workRootDir),
+      new Date(0),
+    )
+
+    // El worker A SI escribio CANDIDATE (su `registerCandidate()` nunca
+    // fue bloqueado -- esa es justamente la ventana que esta prueba
+    // ejercita), pero NUNCA pudo confirmarlo en el coordinador.
+    expect(outcomeA.kind).toBe('FAILED')
+    if (outcomeA.kind === 'FAILED') expect(outcomeA.reasonCode).toBe('LEASE_LOST')
+    const afterA = await registry.findByVersion(IDENTITY.runId)
+    expect(afterA?.state).toBe('CANDIDATE')
+
+    // Worker B (identidad deterministica, mismo cutoff) reclama el lease
+    // que "intruder-worker" ya tiene reservado via el force-reclaim --
+    // libera primero para simular que B es quien de verdad lo reclamo.
+    await innerCoordinator.releaseLease({ ownerId: 'intruder-worker', fencingToken: 2 })
+    const runnerB = createFakePythonRunner({
+      datasetManifest: DATASET_MANIFEST_TRAINABLE,
+      identity: IDENTITY,
+      trainingManifest: trainingManifestFor(IDENTITY),
+    })
+    const depsB: ContinuousTrainingPipelineDeps = {
+      battleRooms: new FakeBattleRoomRepository([battleRoom]),
+      coordinator: innerCoordinator,
+      registry,
+      clock: fixedClock,
+      logger: silentLogger,
+      runChildProcess: runnerB,
+    }
+
+    const { outcome: outcomeB } = await runContinuousTrainingIteration(
+      depsB,
+      baseConfig(workRootDir),
+      new Date(0),
+    )
+
+    // B recupera la version YA CANDIDATE sin reintentar el entrenamiento
+    // ni violar la transicion de estado -- el sistema converge.
+    expect(outcomeB).toEqual({ kind: 'SUCCESS', modelVersion: IDENTITY.runId })
+    const finalSnapshot = await innerCoordinator.getSnapshot()
+    expect(finalSnapshot.leaseState).toBe('IDLE')
+    expect(finalSnapshot.lastRunOutcome).toBe('SUCCESS')
+    expect(finalSnapshot.lastRunModelVersion).toBe(IDENTITY.runId)
   })
 })

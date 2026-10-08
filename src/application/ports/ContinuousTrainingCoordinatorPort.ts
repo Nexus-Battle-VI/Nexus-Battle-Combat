@@ -83,13 +83,33 @@ export interface ContinuousTrainingCoordinatorPort {
     at: Date,
   ): Promise<boolean>
 
-  /** `NOT_TRAINABLE` avanza `processedThrough` igual que `SUCCESS` (#571 §7.3): reintentar el MISMO corte sin datos nuevos es inutil. */
+  /**
+   * `NOT_TRAINABLE` definitivo: avanza `processedThrough` (#571 §7.3) --
+   * solo se llama tras agotar `recordNotTrainableRetry` (revision de
+   * codigo): un dataset "no entrenable" puede ser una condicion
+   * TEMPORAL (labels todavia en vuelo, #571 §4/§7.3-revision) y no
+   * definitiva -- avanzar el cursor de inmediato en la PRIMERA deteccion
+   * podria dejar datos elegibles sin volver a intentarse nunca si no
+   * llega ninguna partida nueva despues.
+   */
   recordNotTrainable(
     claim: TrainingLeaseClaim,
     processedThrough: Date,
     reason: string,
     at: Date,
   ): Promise<boolean>
+
+  /**
+   * `NOT_TRAINABLE` reintentable (revision de codigo, #571): como
+   * `recordFailure` (incrementa `consecutiveFailureCount` para backoff,
+   * NUNCA avanza `processedThrough`), pero registra
+   * `lastRunOutcome='NOT_TRAINABLE'` en vez de `'FAILED'` -- distingue
+   * "los datos insuficientes podrian resolverse solos" de un error
+   * tecnico real. El worker decide, segun `consecutiveFailureCount`,
+   * cuando dejar de reintentar y llamar `recordNotTrainable` en su lugar
+   * (nunca un bucle infinito).
+   */
+  recordNotTrainableRetry(claim: TrainingLeaseClaim, reason: string, at: Date): Promise<boolean>
 
   /** `FAILED` NUNCA avanza `processedThrough` (#571 §6.3): el mismo corte se reintenta, con backoff segun `consecutiveFailureCount`. */
   recordFailure(

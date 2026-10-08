@@ -113,6 +113,16 @@ export class InMemoryContinuousTrainingCoordinatorRepository implements Continuo
     return Promise.resolve(true)
   }
 
+  recordNotTrainableRetry(claim: TrainingLeaseClaim, _reason: string, at: Date): Promise<boolean> {
+    if (!this.owns(claim)) return Promise.resolve(false)
+    this.state.lastRunOutcome = 'NOT_TRAINABLE'
+    this.state.lastRunAt = at
+    this.state.lastRunModelVersion = null
+    this.state.consecutiveFailureCount += 1
+    this.release()
+    return Promise.resolve(true)
+  }
+
   recordFailure(
     claim: TrainingLeaseClaim,
     _reasonCode: ContinuousTrainingFailureReasonCode,

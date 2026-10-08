@@ -67,6 +67,13 @@ export interface ContinuousTrainingPipelineConfig {
   readonly trainingTimeoutMs: number
   readonly identityTimeoutMs: number
   readonly workRootDir: string
+  /**
+   * Cuantas veces reintentar el MISMO cutoff tras `NOT_TRAINABLE` antes de
+   * darlo por definitivo y avanzar `processedThrough` (revision de
+   * codigo, #571 §7.3): un dataset insuficiente puede resolverse solo
+   * (labels todavia en vuelo) sin que llegue ninguna partida nueva.
+   */
+  readonly maxNotTrainableRetries: number
 }
 
 export type ContinuousTrainingIterationOutcome =
@@ -320,7 +327,21 @@ export const runContinuousTrainingIteration = async (
     fencingToken: claim.fencingToken,
   })
 
-  const cutoff = minDate(snapshot.requestedThrough, nextScanWatermark)
+  // Revision de codigo (#571): el cutoff NO es simplemente `requestedThrough`
+  // (el `finishedAt` crudo de la battle room). `MctsTeacherLabel`/
+  // `CombatDecisionEvent` se persisten de forma asincrona (telemetria
+  // best-effort, `LiveMctsTeacherLabeler`) y pueden quedar escritos
+  // segundos DESPUES de `finishedAt` -- usar `finishedAt` tal cual como
+  // cutoff excluiria esos labels del dataset (el builder ya falla cerrado
+  // ante labels faltantes), causando un `DATASET_BUILD_FAILED` recurrente
+  // aunque el label SI exista, solo un poco mas tarde. El mismo periodo de
+  // gracia que ya protege `requestedThrough` (#571 §5.1) se aplica AQUI
+  // tambien, como margen explicito sobre el valor del cutoff -- nunca mas
+  // alla de "ahora" (`startedAt`), que seria leer el futuro.
+  const cutoff = minDate(
+    new Date(snapshot.requestedThrough.getTime() + config.gracePeriodMs),
+    startedAt,
+  )
 
   let running: RunningChildProcess | null = null
   const trackRunning = (next: RunningChildProcess | null): void => {
@@ -351,12 +372,17 @@ export const runContinuousTrainingIteration = async (
       })
   }, config.heartbeatIntervalMs)
 
-  await mkdir(config.workRootDir, { recursive: true })
-  const workDir = await mkdtemp(join(config.workRootDir, 'ai-training-'))
-  const datasetDir = join(workDir, 'dataset')
-  const artifactsDir = join(workDir, 'artifacts')
+  // `workDir` se crea DENTRO del try/finally (revision de codigo, #571):
+  // si `mkdir`/`mkdtemp` fallan (disco lleno, permisos), el heartbeat de
+  // mas arriba quedaria corriendo para siempre si esto viviera afuera.
+  let workDir: string | null = null
 
   try {
+    await mkdir(config.workRootDir, { recursive: true })
+    workDir = await mkdtemp(join(config.workRootDir, 'ai-training-'))
+    const datasetDir = join(workDir, 'dataset')
+    const artifactsDir = join(workDir, 'artifacts')
+
     await buildDataset(deps, config, datasetDir, cutoff, trackRunning)
 
     const datasetManifestRaw = JSON.parse(
@@ -370,6 +396,29 @@ export const runContinuousTrainingIteration = async (
         cutoff: cutoff.toISOString(),
         reason,
       })
+
+      // Revision de codigo (#571 §7.3): "no entrenable" puede ser
+      // TEMPORAL (labels todavia en vuelo para decisiones de ESTE
+      // cutoff) -- avanzar `processedThrough` en la PRIMERA deteccion
+      // podria dejar ese corte sin reintentarse nunca si no llega
+      // ninguna partida nueva despues. Se reintenta el MISMO cutoff
+      // (con backoff, `consecutiveFailureCount`) hasta
+      // `maxNotTrainableRetries` veces antes de darlo por definitivo.
+      if (snapshot.consecutiveFailureCount < config.maxNotTrainableRetries) {
+        const retried = await deps.coordinator.recordNotTrainableRetry(
+          claim,
+          reason,
+          deps.clock.now(),
+        )
+        if (!retried) {
+          return {
+            outcome: { kind: 'FAILED', reasonCode: 'LEASE_LOST', reason: 'lease perdido' },
+            nextScanWatermark,
+          }
+        }
+        return { outcome: { kind: 'NOT_TRAINABLE', reason }, nextScanWatermark }
+      }
+
       const recorded = await deps.coordinator.recordNotTrainable(
         claim,
         cutoff,
@@ -393,6 +442,41 @@ export const runContinuousTrainingIteration = async (
 
     if (leaseLostRef.current) {
       throw new ClassifiedPipelineError('LEASE_LOST', 'lease perdido antes de startTraining')
+    }
+
+    // Recuperacion idempotente (revision de codigo, #571): `trainingRunId`
+    // es determinista -- si un intento ANTERIOR ya completo
+    // `registerCandidate()` (o incluso algo posterior, p. ej. `#572`
+    // evaluando/activando/rechazando) pero murio antes de
+    // `coordinator.recordSuccess()`, reentrenar aqui NO solo desperdicia
+    // el trabajo: `AiModelVersion.registerCandidate` SOLO permite
+    // `TRAINING -> CANDIDATE`, asi que reintentarlo sobre una version que
+    // ya paso de `TRAINING` lanzaria `InvalidModelStateTransitionError`.
+    // Si la version ya existe y ya no esta en `TRAINING`, el trabajo de
+    // ESTE cutoff ya esta resuelto: solo falta confirmarlo en el
+    // coordinador, nunca repetir el entrenamiento.
+    const existing = await deps.registry.findByVersion(identity.runId)
+    if (existing !== null && existing.state !== 'TRAINING') {
+      deps.logger.info('continuous_training_recovered_existing_version', {
+        modelVersion: existing.modelVersion,
+        state: existing.state,
+      })
+      const recovered = await deps.coordinator.recordSuccess(
+        claim,
+        cutoff,
+        existing.modelVersion,
+        deps.clock.now(),
+      )
+      if (!recovered) {
+        throw new ClassifiedPipelineError(
+          'LEASE_LOST',
+          'lease perdido al recuperar una version existente',
+        )
+      }
+      return {
+        outcome: { kind: 'SUCCESS', modelVersion: existing.modelVersion },
+        nextScanWatermark,
+      }
     }
 
     const lineage: AiModelTrainingLineage = {
@@ -508,12 +592,15 @@ export const runContinuousTrainingIteration = async (
   } finally {
     clearInterval(heartbeat)
     // Fallo al limpiar el directorio temporal: no accionable, nunca debe
-    // enmascarar el resultado real de la iteracion.
-    await rm(workDir, { recursive: true, force: true }).catch((error: unknown) => {
-      deps.logger.warn('continuous_training_workdir_cleanup_failed', {
-        reason: describeError(error),
+    // enmascarar el resultado real de la iteracion. `workDir` puede seguir
+    // siendo `null` si `mkdir`/`mkdtemp` fueron justamente lo que fallo.
+    if (workDir !== null) {
+      await rm(workDir, { recursive: true, force: true }).catch((error: unknown) => {
+        deps.logger.warn('continuous_training_workdir_cleanup_failed', {
+          reason: describeError(error),
+        })
       })
-    })
+    }
   }
 }
 

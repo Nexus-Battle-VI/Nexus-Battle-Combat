@@ -48,6 +48,7 @@ interface CliArgs {
   readonly workRootDir: string
   readonly backoffBaseMs: number
   readonly backoffMaxMs: number
+  readonly maxNotTrainableRetries: number
 }
 
 const requireValue = (argv: readonly string[], index: number, flag: string): string => {
@@ -79,6 +80,7 @@ const parseArgs = (argv: readonly string[]): CliArgs => {
   let workRootDir = join(defaultWorkRootDir(), 'nexus-combat-continuous-training')
   let backoffBaseMs = 30_000
   let backoffMaxMs = 30 * 60_000
+  let maxNotTrainableRetries = 3
 
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i]
@@ -154,6 +156,10 @@ const parseArgs = (argv: readonly string[]): CliArgs => {
         backoffMaxMs = Number(requireValue(argv, i, flag))
         i += 1
         break
+      case '--max-not-trainable-retries':
+        maxNotTrainableRetries = Number(requireValue(argv, i, flag))
+        i += 1
+        break
       default:
         throw new Error(`Flag desconocida: "${String(flag)}".`)
     }
@@ -185,6 +191,7 @@ const parseArgs = (argv: readonly string[]): CliArgs => {
     workRootDir,
     backoffBaseMs,
     backoffMaxMs,
+    maxNotTrainableRetries,
   }
 }
 
@@ -241,6 +248,7 @@ const main = async (): Promise<void> => {
     trainingTimeoutMs: args.trainingTimeoutMs,
     identityTimeoutMs: args.identityTimeoutMs,
     workRootDir: args.workRootDir,
+    maxNotTrainableRetries: args.maxNotTrainableRetries,
   }
 
   const deps: ContinuousTrainingPipelineDeps = {

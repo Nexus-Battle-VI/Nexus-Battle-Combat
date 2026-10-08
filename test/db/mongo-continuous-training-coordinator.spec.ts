@@ -205,6 +205,49 @@ describe('ContinuousTrainingCoordinator sobre MongoDB real (EN-037.2, Management
     expect(snapshot.leaseState).toBe('IDLE')
   })
 
+  it('revision de codigo (#571 §7.3): recordNotTrainableRetry increments the backoff counter without ever advancing processedThrough', async () => {
+    const coordinator = newCoordinator()
+    const before = await coordinator.getSnapshot()
+    const claim = await coordinator.tryClaimLease('worker-not-trainable-retry', 60_000, AT)
+    expect(claim).not.toBeNull()
+
+    const recorded = await coordinator.recordNotTrainableRetry(
+      claim!,
+      'labels todavia en vuelo',
+      LATER,
+    )
+    expect(recorded).toBe(true)
+
+    const snapshot = await coordinator.getSnapshot()
+    expect(snapshot.processedThrough).toEqual(before.processedThrough)
+    expect(snapshot.lastRunOutcome).toBe('NOT_TRAINABLE')
+    expect(snapshot.leaseState).toBe('IDLE')
+    expect(snapshot.consecutiveFailureCount).toBe(before.consecutiveFailureCount + 1)
+  })
+
+  it('revision de codigo (#571 §6.2): a stale owner can never record recordNotTrainableRetry either (same fencing as recordSuccess/recordFailure)', async () => {
+    const coordinator = newCoordinator()
+    const staleClaim = await coordinator.tryClaimLease('worker-stale-not-trainable', 1_000, AT)
+    expect(staleClaim).not.toBeNull()
+
+    const muchLater = new Date(AT.getTime() + 60_000)
+    const newOwnerClaim = await coordinator.tryClaimLease(
+      'worker-new-owner-not-trainable',
+      60_000,
+      muchLater,
+    )
+    expect(newOwnerClaim).not.toBeNull()
+
+    const staleRecorded = await coordinator.recordNotTrainableRetry(
+      staleClaim!,
+      'intento obsoleto',
+      muchLater,
+    )
+    expect(staleRecorded).toBe(false)
+
+    await coordinator.releaseLease(newOwnerClaim!, muchLater)
+  })
+
   it('a direct insert bypassing the repository (invalid leaseState) is rejected by the Mongo validator', async () => {
     await expect(
       db!.collection('ai-training-coordinator').insertOne({

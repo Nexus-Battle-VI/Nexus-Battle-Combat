@@ -158,6 +158,7 @@ const isUvAvailable = (): boolean => {
         trainingTimeoutMs: 180_000,
         identityTimeoutMs: 90_000,
         workRootDir,
+        maxNotTrainableRetries: 3,
       }
 
       const deps: ContinuousTrainingPipelineDeps = {
