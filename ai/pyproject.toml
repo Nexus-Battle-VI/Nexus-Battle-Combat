@@ -22,6 +22,7 @@ dependencies = [
 [project.scripts]
 nexus-combat-dataset = "nexus_combat_ai.cli.build_dataset:main"
 nexus-combat-train = "nexus_combat_ai.cli.train_model:main"
+nexus-combat-parity-reference = "nexus_combat_ai.cli.parity_reference:main"
 
 [dependency-groups]
 dev = [

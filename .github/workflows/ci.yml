@@ -198,12 +198,98 @@ jobs:
           print('onnx checker OK, manifest OK, run_id=', run_dir.rsplit('/', 1)[-1])
           "
 
+      # EN-036.5 (#569 §86-98, §163): referencia de paridad PyTorch sobre el
+      # MISMO checkpoint, para que `ai-evaluation-smoke` (job de abajo) la
+      # compare contra el runtime REAL de Node (`onnxruntime-node`) sin que
+      # Python necesite instalar `onnxruntime`.
+      - name: 'Smoke de entrenamiento: generar pytorch-parity-reference.json'
+        working-directory: ai
+        run: |
+          uv run nexus-combat-parity-reference \
+            --artifact-dir "${{ env.run_dir }}" \
+            --output "${{ env.run_dir }}/pytorch-parity-reference.json"
+
       - name: Publicar artefactos del smoke de entrenamiento
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-mlp-v1-smoke
           path: ${{ env.run_dir }}
+          retention-days: 7
+
+  ai-evaluation-smoke:
+    name: Evaluacion de politicas de IA (smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [quality, ai-pipeline]
+
+    # EN-036.5 (#569 §117-121, §164-165): harness OFFLINE, no necesita
+    # esperar al job `docker` (la compatibilidad Docker de onnxruntime-node
+    # ya la cubre #568) -- corre en paralelo. Smoke de INGENIERIA: pocas
+    # semillas, MCTS con rollouts reducidos (el propio CLI los baja cuando
+    # `--purpose SMOKE_TEST`), nunca evidencia de calidad (#569 §74, §119).
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Compilar el servicio
+        run: npm run build
+
+      - name: Descargar el artefacto SMOKE_TEST de ai-pipeline
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: candidate-mlp-v1-smoke
+          path: /tmp/neural-smoke-artifact
+
+      # Paridad PyTorch<->ONNX + escenarios + los 6 matchups + reportes,
+      # con una muestra pequena -- el harness entero, no un subconjunto
+      # de su logica (#569 §118).
+      - name: Correr evaluacion SMOKE (paridad + mirror pairs + 4 politicas)
+        run: |
+          node dist/infrastructure/evaluation/run-ai-evaluation.js \
+            --artifact-dir /tmp/neural-smoke-artifact \
+            --output /tmp/evaluation-out-smoke \
+            --purpose SMOKE_TEST \
+            --seed-start 3000000 \
+            --seed-count 2 \
+            --mcts-seed-count 2 \
+            --max-plies 300
+
+      # #569 §79, §82, §186: misma config/modelo/seeds -> mismo
+      # matchesSha256. Se corre una SEGUNDA vez y se compara, en vez de
+      # confiar en que "deberia" ser determinista.
+      - name: Verificar reproducibilidad (correr de nuevo y comparar matchesSha256)
+        run: |
+          node dist/infrastructure/evaluation/run-ai-evaluation.js \
+            --artifact-dir /tmp/neural-smoke-artifact \
+            --output /tmp/evaluation-out-smoke-b \
+            --purpose SMOKE_TEST \
+            --seed-start 3000000 \
+            --seed-count 2 \
+            --mcts-seed-count 2 \
+            --max-plies 300
+          hash_a="$(node -p "require('/tmp/evaluation-out-smoke/summary.json').fingerprints.matchesSha256")"
+          hash_b="$(node -p "require('/tmp/evaluation-out-smoke-b/summary.json').fingerprints.matchesSha256")"
+          echo "matchesSha256 A=${hash_a} B=${hash_b}"
+          [ "$hash_a" = "$hash_b" ]
+
+      - name: Publicar reporte de evaluacion (smoke)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ai-evaluation-smoke
+          path: /tmp/evaluation-out-smoke/
           retention-days: 7
 
   docker:
