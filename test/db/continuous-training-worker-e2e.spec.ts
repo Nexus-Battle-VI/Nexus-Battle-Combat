@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -57,6 +58,25 @@ const toTeacherLabelDocument = (line: Record<string, unknown>): Record<string, u
 }
 
 /**
+ * El job "Calidad y pruebas" (Node, `test:db`) NO instala `uv`/Python a
+ * proposito -- es un job aislado del pipeline Python (`ai/` tiene su
+ * propio job `Pipeline de dataset y entrenamiento IA`, ver `ci.yml`).
+ * Esta prueba necesita AMBOS stacks a la vez, asi que se omite
+ * (`describe.skip`, nunca "paso sin ejecutarse") cuando `uv` no esta en
+ * PATH, en vez de fallar por un ENOENT de infraestructura que no es un
+ * defecto del codigo. Corre completa en local y en cualquier entorno que
+ * si tenga ambos stacks.
+ */
+const isUvAvailable = (): boolean => {
+  try {
+    execFileSync('uv', ['--version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Prueba integrada de punta a punta (EN-037.2, Management #571 §12.G):
  * MongoDB REAL + Python REAL (`uv run nexus-combat-dataset`/`nexus-combat-train`,
  * nunca mockeado) + `AiModelRegistry` REAL -> una version `CANDIDATE` real.
@@ -70,108 +90,113 @@ const toTeacherLabelDocument = (line: Record<string, unknown>): Record<string, u
  * es real de punta a punta; los datos de entrada estan etiquetados como lo
  * que son.
  */
-describe('Worker de reentrenamiento continuo de punta a punta (EN-037.2, Management #571)', () => {
-  let container: StartedMongoDBContainer | undefined
-  let client: MongoClient | undefined
-  let db: Db | undefined
-  let mongoUri = ''
-  let databaseName = ''
+;(isUvAvailable() ? describe : describe.skip)(
+  'Worker de reentrenamiento continuo de punta a punta (EN-037.2, Management #571)',
+  () => {
+    let container: StartedMongoDBContainer | undefined
+    let client: MongoClient | undefined
+    let db: Db | undefined
+    let mongoUri = ''
+    let databaseName = ''
 
-  beforeAll(async () => {
-    const externalUri = process.env.MONGO_TEST_URI
-    if (externalUri === undefined) container = await new MongoDBContainer('mongo:8.0').start()
-    const options = {
-      uri: externalUri ?? `${container!.getConnectionString()}/?directConnection=true`,
-      databaseName: `continuous_training_e2e_${String(Date.now())}`,
-    }
-    mongoUri = options.uri
-    databaseName = options.databaseName
-    client = createMongoClient(options)
-    await client.connect()
-    db = databaseOf(client, options)
-    const outcome = await migrateToLatest(db)
-    if (outcome.error !== undefined) {
-      throw outcome.error instanceof Error ? outcome.error : new Error('La migracion fallo.')
-    }
+    beforeAll(async () => {
+      const externalUri = process.env.MONGO_TEST_URI
+      if (externalUri === undefined) container = await new MongoDBContainer('mongo:8.0').start()
+      const options = {
+        uri: externalUri ?? `${container!.getConnectionString()}/?directConnection=true`,
+        databaseName: `continuous_training_e2e_${String(Date.now())}`,
+      }
+      mongoUri = options.uri
+      databaseName = options.databaseName
+      client = createMongoClient(options)
+      await client.connect()
+      db = databaseOf(client, options)
+      const outcome = await migrateToLatest(db)
+      if (outcome.error !== undefined) {
+        throw outcome.error instanceof Error ? outcome.error : new Error('La migracion fallo.')
+      }
 
-    const decisionEvents = await readJsonlDocuments(join(FIXTURES_DIR, 'decision-events.jsonl'))
-    const teacherLabels = await readJsonlDocuments(join(FIXTURES_DIR, 'teacher-labels.jsonl'))
-    await db
-      .collection('combat-decision-events')
-      .insertMany(decisionEvents.map(toDecisionEventDocument))
-    await db.collection('mcts-teacher-labels').insertMany(teacherLabels.map(toTeacherLabelDocument))
+      const decisionEvents = await readJsonlDocuments(join(FIXTURES_DIR, 'decision-events.jsonl'))
+      const teacherLabels = await readJsonlDocuments(join(FIXTURES_DIR, 'teacher-labels.jsonl'))
+      await db
+        .collection('combat-decision-events')
+        .insertMany(decisionEvents.map(toDecisionEventDocument))
+      await db
+        .collection('mcts-teacher-labels')
+        .insertMany(teacherLabels.map(toTeacherLabelDocument))
 
-    const battleRooms = new MongoBattleRoomRepository(db)
-    const finishedRoom = inBattleRoom().finish(
-      { reason: 'ELIMINATION', winnerTeamLabel: 'A' },
-      FINISHED_AT,
-    )
-    await battleRooms.save(finishedRoom, 0)
-  }, 180_000)
+      const battleRooms = new MongoBattleRoomRepository(db)
+      const finishedRoom = inBattleRoom().finish(
+        { reason: 'ELIMINATION', winnerTeamLabel: 'A' },
+        FINISHED_AT,
+      )
+      await battleRooms.save(finishedRoom, 0)
+    }, 180_000)
 
-  afterAll(async () => {
-    await db?.dropDatabase()
-    await client?.close()
-    await container?.stop()
-  })
+    afterAll(async () => {
+      await db?.dropDatabase()
+      await client?.close()
+      await container?.stop()
+    })
 
-  it('advances the cursor, claims the lease, builds the dataset, trains with REAL PyTorch, and registers a REAL CANDIDATE', async () => {
-    const workRootDir = await mkdtemp(join(tmpdir(), 'ai-continuous-training-e2e-'))
+    it('advances the cursor, claims the lease, builds the dataset, trains with REAL PyTorch, and registers a REAL CANDIDATE', async () => {
+      const workRootDir = await mkdtemp(join(tmpdir(), 'ai-continuous-training-e2e-'))
 
-    const config: ContinuousTrainingPipelineConfig = {
-      ownerId: generateOwnerId(),
-      aiDir: AI_DIR,
-      pythonCommand: 'uv',
-      mongoUri,
-      databaseName,
-      datasetSeed: 42,
-      trainingSeed: 7,
-      sourceCommit: 'continuous-training-e2e-test',
-      gracePeriodMs: 1_000,
-      leaseDurationMs: 5 * 60_000,
-      heartbeatIntervalMs: 20_000,
-      datasetBuildTimeoutMs: 90_000,
-      trainingTimeoutMs: 180_000,
-      identityTimeoutMs: 90_000,
-      workRootDir,
-    }
+      const config: ContinuousTrainingPipelineConfig = {
+        ownerId: generateOwnerId(),
+        aiDir: AI_DIR,
+        pythonCommand: 'uv',
+        mongoUri,
+        databaseName,
+        datasetSeed: 42,
+        trainingSeed: 7,
+        sourceCommit: 'continuous-training-e2e-test',
+        gracePeriodMs: 1_000,
+        leaseDurationMs: 5 * 60_000,
+        heartbeatIntervalMs: 20_000,
+        datasetBuildTimeoutMs: 90_000,
+        trainingTimeoutMs: 180_000,
+        identityTimeoutMs: 90_000,
+        workRootDir,
+      }
 
-    const deps: ContinuousTrainingPipelineDeps = {
-      battleRooms: new MongoBattleRoomRepository(db!),
-      coordinator: new MongoContinuousTrainingCoordinatorRepository(db!),
-      registry: new AiModelRegistry(
-        new MongoAiModelRegistryRepository(db!),
-        new MongoAiModelArtifactRepository(db!),
-        fixedClock,
-      ),
-      clock: fixedClock,
-      logger: silentLogger,
-      runChildProcess: spawnChildProcess,
-    }
+      const deps: ContinuousTrainingPipelineDeps = {
+        battleRooms: new MongoBattleRoomRepository(db!),
+        coordinator: new MongoContinuousTrainingCoordinatorRepository(db!),
+        registry: new AiModelRegistry(
+          new MongoAiModelRegistryRepository(db!),
+          new MongoAiModelArtifactRepository(db!),
+          fixedClock,
+        ),
+        clock: fixedClock,
+        logger: silentLogger,
+        runChildProcess: spawnChildProcess,
+      }
 
-    const { outcome } = await runContinuousTrainingIteration(deps, config, new Date(0))
+      const { outcome } = await runContinuousTrainingIteration(deps, config, new Date(0))
 
-    if (outcome.kind !== 'SUCCESS') {
-      throw new Error(`Se esperaba SUCCESS, se obtuvo: ${JSON.stringify(outcome)}`)
-    }
+      if (outcome.kind !== 'SUCCESS') {
+        throw new Error(`Se esperaba SUCCESS, se obtuvo: ${JSON.stringify(outcome)}`)
+      }
 
-    const registered = await deps.registry.findByVersion(outcome.modelVersion)
-    expect(registered?.state).toBe('CANDIDATE')
-    expect(registered?.artifactLineage?.artifactPurpose).toBe('CANDIDATE')
-    expect(registered?.trainingLineage.trainingSeed).toBe(7)
-    expect(registered?.trainingLineage.datasetSeed).toBe(42)
+      const registered = await deps.registry.findByVersion(outcome.modelVersion)
+      expect(registered?.state).toBe('CANDIDATE')
+      expect(registered?.artifactLineage?.artifactPurpose).toBe('CANDIDATE')
+      expect(registered?.trainingLineage.trainingSeed).toBe(7)
+      expect(registered?.trainingLineage.datasetSeed).toBe(42)
 
-    const artifactRepository = new MongoAiModelArtifactRepository(db!)
-    const artifact = await artifactRepository.getBySha256(
-      registered!.artifactLineage!.onnxArtifactSha256,
-    )
-    expect(artifact).not.toBeNull()
-    expect(artifact!.sizeBytes).toBeGreaterThan(0)
+      const artifactRepository = new MongoAiModelArtifactRepository(db!)
+      const artifact = await artifactRepository.getBySha256(
+        registered!.artifactLineage!.onnxArtifactSha256,
+      )
+      expect(artifact).not.toBeNull()
+      expect(artifact!.sizeBytes).toBeGreaterThan(0)
 
-    const snapshot = await deps.coordinator.getSnapshot()
-    expect(snapshot.leaseState).toBe('IDLE')
-    expect(snapshot.lastRunOutcome).toBe('SUCCESS')
-    expect(snapshot.lastRunModelVersion).toBe(outcome.modelVersion)
-    expect(snapshot.processedThrough).toEqual(FINISHED_AT)
-  }, 420_000)
-})
+      const snapshot = await deps.coordinator.getSnapshot()
+      expect(snapshot.leaseState).toBe('IDLE')
+      expect(snapshot.lastRunOutcome).toBe('SUCCESS')
+      expect(snapshot.lastRunModelVersion).toBe(outcome.modelVersion)
+      expect(snapshot.processedThrough).toEqual(FINISHED_AT)
+    }, 420_000)
+  },
+)
