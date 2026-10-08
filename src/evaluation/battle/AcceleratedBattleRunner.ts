@@ -121,10 +121,15 @@ export const runAcceleratedBattle = async (
     const legalActions = legalActionGenerator.generateAvailable(room)
 
     if (legalActions.length === 0) {
+      // `applyEndTurn` nunca termina la partida (lo confirma el propio
+      // adaptador): siempre es una transicion NO terminal, asi que el
+      // Poder se sincroniza desde la sala real resultante (incluye la
+      // regeneracion +2 de `openOwnTurn()` de quien recibe el turno).
       const step = await simulation.applyEndTurn(room, commandId)
       room = step.room
       metrics.recordSystemEndTurn()
-      metrics.recordEvent(step.event)
+      metrics.recordDamageAndHeal(step.event)
+      metrics.recordNonTerminalStep(room)
       plies += 1
       continue
     }
@@ -193,17 +198,27 @@ export const runAcceleratedBattle = async (
       break
     }
 
-    metrics.recordEvent(step.event)
-    room = step.room
-    plies += 1
+    metrics.recordDamageAndHeal(step.event)
 
-    if (step.finished || room.status === BattleRoomStatus.Finished) {
+    const isTerminal = step.finished || step.room.status === BattleRoomStatus.Finished
+    if (isTerminal) {
+      // `room` todavia es la sala PRIOR aqui (antes de reasignar):
+      // `step.room` ya paso por `finish() -> restoreAllPower()` y NUNCA
+      // debe leerse para Poder.
+      metrics.recordTerminalStep(room, step.event)
+      room = step.room
+      plies += 1
       break
     }
+
+    room = step.room
+    plies += 1
+    metrics.recordNonTerminalStep(room)
   }
 
   const snapshot = metrics.snapshot()
   const result = room.result
+  const turnsCompleted = room.battle?.turnsCompleted ?? 0
 
   return {
     schemaVersion: EVALUATION_MATCH_RESULT_VERSION,
@@ -234,6 +249,7 @@ export const runAcceleratedBattle = async (
           }
         : null,
     plies,
+    turnsCompleted,
     decisionCount,
     systemEndTurns: snapshot.systemEndTurns,
     invalidPolicySelections,

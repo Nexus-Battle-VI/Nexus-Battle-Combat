@@ -136,24 +136,43 @@ descarta a medias: ambas partidas se guardan siempre, aunque una falle.
 
 Cuatro escenarios, todos 1v1 (decisión técnica v1: simplifica la
 atribución de métricas por lado sin necesitar agregarlas sobre varios
-combatientes). Las estadísticas base (Vida 44/Ataque 10/Defensa 11/Daño
-1d6) y cada habilidad/épica son las **mismas** ya auditadas en
-`test/fixtures/basic-attack.ts`/`skills.ts`/`epic.ts` — nunca inventadas;
-solo se duplican como datos planos en `src/evaluation/` porque
-`tsconfig.build.json` excluye `test/` del `dist/` que corre el CLI
-compilado.
+combatientes). Son **escenarios controlados** construidos con perfiles
+válidos de Combat y los mismos fixtures que ya usa la suite de pruebas
+del repo (`test/fixtures/basic-attack.ts`/`skills.ts`/`epic.ts`) — nunca
+estadísticas base inventadas (#569 §35); se duplican como datos planos en
+`src/evaluation/` porque `tsconfig.build.json` excluye `test/` del
+`dist/` que corre el CLI compilado.
 
-| `scenarioId`           | Qué cubre                                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| `basic-attack-mirror`  | Solo `BASIC_ATTACK` disponible (sin habilidades ni Poder)                                               |
-| `offensive-abilities`  | `BASIC_ATTACK` + 3 `ABILITY` reales (Embate, Tormenta, Loto), distintos costos de Poder                 |
-| `support-vs-offensive` | Chamán sin Ataque (Canto del Bosque, `ALLIED_GROUP`) vs. ofensivo — soporte sin inventar `BASIC_ATTACK` |
-| `epic-vs-offensive`    | Guerrero Tanque con una épica de daño directo equipada vs. ofensivo                                     |
+**Honestidad sobre el origen de cada pieza** (corrección de revisión: una
+versión anterior de este documento afirmaba sin distinción "habilidades/
+épicas reales"):
 
-No hay un escenario "tanque" con estadísticas base distintas: inventar una
-línea base nueva (Vida/Ataque/Defensa) solo para variedad habría violado
-la regla de no fabricar stats (#569 §35); la variedad real viene de
-habilidades/épica/Poder, que sí están auditadas.
+- `EMBATE`/`STORM`/`LOTUS` (escenario `offensive-abilities`): `abilityId`
+  real de Catalog, con su magnitud real (dados incluidos).
+- `FOREST_SONG_FIXED` (escenario `support-vs-offensive`): **variante SOLO
+  DE PRUEBA** de Canto del Bosque — `test/fixtures/skills.ts` la
+  documenta explícitamente así. El Catalog real usa magnitud `2d6`; esta
+  usa una magnitud fija para no depender de la secuencia de dados. Mismo
+  `abilityId` real, pero el efecto es la variante de prueba.
+- `EPICA_DANO` (escenario `epic-vs-offensive`): épica **SINTÉTICA**
+  (`test/fixtures/epic.ts` la llama literalmente "Épica sintética
+  (prueba)") — nunca una épica real de Catalog.
+- `CHAMAN`/`GUERRERO_TANQUE` como `subtype`: heredan la **misma línea
+  base** de Guerrero Armas (Vida 44/Ataque 10/Defensa 11/Daño 1d6) — no
+  son las estadísticas reales de esos subtipos en Catalog, son una
+  etiqueta de presentación sobre un perfil válido.
+
+| `scenarioId`           | Qué cubre                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `basic-attack-mirror`  | Solo `BASIC_ATTACK` disponible (sin habilidades ni Poder)                                                    |
+| `offensive-abilities`  | `BASIC_ATTACK` + 3 `ABILITY` reales (Embate, Tormenta, Loto), distintos costos de Poder                      |
+| `support-vs-offensive` | Soporte sin Ataque (Canto del Bosque, variante de prueba) vs. ofensivo — soporte sin inventar `BASIC_ATTACK` |
+| `epic-vs-offensive`    | Perfil con una épica sintética de daño directo equipada vs. ofensivo                                         |
+
+No hay un escenario "tanque" con estadísticas base distintas: inventar
+una línea base nueva (Vida/Ataque/Defensa) solo para variedad habría
+violado la regla de no fabricar stats (#569 §35); la variedad viene de
+habilidades/épica/Poder, nunca de una estadística base nueva.
 
 ## Métricas: definiciones exactas
 
@@ -176,14 +195,23 @@ habilidades/épica/Poder, que sí están auditadas.
 - **Poder restante — la trampa documentada en `#565`**:
   `BattleRoom.finish()` ejecuta `restoreAllPower()` **antes** de construir
   el resultado. Leer Poder de una sala `FINISHED` siempre da el máximo,
-  nunca el real. El harness sigue el Poder del actor PLY a PLY, leyendo
-  `payload.power.after` de cada evento que lo paga
-  (`EvaluationMetricsCollector`), exactamente el mismo patrón que ya usa
-  `MctsSearch` para la misma limitación.
-- **Turnos/plies**: `plies` cuenta cada paso del harness (incluye
-  `SYSTEM_END_TURN`); `decisionCount` cuenta solo decisiones reales de
-  política (nunca los fines de turno sin acciones legales) — nunca se
-  mezclan bajo el mismo nombre.
+  nunca el real. Seguir solo `payload.power.after` de cada evento **no
+  basta**: pierde la regeneración `+2` de `Combatant.openOwnTurn()`, que
+  ningún evento reporta (corrección de revisión — el mismo bug histórico
+  que `MctsSearch` ya había corregido reapareció aquí). La semántica
+  correcta, copiada de `MctsSearch.terminalPower`/`simulateTrajectory`:
+  en cada transición **no terminal**, el Poder se sincroniza desde la
+  sala real resultante de ese paso (`room.battle.combatants[].
+currentPower`, que ya incluye gasto y regeneración); en la transición
+  **terminal**, nunca se lee la sala `FINISHED` — se usa la sala previa a
+  esa última acción, ajustada con `payload.power.after` si esa acción
+  pagó Poder.
+- **Turnos vs. plies**: `turnsCompleted` es `BattleState.turnsCompleted`
+  real, leído de la sala al terminar la partida — la métrica de "turnos"
+  que pide #569. `plies` cuenta cada paso del harness (incluye
+  `SYSTEM_END_TURN`) y `decisionCount` cuenta solo decisiones reales de
+  política — los tres se reportan por separado, nunca se llama "Turns" a
+  `plies`.
 - **Selecciones inválidas vs. rechazos del motor**: dos conceptos
   separados (#569 §55). `invalidPolicySelections` = una política eligió
   algo que no resuelve contra `legalActions` (`INVARIANT_VIOLATION`).
@@ -278,7 +306,8 @@ npm run evaluate:ai -- \
   --seed-count 200 \
   --mcts-seed-count 25 \
   --max-plies 500 \
-  --source-commit <sha>
+  --source-commit <sha> \
+  --allow-smoke-model
 ```
 
 El `--artifact-dir` debe contener `model.onnx`, `training-manifest.json` y
@@ -287,6 +316,12 @@ parity-reference --artifact-dir <mismo dir> --output <dir>/pytorch-
 parity-reference.json` dentro de `ai/`). `--skip-expensive-mcts` omite los
 3 matchups con MCTS marcándolos `SKIPPED_COST` en el reporte — nunca
 0 partidas silenciosas.
+
+`--allow-smoke-model` es **obligatorio** cuando el artefacto tiene
+`artifactPurpose=SMOKE_TEST` (hoy, el único disponible) — sin el flag, la
+carga del artefacto falla explícitamente en vez de aceptar un modelo de
+smoke en silencio (corrección de revisión: una versión anterior de este
+CLI lo forzaba a `true` internamente, ignorando el flag).
 
 ## Qué SÍ demuestra esta evaluación (y qué NO)
 

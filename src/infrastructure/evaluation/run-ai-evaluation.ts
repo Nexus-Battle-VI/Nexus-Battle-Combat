@@ -174,7 +174,7 @@ const main = async (): Promise<void> => {
     onnxPath,
     manifestPath,
     nodeEnv: 'development',
-    allowSmokeModel: true,
+    allowSmokeModel: args.allowSmokeModel,
     inferenceTimeoutMs: 2_000,
   })
 

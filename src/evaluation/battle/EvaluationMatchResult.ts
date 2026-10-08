@@ -72,7 +72,10 @@ export interface EvaluationMatchResultV1 {
    */
   readonly failedSide: EvaluationSide | null
   readonly outcome: EvaluationMatchOutcome | null
+  /** Pasos del harness (incluye `SYSTEM_END_TURN`) -- NUNCA "turnos" (#569 §54, correccion de revision). */
   readonly plies: number
+  /** `BattleState.turnsCompleted` real al final de la partida -- la metrica de "turnos" que #569 pide. */
+  readonly turnsCompleted: number
   readonly decisionCount: number
   readonly systemEndTurns: number
   readonly invalidPolicySelections: number

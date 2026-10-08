@@ -63,41 +63,60 @@ const average = (values: readonly number[]): number | null =>
 
 interface PolicyAccumulator {
   battles: number
+  /** Partidas con `status === 'COMPLETED'` en las que aparecio esta politica (#569 corregido en revision: denominador EXPLICITO, nunca `battles - failures`). */
+  completedBattles: number
   wins: number
   losses: number
   draws: number
+  /** Apariciones en partidas NO `COMPLETED`, de cualquier causa (propia o del rival). */
   failures: number
+  /** De esas, cuantas causo la politica de ESTE lado (`failedSide === side`). */
+  failuresCaused: number
   damage: number[]
   healthRatio: number[]
   power: number[]
   plies: number[]
+  turnsCompleted: number[]
 }
 
 const newAccumulator = (): PolicyAccumulator => ({
   battles: 0,
+  completedBattles: 0,
   wins: 0,
   losses: 0,
   draws: 0,
   failures: 0,
+  failuresCaused: 0,
   damage: [],
   healthRatio: [],
   power: [],
   plies: [],
+  turnsCompleted: [],
 })
 
 export interface PolicySummaryRow {
   readonly policyId: EvaluationPolicyId
   readonly battles: number
+  readonly completedBattles: number
   readonly wins: number
   readonly losses: number
   readonly draws: number
   readonly failures: number
-  /** `wins / (battles - failures)`; `null` si ese denominador es 0 (#569 §47, §176). */
+  readonly failuresCaused: number
+  /**
+   * `wins / completedBattles` (#569 §47, §176; corregido en revision: una
+   * partida abortada por el RIVAL nunca entra al denominador de NINGUNA
+   * de las dos politicas -- antes se deducia `battles - failures` y esa
+   * resta solo restaba las fallas CAUSADAS por este lado, contando la
+   * partida como "completada" para el lado inocente). `null` si
+   * `completedBattles === 0`.
+   */
   readonly winRate: number | null
   readonly avgDamageDealt: number | null
   readonly avgHealthRemainingRatio: number | null
   readonly avgPowerRemaining: number | null
   readonly avgPlies: number | null
+  readonly avgTurnsCompleted: number | null
 }
 
 export interface MatchupScenarioRow {
@@ -153,23 +172,28 @@ const buildPolicySummary = (
       const accumulator = accumulatorFor(policyId)
       accumulator.battles += 1
 
+      // `battles - failures` como denominador de winRate estaba mal: una
+      // partida abortada por el RIVAL nunca incrementaba `failures` para
+      // ESTE lado, asi que `completed` la contaba de todas formas. Ahora
+      // `failures` cuenta CUALQUIER aparicion no-COMPLETED (de cualquier
+      // causa) y `completedBattles` es un contador EXPLICITO, nunca
+      // deducido.
       if (result.status !== 'COMPLETED') {
+        accumulator.failures += 1
         if (result.failedSide === side) {
-          accumulator.failures += 1
-        } else if (result.failedSide === null) {
-          // ENGINE_FAILURE/MAX_PLIES: no es culpa de ESTE lado, pero la
-          // partida tampoco cuenta como win/loss/draw para ninguno.
-          accumulator.failures += 1
+          accumulator.failuresCaused += 1
         }
         continue
       }
 
+      accumulator.completedBattles += 1
       const metrics = result.metricsBySide[side]
       accumulator.damage.push(metrics.damageDealt)
       if (metrics.finalHealth !== null)
         accumulator.healthRatio.push(metrics.finalHealth.lifePercent)
       if (metrics.finalPower !== null) accumulator.power.push(metrics.finalPower)
       accumulator.plies.push(result.plies)
+      accumulator.turnsCompleted.push(result.turnsCompleted)
 
       const winner = sideWinner(result)
       if (winner === null) {
@@ -184,22 +208,23 @@ const buildPolicySummary = (
 
   return [...accumulators.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([policyId, accumulator]) => {
-      const completed = accumulator.battles - accumulator.failures
-      return {
-        policyId,
-        battles: accumulator.battles,
-        wins: accumulator.wins,
-        losses: accumulator.losses,
-        draws: accumulator.draws,
-        failures: accumulator.failures,
-        winRate: completed > 0 ? accumulator.wins / completed : null,
-        avgDamageDealt: average(accumulator.damage),
-        avgHealthRemainingRatio: average(accumulator.healthRatio),
-        avgPowerRemaining: average(accumulator.power),
-        avgPlies: average(accumulator.plies),
-      }
-    })
+    .map(([policyId, accumulator]) => ({
+      policyId,
+      battles: accumulator.battles,
+      completedBattles: accumulator.completedBattles,
+      wins: accumulator.wins,
+      losses: accumulator.losses,
+      draws: accumulator.draws,
+      failures: accumulator.failures,
+      failuresCaused: accumulator.failuresCaused,
+      winRate:
+        accumulator.completedBattles > 0 ? accumulator.wins / accumulator.completedBattles : null,
+      avgDamageDealt: average(accumulator.damage),
+      avgHealthRemainingRatio: average(accumulator.healthRatio),
+      avgPowerRemaining: average(accumulator.power),
+      avgPlies: average(accumulator.plies),
+      avgTurnsCompleted: average(accumulator.turnsCompleted),
+    }))
 }
 
 const buildMatchupSummary = (
@@ -356,17 +381,23 @@ export const buildEvaluationSummaryMarkdown = (summary: EvaluationSummary): stri
   lines.push('## Por politica')
   lines.push('')
   lines.push(
-    '| Policy | Battles | Wins | Losses | Draws | Failures | Win rate | Damage | Health remaining | Power remaining | Turns |',
+    '| Policy | Battles | Completed | Wins | Losses | Draws | Failures | Win rate | Damage | Health remaining | Power remaining | Avg turns | Avg plies |',
   )
-  lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+  lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
   for (const row of summary.policySummary) {
     lines.push(
-      `| ${row.policyId} | ${String(row.battles)} | ${String(row.wins)} | ${String(row.losses)} | ` +
-        `${String(row.draws)} | ${String(row.failures)} | ${pct(row.winRate)} | ` +
-        `${num(row.avgDamageDealt)} | ${pct(row.avgHealthRemainingRatio)} | ${num(row.avgPowerRemaining)} | ` +
-        `${num(row.avgPlies, 1)} |`,
+      `| ${row.policyId} | ${String(row.battles)} | ${String(row.completedBattles)} | ` +
+        `${String(row.wins)} | ${String(row.losses)} | ${String(row.draws)} | ` +
+        `${String(row.failures)} | ${pct(row.winRate)} | ${num(row.avgDamageDealt)} | ` +
+        `${pct(row.avgHealthRemainingRatio)} | ${num(row.avgPowerRemaining)} | ` +
+        `${num(row.avgTurnsCompleted, 1)} | ${num(row.avgPlies, 1)} |`,
     )
   }
+  lines.push('')
+  lines.push(
+    '_"Avg turns" = `BattleState.turnsCompleted` real; "Avg plies" = pasos del harness ' +
+      '(incluye `SYSTEM_END_TURN`) -- nunca el mismo numero (#569 §54)._',
+  )
   lines.push('')
 
   lines.push('## Por matchup')

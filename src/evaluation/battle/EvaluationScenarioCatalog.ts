@@ -9,22 +9,36 @@ import {
 import { EVALUATION_SCENARIOS_VERSION, type EvaluationScenario } from './EvaluationScenario'
 
 /**
- * Catalogo de escenarios (EN-036.5, Management #569 §34-38): los datos
- * base (Vida 44/Ataque 10/Defensa 11/Dano 1d6 del "Guerrero Armas", y
- * cada habilidad/epica con su `abilityId`/`epicProductId` real) son
- * EXACTAMENTE los de `test/fixtures/basic-attack.ts`,
- * `test/fixtures/skills.ts` y `test/fixtures/epic.ts` -- auditados, nunca
- * inventados (#569 §35). Se duplican aqui como datos planos en vez de
- * importar `test/fixtures/*` porque `tsconfig.build.json` excluye `test/`
- * del `dist/` que corre el CLI compilado (#569 §155-157): un `import`
- * desde `src/` hacia `test/` compilaria para Jest pero rompería en
- * produccion/CLI.
+ * Catalogo de escenarios (EN-036.5, Management #569 §34-38): escenarios
+ * CONTROLADOS construidos con perfiles validos de Combat y los MISMOS
+ * fixtures que ya usa la suite de pruebas del repo
+ * (`test/fixtures/basic-attack.ts`, `skills.ts`, `epic.ts`) -- nunca
+ * estadisticas base inventadas (#569 §35). Se duplican aqui como datos
+ * planos en vez de importar `test/fixtures/*` porque
+ * `tsconfig.build.json` excluye `test/` del `dist/` que corre el CLI
+ * compilado (#569 §155-157): un `import` desde `src/` hacia `test/`
+ * compilaria para Jest pero rompería en produccion/CLI.
  *
- * NINGUN escenario inventa una estadistica base nueva (Vida/Ataque/
- * Defensa/Dano): todos reutilizan la MISMA linea base validada
- * (`BASE_PROFILE`); solo varian subtipo, Poder maximo, habilidades y
- * epica -- las dimensiones que #569 §36 realmente pide ("habilidades,
- * diferentes power costs, cooldowns, al menos un caso con épica").
+ * Honestidad sobre el origen de cada pieza (correccion de revision: el PR
+ * original afirmaba "habilidades/epicas reales" sin distinguir):
+ *
+ *  - `EMBATE`/`STORM`/`LOTUS`: `abilityId` real de Catalog (leido el
+ *    2026-09-21), con su magnitud real (dados incluidos).
+ *  - `FOREST_SONG_FIXED`: variante SOLO DE PRUEBA de Canto del Bosque
+ *    (`test/fixtures/skills.ts` la documenta asi explicitamente) -- el
+ *    Catalog real usa magnitud `2d6`, esta usa una magnitud FIJA para no
+ *    depender de la secuencia de dados. Es el mismo `abilityId` real,
+ *    pero el EFECTO es la variante de prueba, no el snapshot de Catalog.
+ *  - `EPICA_DANO`: epica SINTETICA (`test/fixtures/epic.ts` la llama
+ *    literalmente "Épica sintética (prueba)"), nunca una epica real de
+ *    Catalog -- se reutiliza aqui porque ya es el fixture validado que la
+ *    suite usa para ejercitar daño directo de una epica.
+ *  - `CHAMAN`/`GUERRERO_TANQUE` como `subtype`: heredan la MISMA linea
+ *    base de Guerrero Armas (Vida 44/Ataque 10/Defensa 11/Dano 1d6) --
+ *    NO son las estadisticas reales de esos subtipos en Catalog, son una
+ *    etiqueta de presentacion sobre un perfil valido. Ningun escenario
+ *    inventa una estadistica base nueva: todos reutilizan `baseProfile`;
+ *    solo varian subtipo, Poder maximo, habilidades y epica.
  */
 
 const fixed = (amount: number): CombatMagnitude => ({ mode: 'FIXED', amount })
@@ -61,10 +75,15 @@ const abilityOf = (
   effects,
 })
 
-// Mismos abilityId/epicProductId REALES de test/fixtures/skills.ts y
-// test/fixtures/epic.ts (leidos de Catalog el 2026-09-21, #569 §35).
+// Mismos abilityId/epicProductId de test/fixtures/skills.ts y
+// test/fixtures/epic.ts. EMBATE/STORM/LOTUS son abilityId REALES de
+// Catalog (leidos el 2026-09-21). FOREST_SONG_FIXED_ID/EPICA_DANO_ID son
+// ids de las variantes DE PRUEBA de esos mismos fixtures (ver comentario
+// del modulo arriba): nunca se afirma que su EFECTO sea un snapshot
+// actual de Catalog.
 const EMBATE_ID = 'a0480732-c909-477b-b8e7-edf676f556a4'
-const STORM_ID = 'a7d5c921-18bd-4730-ae45-b05ecafa4c0b'
+/** Exportado para pruebas (#569 §106: regresion de Poder sobre `offensive-abilities`, costo 6). */
+export const STORM_ID = 'a7d5c921-18bd-4730-ae45-b05ecafa4c0b'
 const LOTUS_ID = '48701c7f-5b62-45b5-a964-31a36c5baca8'
 const FOREST_SONG_FIXED_ID = '122c0f47-a7f0-6095-025f-8dd1bd3ch188'
 const EPICA_DANO_ID = '4a2f3e4d-5c6b-4d7e-8f9a-0b1c2d3e4f5a'
@@ -84,7 +103,13 @@ const STORM = abilityOf(STORM_ID, 'Golpe de tormenta', 6, [
 /** Flor de loto (Picaro Veneno, 2 Poder): +(4d8) Dano. */
 const LOTUS = abilityOf(LOTUS_ID, 'Flor de loto', 2, [damageBonus(dice(4, 8))])
 
-/** Canto del Bosque, magnitud fija (Chaman, 6 Poder): sana +4 a todo el grupo aliado, 2 turnos. */
+/**
+ * Canto del Bosque, variante DE PRUEBA con magnitud fija (6 Poder): sana
+ * +4 a todo el grupo aliado, 2 turnos. El Catalog real usa `2d6`; esta
+ * magnitud fija es la misma variante que `test/fixtures/skills.ts` usa
+ * para no depender de la secuencia de dados -- nunca el snapshot actual
+ * de Catalog.
+ */
 const FOREST_SONG_FIXED = abilityOf(FOREST_SONG_FIXED_ID, 'Canto del Bosque', 6, [
   {
     kind: 'STAT_MODIFIER',
@@ -104,7 +129,13 @@ const danoDirectoEffect: CombatAbilityEffect = {
   hasActivationCondition: false,
 }
 
-/** Epica sintetica de dano directo (Guerrero Tanque, Poder 0, recarga 2). */
+/**
+ * Epica SINTETICA de dano directo (Poder 0, recarga 2) -- `test/fixtures/
+ * epic.ts` la documenta literalmente como "Épica sintética (prueba)",
+ * nunca una epica real de Catalog. Se reutiliza tal cual porque ya es el
+ * fixture validado que la suite usa para ejercitar daño directo de una
+ * epica.
+ */
 const EPICA_DANO: CombatEpic = {
   epicProductId: EPICA_DANO_ID,
   epicReference: 'epica-dano',
@@ -172,9 +203,10 @@ export const EVALUATION_SCENARIOS: readonly EvaluationScenario[] = [
     scenarioId: 'support-vs-offensive',
     scenarioVersion: EVALUATION_SCENARIOS_VERSION,
     description:
-      'Chaman sin Ataque (Canto del Bosque como unica habilidad) contra un Guerrero Armas ' +
-      'ofensivo: ejercita el caso de soporte sin BASIC_ATTACK (#569 §37) y sigue siendo ' +
-      'terminable, porque Canto del Bosque (ALLIED_GROUP) siempre es legal con el chaman vivo.',
+      'Soporte sin Ataque (Canto del Bosque, variante de prueba de magnitud fija, como unica ' +
+      'habilidad) contra un Guerrero Armas ofensivo: ejercita el caso de soporte sin ' +
+      'BASIC_ATTACK (#569 §37) y sigue siendo terminable, porque Canto del Bosque ' +
+      '(ALLIED_GROUP) siempre es legal con el soporte vivo.',
     teamAProfile: supportProfile('scenario-support-vs-offensive-a'),
     teamBProfile: offensiveProfile('scenario-support-vs-offensive-b'),
   },
@@ -182,8 +214,9 @@ export const EVALUATION_SCENARIOS: readonly EvaluationScenario[] = [
     scenarioId: 'epic-vs-offensive',
     scenarioVersion: EVALUATION_SCENARIOS_VERSION,
     description:
-      'Guerrero Tanque con una epica de dano directo equipada contra un Guerrero Armas ' +
-      'ofensivo: cubre el caso con EPIC disponible como candidata legal (#569 §36).',
+      'Perfil con una epica SINTETICA de dano directo equipada (fixture de prueba, no un ' +
+      'snapshot de Catalog) contra un Guerrero Armas ofensivo: cubre el caso con EPIC ' +
+      'disponible como candidata legal (#569 §36).',
     teamAProfile: epicOffensiveProfile('scenario-epic-vs-offensive-a'),
     teamBProfile: offensiveProfile('scenario-epic-vs-offensive-b'),
   },

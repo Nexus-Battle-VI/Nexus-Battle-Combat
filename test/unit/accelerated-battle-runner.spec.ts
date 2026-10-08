@@ -5,7 +5,10 @@ import { createCombatProfile } from '../../src/domain/entities/CombatProfile'
 import { RandomSeed } from '../../src/domain/value-objects/RandomSeed'
 import { runAcceleratedBattle } from '../../src/evaluation/battle/AcceleratedBattleRunner'
 import { buildEvaluationBattleRoom } from '../../src/evaluation/battle/EvaluationBattleFactory'
-import { EVALUATION_SCENARIOS } from '../../src/evaluation/battle/EvaluationScenarioCatalog'
+import {
+  EVALUATION_SCENARIOS,
+  STORM_ID,
+} from '../../src/evaluation/battle/EvaluationScenarioCatalog'
 import type { EvaluationPolicy } from '../../src/evaluation/policies/EvaluationPolicy'
 import { RandomEvaluationPolicy } from '../../src/evaluation/policies/RandomEvaluationPolicy'
 import { RuleBasedEvaluationPolicy } from '../../src/evaluation/policies/RuleBasedEvaluationPolicy'
@@ -261,4 +264,43 @@ describe('runAcceleratedBattle (EN-036.5, Management #569): motor real, 0 invari
     expect(a.outcome).toEqual(b.outcome)
     expect(a.plies).toBe(b.plies)
   })
+
+  it(
+    'regresion de revision (#569): Poder final sigue gasto Y regeneracion de openOwnTurn, ' +
+      'nunca solo el gasto (10 -> skill costo 6 -> 4 -> B completa turno -> openOwnTurn -> 6)',
+    async () => {
+      // Buscar una semilla donde el lado A abra la cola de turnos.
+      let seed = 1
+      let room = buildRoom('offensive-abilities', seed)
+      while (room.battle?.currentEntry.teamLabel !== 'A' && seed < 50) {
+        seed += 1
+        room = buildRoom('offensive-abilities', seed)
+      }
+      expect(room.battle?.currentEntry.teamLabel).toBe('A')
+
+      const pickStormThenFirst: EvaluationPolicy = {
+        id: 'RULE_BASED',
+        decide: (context) => {
+          const storm = context.legalActions.find(
+            (action) => action.kind === 'ABILITY' && action.abilityId === STORM_ID,
+          )
+          return Promise.resolve(storm ?? context.legalActions[0]!)
+        },
+      }
+
+      const result = await runAcceleratedBattle({
+        ...baseRunOptions('offensive-abilities', seed, 2),
+        room,
+        policyA: pickStormThenFirst,
+        policyB: new RuleBasedEvaluationPolicy(),
+      })
+
+      // Ply 1: A usa Tormenta (costo 6) -> 10 - 6 = 4. Ply 2: B actua y
+      // cierra su turno -> se abre el turno de A -> openOwnTurn() regenera
+      // +2 -> 4 + 2 = 6. Si el harness solo siguiera `payload.power.after`
+      // (el bug de revision), reportaria 4.
+      expect(result.plies).toBe(2)
+      expect(result.metricsBySide.A.finalPower).toBe(6)
+    },
+  )
 })

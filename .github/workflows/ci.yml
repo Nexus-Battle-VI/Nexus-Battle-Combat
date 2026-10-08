@@ -264,7 +264,8 @@ jobs:
             --seed-start 3000000 \
             --seed-count 2 \
             --mcts-seed-count 2 \
-            --max-plies 300
+            --max-plies 300 \
+            --allow-smoke-model
 
       # #569 §79, §82, §186: misma config/modelo/seeds -> mismo
       # matchesSha256. Se corre una SEGUNDA vez y se compara, en vez de
@@ -278,7 +279,8 @@ jobs:
             --seed-start 3000000 \
             --seed-count 2 \
             --mcts-seed-count 2 \
-            --max-plies 300
+            --max-plies 300 \
+            --allow-smoke-model
           hash_a="$(node -p "require('/tmp/evaluation-out-smoke/summary.json').fingerprints.matchesSha256")"
           hash_b="$(node -p "require('/tmp/evaluation-out-smoke-b/summary.json').fingerprints.matchesSha256")"
           echo "matchesSha256 A=${hash_a} B=${hash_b}"
