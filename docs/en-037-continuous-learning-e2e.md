@@ -22,17 +22,17 @@ primera vez con MongoDB y Python reales simultáneamente.
 
 ## 2. Matriz de auditoría (qué existía, qué faltaba)
 
-| Componente     | Prueba existente (real)                                                                                  | Integración real end-to-end                            | Brecha que cierra #574                                        |
-| -------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
-| Partida        | `test/db/hu-93-human-vs-ai.e2e.spec.ts` (HTTP+WS+Mongo real, sin IA continua)                              | No alimentaba el pipeline de aprendizaje                 | `continuous-learning-telemetry.e2e.spec.ts` (nuevo)             |
-| Telemetría     | Fixtures JSONL sintéticos en `continuous-training-worker-e2e.spec.ts`                                      | Nunca desde una partida HTTP/WS real                     | idem, con `MCTS_LIVE_TEACHER_LABELING_ENABLED=true` real        |
-| Dataset        | `nexus-combat-dataset build` probado con Python/pytest y con el fixture JSONL                              | Nunca sobre telemetría generada en vivo                  | idem — entrenabilidad decidida honestamente, nunca fabricada    |
-| Trainer        | `continuous-training-worker-e2e.spec.ts` (Mongo+Python reales) → `CANDIDATE`                               | Se detiene en `CANDIDATE`, nunca sigue a evaluación       | `verify-continuous-learning-e2e.ts` (nuevo) continúa la cadena  |
-| Registry       | `mongo-ai-model-registry.spec.ts` (Mongo real, sin Python ni ONNX real)                                    | Hashes/CAS probados, nunca con artefactos recién entrenados | idem — artefactos del training real de arriba                |
-| Evaluación     | `verify-automatic-model-promotion-e2e.ts` (ONNX real, pero `InMemory*` y parte de un `artifactDir` dado)   | Nunca Mongo real, nunca partiendo del training real       | idem — `Mongo*Repository` real, candidata producida por el pipeline real |
-| Promoción      | `automatic-model-evaluation-coordinator.spec.ts` (unit, fixtures de `EvaluationSummary`)                    | Mecánica de transición ya probada, nunca con gates reales corriendo | idem — gates reales, resultado honesto (ver §6)         |
-| Runtime        | `active-model-provider.spec.ts` (unit, ONNX mockeado)                                                      | Nunca con un ONNX real cargado via `ActiveModelProvider`  | idem — hot reload real si promueve; fail-safe real con ONNX inválido (§7) |
-| Recuperación   | `mongo-continuous-training-coordinator.spec.ts` / `mongo-ai-evaluation-coordinator.spec.ts` (lease/fencing, Mongo real) | Coalescing solo probado con `ChildProcessRunner` falso (unit) | `continuous-learning-coalescing.e2e.spec.ts` (nuevo) — Mongo+Python reales |
+| Componente   | Prueba existente (real)                                                                                                 | Integración real end-to-end                                         | Brecha que cierra #574                                                     |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Partida      | `test/db/hu-93-human-vs-ai.e2e.spec.ts` (HTTP+WS+Mongo real, sin IA continua)                                           | No alimentaba el pipeline de aprendizaje                            | `continuous-learning-telemetry.e2e.spec.ts` (nuevo)                        |
+| Telemetría   | Fixtures JSONL sintéticos en `continuous-training-worker-e2e.spec.ts`                                                   | Nunca desde una partida HTTP/WS real                                | idem, con `MCTS_LIVE_TEACHER_LABELING_ENABLED=true` real                   |
+| Dataset      | `nexus-combat-dataset build` probado con Python/pytest y con el fixture JSONL                                           | Nunca sobre telemetría generada en vivo                             | idem — entrenabilidad decidida honestamente, nunca fabricada               |
+| Trainer      | `continuous-training-worker-e2e.spec.ts` (Mongo+Python reales) → `CANDIDATE`                                            | Se detiene en `CANDIDATE`, nunca sigue a evaluación                 | `verify-continuous-learning-e2e.ts` (nuevo) continúa la cadena             |
+| Registry     | `mongo-ai-model-registry.spec.ts` (Mongo real, sin Python ni ONNX real)                                                 | Hashes/CAS probados, nunca con artefactos recién entrenados         | idem — artefactos del training real de arriba                              |
+| Evaluación   | `verify-automatic-model-promotion-e2e.ts` (ONNX real, pero `InMemory*` y parte de un `artifactDir` dado)                | Nunca Mongo real, nunca partiendo del training real                 | idem — `Mongo*Repository` real, candidata producida por el pipeline real   |
+| Promoción    | `automatic-model-evaluation-coordinator.spec.ts` (unit, fixtures de `EvaluationSummary`)                                | Mecánica de transición ya probada, nunca con gates reales corriendo | idem — gates reales, resultado honesto (ver §6)                            |
+| Runtime      | `active-model-provider.spec.ts` (unit, ONNX mockeado)                                                                   | Nunca con un ONNX real cargado via `ActiveModelProvider`            | idem — hot reload real si promueve; fail-safe real con ONNX inválido (§7)  |
+| Recuperación | `mongo-continuous-training-coordinator.spec.ts` / `mongo-ai-evaluation-coordinator.spec.ts` (lease/fencing, Mongo real) | Coalescing solo probado con `ChildProcessRunner` falso (unit)       | `continuous-learning-coalescing.e2e.spec.ts` (nuevo) — Mongo+Python reales |
 
 ## 3. Arquitectura de las pruebas nuevas
 
@@ -149,14 +149,14 @@ invariantViolations / engineFailures: 0 / 0
 
 Gates reales (`ai_promotion_policy_evaluated`):
 
-| Gate                    | Resultado                                          |
-| ------------------------ | --------------------------------------------------- |
-| EVIDENCE_COMPLETENESS    | **FAIL** — partidas no completadas (`MAX_PLIES`) en ambos matchups |
-| SAFETY                   | PASS — 0 selecciones ilegales, 0 rechazos del motor |
-| PARITY                   | PASS — PyTorch↔ONNX, `argmaxAgreement=1`             |
-| PERFORMANCE_VS_RANDOM    | FAIL — winRate=58.23 % (umbral 60 %)                |
-| PERFORMANCE_VS_RULE_BASED| PASS — winRate=85.71 % (umbral 50 %)                |
-| NON_REGRESSION_VS_ACTIVE | PASS — vacuously (sin ACTIVE previo)                |
+| Gate                      | Resultado                                                          |
+| ------------------------- | ------------------------------------------------------------------ |
+| EVIDENCE_COMPLETENESS     | **FAIL** — partidas no completadas (`MAX_PLIES`) en ambos matchups |
+| SAFETY                    | PASS — 0 selecciones ilegales, 0 rechazos del motor                |
+| PARITY                    | PASS — PyTorch↔ONNX, `argmaxAgreement=1`                           |
+| PERFORMANCE_VS_RANDOM     | FAIL — winRate=58.23 % (umbral 60 %)                               |
+| PERFORMANCE_VS_RULE_BASED | PASS — winRate=85.71 % (umbral 50 %)                               |
+| NON_REGRESSION_VS_ACTIVE  | PASS — vacuously (sin ACTIVE previo)                               |
 
 **Resultado: `REJECTED`, honesto y esperado** (Escenario **E2E-08**). El
 modelo entrenado sobre el fixture mínimo de EN-037.2 (unas pocas partidas
@@ -166,7 +166,7 @@ anticipa explícitamente y prohíbe forzar un `PASS`. Esta prueba **nunca**
 relajó los umbrales, aumentó artificialmente las muestras con datos
 inventados, ni cambió la política para conseguir una promoción.
 
-**Camino `CANDIDATE → ACTIVE` (E2E-09/E2E-10)**: la *mecánica* de esa
+**Camino `CANDIDATE → ACTIVE` (E2E-09/E2E-10)**: la _mecánica_ de esa
 transición (gates reales evaluados, CAS de `AiModelRegistry`, hot reload de
 `ActiveModelProvider` sin reiniciar Combat) ya está probada de forma
 controlada y así clasificada por `verify-automatic-model-promotion-e2e.ts`
@@ -219,14 +219,14 @@ de **prueba**, ninguno de código productivo:
    preexistente) asumía `processedThrough === finishedAt` crudo. El código
    productivo (`ContinuousTrainingPipeline.ts`) calcula deliberadamente
    `cutoff = min(requestedThrough + gracePeriodMs, startedAt)` — el `Mongo
-   MctsTeacherLabel`/`CombatDecisionEvent` se persisten de forma asíncrona
+MctsTeacherLabel`/`CombatDecisionEvent` se persisten de forma asíncrona
    tras `finishedAt`, así que el cutoff real siempre lleva el margen de
    gracia sumado. La aserción nunca se había ejecutado en CI (el job
    "Calidad y pruebas" omite `uv`/Python a propósito; esta suite se
    autoexcluye allí) — solo se detectó al correrla localmente con ambos
    stacks presentes, exactamente la combinación que #574 exige. Corregido:
    la aserción ahora compara contra el cutoff real (`finishedAt +
-   gracePeriodMs`), documentado inline.
+gracePeriodMs`), documentado inline.
 2. **Guardas arquitectónicas estáticas de HU-21/HU-17**
    (`test/unit/hu-21-finish-guards.spec.ts`,
    `test/unit/hu-17-no-alternative-randomness.spec.ts`): el nuevo script de
