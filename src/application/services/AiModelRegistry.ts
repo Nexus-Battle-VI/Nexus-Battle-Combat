@@ -7,6 +7,7 @@ import {
 } from '../../domain/entities/AiModelVersion'
 import { AiModelState } from '../../domain/value-objects/AiModelState'
 import {
+  ActiveModelConflictError,
   InvalidModelStateTransitionError,
   ModelArtifactHashMismatchError,
   ModelArtifactNotFoundError,
@@ -264,13 +265,24 @@ export class AiModelRegistry {
     await this.assertArtifactIntegrity(current)
 
     const next = current.activate(this.clock.now())
+    const reference = await this.registryRepository.getActiveReference()
+    if (reference === null) {
+      const swapped = await this.registryRepository.compareAndSwapActiveReference(
+        null,
+        { modelVersion, modelRevision: next.revision },
+        this.clock.now(),
+      )
+      if (swapped === null) throw new ActiveModelConflictError()
+    } else if (reference.modelVersion !== modelVersion) {
+      throw new ActiveModelConflictError()
+    }
     await this.registryRepository.replaceWithExpectedRevision(next, current.revision)
     return next
   }
 
   /**
-   * `ACTIVE -> SUPERSEDED` (EN-037.3, Management #572 §8): libera el slot
-   * `active_unique`. PRIMITIVA, nunca decide CUANDO reemplazar el ACTIVE
+   * `ACTIVE -> SUPERSEDED` (EN-037.3, Management #572 §8): reconcilia el
+   * historial despues de mover la referencia ACTIVE autoritativa. PRIMITIVA, nunca decide CUANDO reemplazar el ACTIVE
    * vigente -- solo `promoteEvaluatedCandidate`/`rollbackToSuperseded`
    * (dentro de este mismo registry) la invocan. Idempotente: si la
    * version ya esta SUPERSEDED (reintento tras una caida a mitad de
@@ -291,51 +303,64 @@ export class AiModelRegistry {
    * primitiva NUNCA evalua gates ni win rate, solo ejecuta el reemplazo
    * de forma segura y recuperable.
    *
-   * Sin transacciones multi-documento disponibles (#572 §8.3: el Mongo
-   * real de este proyecto es standalone, nunca replica-set, ver
-   * `docs/en-037-automatic-model-promotion.md`), el reemplazo requiere
-   * DOS escrituras separadas, en un orden deliberado:
-   *
-   *   1. Si existe un ACTIVE distinto del candidato, `ACTIVE -> SUPERSEDED`.
-   *   2. `EVALUATING -> ACTIVE` sobre el candidato.
-   *
-   * Nunca al reves: activar el candidato ANTES de superseder dejaria dos
-   * versiones disputando `active_unique` y lanzaria `ActiveModelConflictError`
-   * en vez de promover. El orden elegido abre, en cambio, una ventana
-   * BREVE sin ningun ACTIVE si el proceso cae entre (1) y (2) -- aceptado
-   * por diseno: `DecisionPolicySelector` ya cae a `RuleBasedPolicy`
-   * cuando no hay ACTIVE cargable, exactamente el fallback que el
-   * proyecto exige para este caso (#572 §11.5), nunca una batalla sin
-   * decision.
-   *
-   * Idempotente ante reintentos tras una caida a mitad de promocion
-   * (#572 §13): si el candidato ya esta ACTIVE, no-op; si el ACTIVE
-   * anterior ya esta SUPERSEDED (un intento previo ya lo libero), el
-   * paso 1 se omite.
+   * Mongo standalone no ofrece transaccion multi-documento, por eso la
+   * autoridad de runtime es UN documento `ai-model-active-reference`.
+   * Su CAS cambia anterior->candidato atomicamente y exige version,
+   * revision y generation esperadas. Los estados historicos se
+   * reconcilian despues; nunca existe una ventana sin referencia ACTIVE.
    */
-  async promoteEvaluatedCandidate(candidateVersion: string): Promise<AiModelVersion> {
+  async promoteEvaluatedCandidate(
+    candidateVersion: string,
+    expectedActive?: { readonly modelVersion: string; readonly revision: number } | null,
+  ): Promise<AiModelVersion> {
     const candidate = await this.requireByVersion(candidateVersion)
 
-    if (candidate.state === AiModelState.Active) return candidate
+    const currentReference = await this.registryRepository.getActiveReference()
+    if (currentReference?.modelVersion === candidateVersion) {
+      return this.reconcileAuthoritativeActive(candidate, expectedActive ?? null)
+    }
 
     if (candidate.state !== AiModelState.Evaluating) {
       throw new InvalidModelStateTransitionError(candidate.state, AiModelState.Active)
     }
 
-    // Preflight ANTES de liberar el ACTIVE vigente. Un candidato ausente o
-    // corrupto nunca debe degradar el runtime a fallback por una promocion
-    // que era imposible completar desde el inicio.
+    // Preflight ANTES del CAS. Un candidato ausente o corrupto nunca puede
+    // convertirse en referencia autoritativa.
     await this.assertArtifactIntegrity(candidate)
 
-    const currentActive = await this.registryRepository.findActive()
-    if (currentActive !== null && currentActive.modelVersion !== candidateVersion) {
-      await this.supersedeActive(currentActive.modelVersion)
-    }
+    const resolvedExpected =
+      expectedActive === undefined
+        ? currentReference === null
+          ? null
+          : {
+              modelVersion: currentReference.modelVersion,
+              revision: currentReference.modelRevision,
+            }
+        : expectedActive
+    const matchesExpected =
+      resolvedExpected === null
+        ? currentReference === null
+        : currentReference !== null &&
+          currentReference.modelVersion === resolvedExpected.modelVersion &&
+          currentReference.modelRevision === resolvedExpected.revision
+    if (!matchesExpected) throw new ActiveModelConflictError()
+
+    const next = candidate.activate(this.clock.now())
+    const swapped = await this.registryRepository.compareAndSwapActiveReference(
+      currentReference,
+      { modelVersion: candidateVersion, modelRevision: next.revision },
+      this.clock.now(),
+    )
+    if (swapped === null) throw new ActiveModelConflictError()
 
     try {
-      return await this.activate(candidateVersion)
+      if (resolvedExpected !== null && resolvedExpected.modelVersion !== candidateVersion) {
+        await this.supersedeActive(resolvedExpected.modelVersion)
+      }
+      await this.registryRepository.replaceWithExpectedRevision(next, candidate.revision)
+      return next
     } catch (error) {
-      await this.compensatePreviousActive(currentActive, candidateVersion)
+      await this.compensateAtomicSelection(swapped, resolvedExpected)
       throw error
     }
   }
@@ -347,9 +372,7 @@ export class AiModelRegistry {
    * `AiModelState` ya lo impide estructuralmente, nunca solo por
    * convencion) ni un artefacto corrupto (reutiliza la MISMA
    * reverificacion de hash real que `activate()`, nunca una comprobacion
-   * nueva y distinta). Mismo protocolo de dos escrituras que
-   * `promoteEvaluatedCandidate`, mismo orden, misma ventana breve sin
-   * ACTIVE aceptada por diseno.
+   * nueva y distinta). Usa el mismo CAS autoritativo que la promocion.
    */
   async rollbackToSuperseded(targetVersion: string): Promise<AiModelVersion> {
     const target = await this.requireByVersion(targetVersion)
@@ -362,17 +385,19 @@ export class AiModelRegistry {
 
     await this.assertArtifactIntegrity(target)
 
-    const currentActive = await this.registryRepository.findActive()
-    if (currentActive !== null && currentActive.modelVersion !== targetVersion) {
-      await this.supersedeActive(currentActive.modelVersion)
+    const currentReference = await this.registryRepository.getActiveReference()
+    const next = target.activate(this.clock.now())
+    const swapped = await this.registryRepository.compareAndSwapActiveReference(
+      currentReference,
+      { modelVersion: targetVersion, modelRevision: next.revision },
+      this.clock.now(),
+    )
+    if (swapped === null) throw new ActiveModelConflictError()
+    if (currentReference !== null && currentReference.modelVersion !== targetVersion) {
+      await this.supersedeActive(currentReference.modelVersion)
     }
-
-    try {
-      return await this.activate(targetVersion)
-    } catch (error) {
-      await this.compensatePreviousActive(currentActive, targetVersion)
-      throw error
-    }
+    await this.registryRepository.replaceWithExpectedRevision(next, target.revision)
+    return next
   }
 
   /** Cualquier transicion valida hacia `REJECTED` (#570 §13, §57-58). */
@@ -425,24 +450,49 @@ export class AiModelRegistry {
     }
   }
 
-  /**
-   * Compensacion best-effort de una escritura (2) fallida. Una caida del
-   * proceso entre escrituras sigue pudiendo dejar la ventana documentada
-   * sin ACTIVE, pero un error controlado no abandona deliberadamente el
-   * modelo anterior si el slot continua libre.
-   */
-  private async compensatePreviousActive(
-    previousActive: AiModelVersion | null,
-    attemptedVersion: string,
-  ): Promise<void> {
-    if (previousActive === null || previousActive.modelVersion === attemptedVersion) return
-    if ((await this.registryRepository.findActive()) !== null) return
+  private async reconcileAuthoritativeActive(
+    candidate: AiModelVersion,
+    previous: { readonly modelVersion: string; readonly revision: number } | null,
+  ): Promise<AiModelVersion> {
+    if (candidate.state === AiModelState.Active) return candidate
+    if (candidate.state !== AiModelState.Evaluating) {
+      throw new InvalidModelStateTransitionError(candidate.state, AiModelState.Active)
+    }
+    if (previous !== null && previous.modelVersion !== candidate.modelVersion) {
+      const old = await this.registryRepository.findByVersion(previous.modelVersion)
+      if (old?.state === AiModelState.Active) await this.supersedeActive(old.modelVersion)
+    }
+    const next = candidate.activate(this.clock.now())
+    await this.registryRepository.replaceWithExpectedRevision(next, candidate.revision)
+    return next
+  }
 
+  /** Revierte el puntero solo si nadie lo movio desde nuestro CAS (generation=fencing). */
+  private async compensateAtomicSelection(
+    attempted: {
+      readonly modelVersion: string
+      readonly modelRevision: number
+      readonly generation: number
+    },
+    previous: { readonly modelVersion: string; readonly revision: number } | null,
+  ): Promise<void> {
+    if (previous === null) return
     try {
-      await this.activate(previousActive.modelVersion)
+      const storedPrevious = await this.requireByVersion(previous.modelVersion)
+      const restored =
+        storedPrevious.state === AiModelState.Superseded
+          ? storedPrevious.activate(this.clock.now())
+          : storedPrevious
+      const swapped = await this.registryRepository.compareAndSwapActiveReference(
+        attempted,
+        { modelVersion: restored.modelVersion, modelRevision: restored.revision },
+        this.clock.now(),
+      )
+      if (swapped !== null && restored !== storedPrevious) {
+        await this.registryRepository.replaceWithExpectedRevision(restored, storedPrevious.revision)
+      }
     } catch {
-      // Preservar el error original. La recuperacion del worker y el fallback
-      // RuleBased siguen cubriendo una compensacion que tampoco pudo persistir.
+      // Preserva el error original; el fencing impide pisar una seleccion mas reciente.
     }
   }
 }

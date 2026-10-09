@@ -150,12 +150,16 @@ describe('AiEvaluationCoordinator sobre MongoDB real (EN-037.3, Management #572)
       gateResults: [],
       failureReasons: [],
       previousActiveVersion: null,
+      previousActiveRevision: null,
       promotionPolicyVersion: 'promotion-policy-v1',
       evaluationConfigVersion: 'evaluation-config-v1',
       sourceCommit: 'abc123',
       seedSetSha256: hex('5'),
       matchesSha256: hex('6'),
       evaluationConfigSha256: hex('7'),
+      evaluationProtocolSha256: hex('8'),
+      candidateSummarySha256: hex('9'),
+      activeBaselineSummarySha256: null,
       at: muchLater,
     })
     expect(staleRecorded).toBe(false)
@@ -177,18 +181,22 @@ describe('AiEvaluationCoordinator sobre MongoDB real (EN-037.3, Management #572)
       gateResults: [{ gate: 'SAFETY', passed: true }],
       failureReasons: [],
       previousActiveVersion: 'm-0',
+      previousActiveRevision: 4,
       promotionPolicyVersion: 'promotion-policy-v1',
       evaluationConfigVersion: 'evaluation-config-v1',
       sourceCommit: 'abc123',
       seedSetSha256: hex('5'),
       matchesSha256: hex('6'),
       evaluationConfigSha256: hex('7'),
+      evaluationProtocolSha256: hex('8'),
+      candidateSummarySha256: hex('9'),
+      activeBaselineSummarySha256: hex('a'),
       at: LATER,
     })
     const passSnapshot = await coordinator.getByModelVersion('m-pass')
     expect(passSnapshot?.promotionStatus).toBe('NOT_STARTED')
     expect(passSnapshot?.status).toBe('DECIDED')
-    expect(passSnapshot?.leaseState).toBe('IDLE')
+    expect(passSnapshot?.leaseState).toBe('CLAIMED')
 
     const failClaim = await coordinator.ensureAndTryClaim('m-fail', artifact, 'worker', 60_000, AT)
     await coordinator.recordDecision({
@@ -198,12 +206,16 @@ describe('AiEvaluationCoordinator sobre MongoDB real (EN-037.3, Management #572)
       gateResults: [{ gate: 'SAFETY', passed: false }],
       failureReasons: ['SAFETY: fake failure'],
       previousActiveVersion: null,
+      previousActiveRevision: null,
       promotionPolicyVersion: 'promotion-policy-v1',
       evaluationConfigVersion: 'evaluation-config-v1',
       sourceCommit: 'abc123',
       seedSetSha256: hex('5'),
       matchesSha256: hex('6'),
       evaluationConfigSha256: hex('7'),
+      evaluationProtocolSha256: hex('8'),
+      candidateSummarySha256: hex('9'),
+      activeBaselineSummarySha256: null,
       at: LATER,
     })
     const failSnapshot = await coordinator.getByModelVersion('m-fail')
@@ -228,7 +240,7 @@ describe('AiEvaluationCoordinator sobre MongoDB real (EN-037.3, Management #572)
     expect(snapshot?.leaseState).toBe('IDLE')
   })
 
-  it('markPromotionStatus and appendRollbackEvent persist durably without requiring the lease', async () => {
+  it('markPromotionStatus exige el mismo lease/fencing hasta completar la promocion', async () => {
     const coordinator = newCoordinator()
     const claim = await coordinator.ensureAndTryClaim('m-promo', artifact, 'worker', 60_000, AT)
     await coordinator.recordDecision({
@@ -238,20 +250,38 @@ describe('AiEvaluationCoordinator sobre MongoDB real (EN-037.3, Management #572)
       gateResults: [],
       failureReasons: [],
       previousActiveVersion: null,
+      previousActiveRevision: null,
       promotionPolicyVersion: 'promotion-policy-v1',
       evaluationConfigVersion: 'evaluation-config-v1',
       sourceCommit: 'abc123',
       seedSetSha256: hex('5'),
       matchesSha256: hex('6'),
       evaluationConfigSha256: hex('7'),
+      evaluationProtocolSha256: hex('8'),
+      candidateSummarySha256: hex('9'),
+      activeBaselineSummarySha256: null,
       at: LATER,
     })
 
-    await coordinator.markPromotionStatus('m-promo', 'IN_PROGRESS', LATER)
+    await coordinator.markPromotionStatus(claim!, 'IN_PROGRESS', LATER)
     expect((await coordinator.getByModelVersion('m-promo'))?.promotionStatus).toBe('IN_PROGRESS')
 
-    await coordinator.markPromotionStatus('m-promo', 'COMPLETED', LATER)
+    await coordinator.markPromotionStatus(claim!, 'COMPLETED', LATER)
     expect((await coordinator.getByModelVersion('m-promo'))?.promotionStatus).toBe('COMPLETED')
+
+    await coordinator.releaseLease(claim!, LATER)
+    const successor = await coordinator.ensureAndTryClaim(
+      'm-promo',
+      artifact,
+      'worker-successor',
+      60_000,
+      new Date(LATER.getTime() + 1),
+    )
+    expect(successor).not.toBeNull()
+    await expect(
+      coordinator.markPromotionStatus(claim!, 'IN_PROGRESS', new Date(LATER.getTime() + 2)),
+    ).resolves.toBe(false)
+    await coordinator.releaseLease(successor!, new Date(LATER.getTime() + 3))
 
     await coordinator.appendRollbackEvent(
       'm-promo',

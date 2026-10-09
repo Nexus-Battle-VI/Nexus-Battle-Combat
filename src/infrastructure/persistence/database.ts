@@ -30,6 +30,7 @@ import * as aiModelRegistryMigration from '../../adapters/outbound/persistence/m
 import * as aiTrainingCoordinatorMigration from '../../adapters/outbound/persistence/migrations/028-ai-training-coordinator'
 import * as aiModelRegistryPromotionFieldsMigration from '../../adapters/outbound/persistence/migrations/029-ai-model-registry-promotion-fields'
 import * as aiEvaluationCoordinatorMigration from '../../adapters/outbound/persistence/migrations/030-ai-evaluation-coordinator'
+import * as aiAtomicActiveAndEvaluationEvidenceMigration from '../../adapters/outbound/persistence/migrations/031-ai-atomic-active-and-evaluation-evidence'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -117,6 +118,10 @@ export const MIGRATIONS: readonly MongoMigration[] = [
     up: aiModelRegistryPromotionFieldsMigration.up,
   },
   { name: '030-ai-evaluation-coordinator', up: aiEvaluationCoordinatorMigration.up },
+  {
+    name: '031-ai-atomic-active-and-evaluation-evidence',
+    up: aiAtomicActiveAndEvaluationEvidenceMigration.up,
+  },
 ]
 
 const REGISTRY = '_migrations'

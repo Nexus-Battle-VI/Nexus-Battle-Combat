@@ -4,12 +4,16 @@ import {
   ActiveModelConflictError,
   ModelVersionConflictError,
 } from '../../../domain/errors/AiModelRegistryErrors'
-import type { AiModelRegistryRepositoryPort } from '../../../application/ports/AiModelRegistryRepositoryPort'
+import type {
+  ActiveModelReference,
+  AiModelRegistryRepositoryPort,
+} from '../../../application/ports/AiModelRegistryRepositoryPort'
 import { sameTrainingLineage } from './ai-model-registry-mapping'
 
 /** Respaldo en memoria (`PERSISTENCE_DRIVER=memory`), mismo contrato que `MongoAiModelRegistryRepository`. */
 export class InMemoryAiModelRegistryRepository implements AiModelRegistryRepositoryPort {
   private readonly versions = new Map<string, { version: AiModelVersion; revision: number }>()
+  private activeReference: ActiveModelReference | null = null
 
   insertNew(version: AiModelVersion): Promise<void> {
     const existing = this.versions.get(version.modelVersion)
@@ -57,10 +61,35 @@ export class InMemoryAiModelRegistryRepository implements AiModelRegistryReposit
   }
 
   findActive(): Promise<AiModelVersion | null> {
-    for (const entry of this.versions.values()) {
-      if (entry.version.state === AiModelState.Active) return Promise.resolve(entry.version)
+    return Promise.resolve(
+      this.activeReference === null
+        ? null
+        : (this.versions.get(this.activeReference.modelVersion)?.version ?? null),
+    )
+  }
+
+  getActiveReference(): Promise<ActiveModelReference | null> {
+    return Promise.resolve(this.activeReference)
+  }
+
+  compareAndSwapActiveReference(
+    expected: ActiveModelReference | null,
+    next: { readonly modelVersion: string; readonly modelRevision: number },
+  ): Promise<ActiveModelReference | null> {
+    const current = this.activeReference
+    const matches =
+      expected === null
+        ? current === null
+        : current !== null &&
+          current.modelVersion === expected.modelVersion &&
+          current.modelRevision === expected.modelRevision &&
+          current.generation === expected.generation
+    if (!matches) return Promise.resolve(null)
+    this.activeReference = {
+      ...next,
+      generation: (current?.generation ?? 0) + 1,
     }
-    return Promise.resolve(null)
+    return Promise.resolve(this.activeReference)
   }
 
   findByTrainingRunId(trainingRunId: string): Promise<AiModelVersion | null> {

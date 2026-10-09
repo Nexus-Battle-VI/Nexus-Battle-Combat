@@ -18,6 +18,7 @@ import {
 import { AiModelState } from '../../domain/value-objects/AiModelState'
 import type { AiModelVersion } from '../../domain/entities/AiModelVersion'
 import type { EvaluationSummary } from '../../evaluation/experiment/EvaluationReport'
+import { canonicalJsonStringify, sha256Hex } from '../../evaluation/canonical/CanonicalJson'
 import { materializeNeuralArtifactDir } from './NeuralArtifactMaterializer'
 import { type RunAiEvaluationParams, type RunAiEvaluationResult } from './run-ai-evaluation'
 import { describeError } from '../observability/describe-error'
@@ -95,6 +96,28 @@ const artifactInfoOf = (version: AiModelVersion): AiEvaluationLedgerArtifactInfo
   }
 }
 
+const persistEvaluationSummary = async (
+  deps: AutomaticModelEvaluationCoordinatorDeps,
+  summary: EvaluationSummary,
+): Promise<string> => {
+  const canonicalSummary = canonicalJsonStringify(summary)
+  const bytes = Buffer.from(canonicalSummary, 'utf-8')
+  const sha256 = sha256Hex(canonicalSummary)
+  await deps.artifactRepository.put(sha256, bytes, deps.clock.now(), 'EVALUATION_SUMMARY')
+  return sha256
+}
+
+const expectedActiveOf = (
+  modelVersion: string | null,
+  revision: number | null,
+): { readonly modelVersion: string; readonly revision: number } | null => {
+  if (modelVersion === null) return null
+  if (revision === null) {
+    throw new EvaluationInfrastructureError('snapshot ACTIVE inconsistente: version sin revision.')
+  }
+  return { modelVersion, revision }
+}
+
 /** Reanuda un candidato cuya evaluacion YA quedo `DECIDED` en el ledger (#572 §13): nunca re-ejecuta el harness, solo termina la consecuencia pendiente. */
 const resumeDecidedCandidate = async (
   deps: AutomaticModelEvaluationCoordinatorDeps,
@@ -106,9 +129,17 @@ const resumeDecidedCandidate = async (
     const at = deps.clock.now()
 
     if (ledgerSnapshot.evaluationOutcome === 'PASS') {
-      await deps.ledger.markPromotionStatus(candidate.modelVersion, 'IN_PROGRESS', at)
-      await deps.registry.promoteEvaluatedCandidate(candidate.modelVersion)
-      await deps.ledger.markPromotionStatus(candidate.modelVersion, 'COMPLETED', at)
+      const marked = await deps.ledger.markPromotionStatus(claim, 'IN_PROGRESS', at)
+      if (!marked) throw new EvaluationInfrastructureError('lease perdido antes de promover.')
+      await deps.registry.promoteEvaluatedCandidate(
+        candidate.modelVersion,
+        expectedActiveOf(
+          ledgerSnapshot.previousActiveVersion,
+          ledgerSnapshot.previousActiveRevision,
+        ),
+      )
+      const completed = await deps.ledger.markPromotionStatus(claim, 'COMPLETED', at)
+      if (!completed) throw new EvaluationInfrastructureError('lease perdido al cerrar promocion.')
       deps.logger.info('ai_model_promoted', { modelVersion: candidate.modelVersion, resumed: true })
       return { kind: 'PROMOTED', modelVersion: candidate.modelVersion }
     }
@@ -181,8 +212,11 @@ const runFreshEvaluation = async (
       activeBefore !== null && activeBefore.modelVersion !== candidate.modelVersion
         ? activeBefore.modelVersion
         : null
+    const previousActiveRevision =
+      activeBefore !== null && previousActiveVersion !== null ? activeBefore.revision : null
 
     let activeBaselineEvaluation: EvaluationSummary | null = null
+    let activeBaselineSummarySha256: string | null = null
     if (activeBefore !== null && previousActiveVersion !== null) {
       const activePaths = await materializeNeuralArtifactDir(
         deps.artifactRepository,
@@ -193,11 +227,13 @@ const runFreshEvaluation = async (
         evaluationParamsFor(config, activePaths.dir, join(workDir, 'active-baseline-output')),
       )
       activeBaselineEvaluation = activeResult.summary
+      activeBaselineSummarySha256 = await persistEvaluationSummary(deps, activeResult.summary)
     }
 
     const candidateResult = await deps.runEvaluation(
       evaluationParamsFor(config, candidatePaths.dir, join(workDir, 'candidate-output')),
     )
+    const candidateSummarySha256 = await persistEvaluationSummary(deps, candidateResult.summary)
 
     const decision = evaluatePromotionPolicyV1({
       candidateEvaluation: candidateResult.summary,
@@ -214,12 +250,16 @@ const runFreshEvaluation = async (
       gateResults,
       failureReasons,
       previousActiveVersion,
+      previousActiveRevision,
       promotionPolicyVersion: decision.policyVersion,
       evaluationConfigVersion: candidateResult.summary.evaluationConfigVersion,
       sourceCommit: config.sourceCommit,
       seedSetSha256: candidateResult.summary.fingerprints.seedSetSha256,
       matchesSha256: candidateResult.summary.fingerprints.matchesSha256,
       evaluationConfigSha256: candidateResult.summary.fingerprints.evaluationConfigSha256,
+      evaluationProtocolSha256: candidateResult.summary.fingerprints.evaluationProtocolSha256,
+      candidateSummarySha256,
+      activeBaselineSummarySha256,
       at: deps.clock.now(),
     })
     if (!recorded) {
@@ -233,10 +273,16 @@ const runFreshEvaluation = async (
     })
 
     if (decision.kind === 'PASS') {
-      await deps.ledger.markPromotionStatus(candidate.modelVersion, 'IN_PROGRESS', deps.clock.now())
-      await deps.registry.promoteEvaluatedCandidate(candidate.modelVersion)
-      await deps.ledger.markPromotionStatus(candidate.modelVersion, 'COMPLETED', deps.clock.now())
+      const marked = await deps.ledger.markPromotionStatus(claim, 'IN_PROGRESS', deps.clock.now())
+      if (!marked) throw new EvaluationInfrastructureError('lease perdido antes de promover.')
+      await deps.registry.promoteEvaluatedCandidate(
+        candidate.modelVersion,
+        expectedActiveOf(previousActiveVersion, previousActiveRevision),
+      )
+      const completed = await deps.ledger.markPromotionStatus(claim, 'COMPLETED', deps.clock.now())
+      if (!completed) throw new EvaluationInfrastructureError('lease perdido al cerrar promocion.')
       deps.logger.info('ai_model_promoted', { modelVersion: candidate.modelVersion })
+      await deps.ledger.releaseLease(claim, deps.clock.now())
       return { kind: 'PROMOTED', modelVersion: candidate.modelVersion }
     }
 
@@ -249,6 +295,7 @@ const runFreshEvaluation = async (
       modelVersion: candidate.modelVersion,
       reasons: failureReasons.join(' | '),
     })
+    await deps.ledger.releaseLease(claim, deps.clock.now())
     return { kind: 'REJECTED', modelVersion: candidate.modelVersion, reasons: failureReasons }
   } catch (error) {
     const reason = describeError(error)

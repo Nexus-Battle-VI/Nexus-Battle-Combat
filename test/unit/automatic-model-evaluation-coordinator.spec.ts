@@ -160,6 +160,7 @@ const summaryFor = (
       matchupRow('NEURAL_vs_RULE_BASED', Math.round(winRateRuleBased * 100), 100),
     ],
     fingerprints: {
+      evaluationProtocolSha256: configSha256,
       evaluationConfigSha256: configSha256,
       seedSetSha256: hex('a'),
       matchesSha256: hex('b'),
@@ -250,6 +251,10 @@ describe('AutomaticModelEvaluationCoordinator (EN-037.3, Management #572 §7, §
     expect(ledgerSnapshot?.status).toBe('DECIDED')
     expect(ledgerSnapshot?.evaluationOutcome).toBe('PASS')
     expect(ledgerSnapshot?.matchesSha256).toBe(summary.fingerprints.matchesSha256)
+    expect(ledgerSnapshot?.candidateSummarySha256).toMatch(/^[0-9a-f]{64}$/)
+    await expect(
+      deps.artifactRepository.getBySha256(ledgerSnapshot!.candidateSummarySha256!),
+    ).resolves.not.toBeNull()
     expect(ledgerSnapshot?.promotionPolicyVersion).toBe('promotion-policy-v1')
   })
 
@@ -277,6 +282,17 @@ describe('AutomaticModelEvaluationCoordinator (EN-037.3, Management #572 §7, §
 
     const activeAfter = await registry.findActive()
     expect(activeAfter?.modelVersion).toBe('m-0')
+  })
+
+  it('paridad medida FAIL rechaza definitivamente; nunca se clasifica como infraestructura', async () => {
+    const summary = summaryFor(0.7, 0.55, hex('c'))
+    const { deps, registry } = newDeps({
+      candidate: { ...summary, parity: { ...passingParity, passed: false } },
+    })
+    await registerCandidate(registry, 'm-parity-fail', 'seed-parity')
+    const outcome = await processNextAutomaticEvaluation(deps, baseConfig())
+    expect(outcome.kind).toBe('REJECTED')
+    expect((await registry.findByVersion('m-parity-fail'))?.state).toBe('REJECTED')
   })
 
   it('promotion replaces the previous ACTIVE: old becomes SUPERSEDED, new becomes ACTIVE', async () => {

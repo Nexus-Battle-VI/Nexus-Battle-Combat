@@ -1,6 +1,13 @@
 import type { AiModelVersion } from '../../domain/entities/AiModelVersion'
 import type { AiModelState } from '../../domain/value-objects/AiModelState'
 
+export interface ActiveModelReference {
+  readonly modelVersion: string
+  /** Revision del documento de modelo elegida al efectuar el swap. */
+  readonly modelRevision: number
+  readonly generation: number
+}
+
 /**
  * Puerto de persistencia del model registry (EN-037.1, Management #570
  * §47): application/domain nunca importa `mongodb`. Operaciones
@@ -48,6 +55,16 @@ export interface AiModelRegistryRepositoryPort {
    * reciente".
    */
   findActive(): Promise<AiModelVersion | null>
+
+  /** Referencia ACTIVE autoritativa; los estados historicos no deciden el runtime. */
+  getActiveReference(): Promise<ActiveModelReference | null>
+
+  /** Swap atomico/fail-closed del ACTIVE sobre un unico documento Mongo. */
+  compareAndSwapActiveReference(
+    expected: ActiveModelReference | null,
+    next: { readonly modelVersion: string; readonly modelRevision: number },
+    at: Date,
+  ): Promise<ActiveModelReference | null>
 
   /** `null` si ningun `trainingRunId` registrado coincide. */
   findByTrainingRunId(trainingRunId: string): Promise<AiModelVersion | null>

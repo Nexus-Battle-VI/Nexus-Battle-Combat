@@ -211,9 +211,10 @@ export const runAiEvaluation = async (
     inferenceTimeoutMs: 2_000,
   })
 
-  // 2. Validar paridad PyTorch <-> ONNX ANTES de correr ninguna partida
-  // (#569 §174, §131: si falla, es un quality gate TECNICO, nunca un
-  // warning).
+  // 2. Validar paridad PyTorch <-> ONNX. Un resultado medido FAIL es
+  // evidencia definitiva del modelo y se conserva en el summary para que
+  // PromotionPolicyV1 lo rechace; solo una imposibilidad tecnica de medir
+  // (artefacto ilegible/runtime caido) lanza y se reintenta como infraestructura.
   process.stderr.write('Validando paridad PyTorch <-> ONNX...\n')
   const parityReference = await loadParityReference(parityReferencePath)
   assertSameTrainingRun(parityReference, neuralPolicy.modelDescriptor)
@@ -224,12 +225,6 @@ export const runAiEvaluation = async (
     `paridad: passed=${String(parityReport.passed)} argmaxAgreement=${String(parityReport.argmaxAgreement)} ` +
       `maxAbsoluteError=${String(parityReport.maxAbsoluteError)}\n`,
   )
-
-  if (!parityReport.passed) {
-    throw new Error(
-      'La paridad PyTorch <-> ONNX fallo: no se ejecuta ninguna partida (#569 §131, §174).',
-    )
-  }
 
   // 3. Construir dependencias compartidas (#569 §147-150: Neural y MCTS
   // reutilizan UNA instancia stateless durante todo el run).

@@ -167,6 +167,16 @@ const evidenceCompletenessIssues = (
     }
   }
 
+  const neuralFailures = summary.policySummary.find(
+    (row) => row.policyId === 'NEURAL',
+  )?.failuresCaused
+  if (neuralFailures !== undefined && neuralFailures > 0) {
+    issues.push(
+      `${label}: NEURAL causo ${String(neuralFailures)} partidas fallidas en el reporte completo; ` +
+        'ningun timeout/error neuronal puede promover aunque ocurra contra MCTS.',
+    )
+  }
+
   return issues
 }
 
@@ -256,14 +266,14 @@ const nonRegressionGate = (input: PromotionPolicyInput): GateResult => {
 
   const baseline = input.activeBaselineEvaluation
   if (
-    baseline.fingerprints.evaluationConfigSha256 !==
-    input.candidateEvaluation.fingerprints.evaluationConfigSha256
+    baseline.fingerprints.evaluationProtocolSha256 !==
+    input.candidateEvaluation.fingerprints.evaluationProtocolSha256
   ) {
     return {
       gate: 'NON_REGRESSION_VS_ACTIVE',
       passed: false,
       detail:
-        'El reporte del ACTIVE vigente usa una evaluationConfigSha256 distinta a la del candidato: ' +
+        'El reporte del ACTIVE vigente usa una evaluationProtocolSha256 distinta a la del candidato: ' +
         'la comparacion no es reproducible/apples-to-apples, fail-closed.',
     }
   }

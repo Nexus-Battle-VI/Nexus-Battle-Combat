@@ -37,6 +37,7 @@ export interface AiEvaluationLedgerSnapshot {
   readonly gateResults: readonly unknown[]
   readonly failureReasons: readonly string[]
   readonly previousActiveVersion: string | null
+  readonly previousActiveRevision: number | null
   readonly promotionStatus: AiEvaluationPromotionStatus
   readonly promotionPolicyVersion: string | null
   readonly evaluationConfigVersion: string | null
@@ -44,6 +45,9 @@ export interface AiEvaluationLedgerSnapshot {
   readonly seedSetSha256: string | null
   readonly matchesSha256: string | null
   readonly evaluationConfigSha256: string | null
+  readonly evaluationProtocolSha256: string | null
+  readonly candidateSummarySha256: string | null
+  readonly activeBaselineSummarySha256: string | null
   readonly consecutiveFailureCount: number
   readonly evaluatedAt: Date | null
   readonly rollbackHistory: readonly unknown[]
@@ -70,12 +74,16 @@ export interface AiEvaluationDecisionParams {
   readonly gateResults: readonly unknown[]
   readonly failureReasons: readonly string[]
   readonly previousActiveVersion: string | null
+  readonly previousActiveRevision: number | null
   readonly promotionPolicyVersion: string
   readonly evaluationConfigVersion: string
   readonly sourceCommit: string
   readonly seedSetSha256: string
   readonly matchesSha256: string
   readonly evaluationConfigSha256: string
+  readonly evaluationProtocolSha256: string
+  readonly candidateSummarySha256: string
+  readonly activeBaselineSummarySha256: string | null
   readonly at: Date
 }
 
@@ -111,7 +119,7 @@ export interface AiEvaluationCoordinatorPort {
 
   /**
    * Persiste la decision FINAL de `PromotionPolicyV1` (PASS o FAIL) y
-   * libera el lease. `promotionStatus` pasa a `NOT_STARTED` si PASS (el
+   * CONSERVA el lease/fencing hasta terminar promocion o rechazo. `promotionStatus` pasa a `NOT_STARTED` si PASS (el
    * `AutomaticModelEvaluationCoordinator` todavia debe ejecutar
    * `AiModelRegistry.promoteEvaluatedCandidate`), o a `NOT_APPLICABLE` si
    * FAIL. `false` si el fencing token ya no coincide.
@@ -130,12 +138,12 @@ export interface AiEvaluationCoordinatorPort {
     at: Date,
   ): Promise<boolean>
 
-  /** Progreso de la promocion atomica de dos escrituras (#572 §8, §13): auditoria/recuperacion, nunca el mecanismo de seguridad en si (eso vive en `AiModelRegistry`). */
+  /** Progreso del CAS y su reconciliacion historica; exige el mismo lease/fencing que tomo la decision. */
   markPromotionStatus(
-    modelVersion: string,
+    claim: AiEvaluationLeaseClaim,
     promotionStatus: AiEvaluationPromotionStatus,
     at: Date,
-  ): Promise<void>
+  ): Promise<boolean>
 
   /** Historial de rollbacks que reactivaron este `modelVersion` (#572 §10): auditoria append-only. */
   appendRollbackEvent(

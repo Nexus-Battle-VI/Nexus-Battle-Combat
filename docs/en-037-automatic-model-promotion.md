@@ -55,7 +55,8 @@ PromotionPolicyV1
 El coordinador reutiliza `runAiEvaluation()`; no copia el simulador, el encoder,
 la paridad ni el cálculo de métricas. Para no alterar el slot neuronal único del
 harness, candidato y ACTIVE se evalúan en corridas separadas con el mismo
-`evaluationConfigSha256`.
+`evaluationProtocolSha256`. Este hash excluye rutas físicas temporales;
+`evaluationConfigSha256` completo se conserva para trazabilidad.
 
 ## 3. Artefactos y paridad
 
@@ -91,6 +92,8 @@ evaluación incluye commit fuente, hash de pesos y hash de configuración. En Mo
 - razones de fallo;
 - versión de política/configuración;
 - fingerprints de semillas, configuración y partidas;
+- hashes de summaries completos de candidato y baseline, cuyos bytes canónicos
+  se guardan content-addressed como `EVALUATION_SUMMARY`;
 - estado de promoción e historial de rollback.
 
 La migración `030` crea validator e índices. Presentar el mismo `modelVersion` con
@@ -100,7 +103,8 @@ REJECTED. Un FAIL definitivo de gates sí termina en REJECTED.
 
 ## 5. Promoción, ACTIVE y reemplazo
 
-La migración `029` agrega `SUPERSEDED` y la referencia de paridad al registry. El
+La migración `029` agrega `SUPERSEDED` y la referencia de paridad al registry. La
+migración `031` agrega la referencia ACTIVE autoritativa y evidencia durable. El
 grafo relevante es:
 
 ```text
@@ -111,17 +115,12 @@ EVALUATING -> REJECTED
 ```
 
 Mongo es standalone en la topología vigente; no se afirman transacciones
-multidocumento inexistentes. El swap utiliza dos escrituras CAS:
-
-1. verificar por adelantado integridad/elegibilidad del candidato;
-2. `ACTIVE -> SUPERSEDED` del anterior;
-3. `EVALUATING -> ACTIVE` del candidato.
-
-El índice parcial único continúa garantizando como máximo un ACTIVE. Existe una
-ventana breve sin ACTIVE si el proceso cae entre 2 y 3; durante ella Combat usa
-RuleBased. Ante un error controlado en 3 se intenta compensar reactivando el
-anterior. La recuperación del worker completa decisiones PASS que ya quedaron
-durables. No se promete atomicidad multidocumento que Mongo standalone no ofrece.
+multidocumento inexistentes. El runtime consulta un único documento
+`ai-model-active-reference`; su CAS exige versión/revisión/generation del ACTIVE
+evaluado y cambia directamente anterior→candidato. Nunca hay una ventana sin
+referencia ACTIVE. Los estados `ACTIVE`/`SUPERSEDED` son historial reconciliable,
+no una segunda fuente de verdad. Una compensación CAS solo revierte si nadie
+movió la generación entre tanto.
 
 ## 6. Rollback
 
@@ -167,7 +166,9 @@ con `PERSISTENCE_DRIVER=memory`. En producción Mongo, el registry es la autorid
 Cada iteración procesa como máximo un candidato. `ensureAndTryClaim` asigna lease y
 fencing token; dos workers no ejecutan el mismo candidato. Los heartbeats renuevan
 el lease y toda escritura sensible valida propietario + token. Un propietario
-obsoleto no puede registrar una decisión.
+obsoleto no puede registrar una decisión ni completar una promoción.
+`recordDecision` conserva el lease; el mismo fencing token acompaña
+`IN_PROGRESS`/`COMPLETED` y se libera solo después de promover o rechazar.
 
 Al reiniciar:
 

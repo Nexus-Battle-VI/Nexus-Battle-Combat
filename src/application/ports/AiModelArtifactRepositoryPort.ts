@@ -13,7 +13,7 @@ export interface AiModelArtifact {
  * nunca importa `mongodb`/`Binary`.
  */
 /** `PARITY_REFERENCE` (EN-037.3, Management #572 §6): `pytorch-parity-reference.json`, nunca interpretado por este puerto, solo persistido content-addressed igual que `ONNX_MODEL`. */
-export type AiModelArtifactType = 'ONNX_MODEL' | 'PARITY_REFERENCE'
+export type AiModelArtifactType = 'ONNX_MODEL' | 'PARITY_REFERENCE' | 'EVALUATION_SUMMARY'
 
 export interface AiModelArtifactRepositoryPort {
   /**

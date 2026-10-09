@@ -24,6 +24,7 @@ interface MutableLedgerState {
   gateResults: readonly unknown[]
   failureReasons: readonly string[]
   previousActiveVersion: string | null
+  previousActiveRevision: number | null
   promotionStatus: AiEvaluationLedgerSnapshot['promotionStatus']
   promotionPolicyVersion: string | null
   evaluationConfigVersion: string | null
@@ -31,6 +32,9 @@ interface MutableLedgerState {
   seedSetSha256: string | null
   matchesSha256: string | null
   evaluationConfigSha256: string | null
+  evaluationProtocolSha256: string | null
+  candidateSummarySha256: string | null
+  activeBaselineSummarySha256: string | null
   consecutiveFailureCount: number
   evaluatedAt: Date | null
   rollbackHistory: readonly unknown[]
@@ -67,6 +71,7 @@ export class InMemoryAiEvaluationCoordinatorRepository implements AiEvaluationCo
         gateResults: [],
         failureReasons: [],
         previousActiveVersion: null,
+        previousActiveRevision: null,
         promotionStatus: 'NOT_APPLICABLE',
         promotionPolicyVersion: null,
         evaluationConfigVersion: null,
@@ -74,6 +79,9 @@ export class InMemoryAiEvaluationCoordinatorRepository implements AiEvaluationCo
         seedSetSha256: null,
         matchesSha256: null,
         evaluationConfigSha256: null,
+        evaluationProtocolSha256: null,
+        candidateSummarySha256: null,
+        activeBaselineSummarySha256: null,
         consecutiveFailureCount: 0,
         evaluatedAt: null,
         rollbackHistory: [],
@@ -127,15 +135,13 @@ export class InMemoryAiEvaluationCoordinatorRepository implements AiEvaluationCo
   recordDecision(params: AiEvaluationDecisionParams): Promise<boolean> {
     const row = this.owned(params.claim)
     if (row === null) return Promise.resolve(false)
-    row.leaseState = 'IDLE'
-    row.leaseOwnerId = null
-    row.leaseExpiresAt = null
     row.status = 'DECIDED'
     row.evaluationId = params.evaluationId
     row.evaluationOutcome = params.evaluationOutcome
     row.gateResults = params.gateResults
     row.failureReasons = params.failureReasons
     row.previousActiveVersion = params.previousActiveVersion
+    row.previousActiveRevision = params.previousActiveRevision
     row.promotionStatus = params.evaluationOutcome === 'PASS' ? 'NOT_STARTED' : 'NOT_APPLICABLE'
     row.promotionPolicyVersion = params.promotionPolicyVersion
     row.evaluationConfigVersion = params.evaluationConfigVersion
@@ -143,6 +149,9 @@ export class InMemoryAiEvaluationCoordinatorRepository implements AiEvaluationCo
     row.seedSetSha256 = params.seedSetSha256
     row.matchesSha256 = params.matchesSha256
     row.evaluationConfigSha256 = params.evaluationConfigSha256
+    row.evaluationProtocolSha256 = params.evaluationProtocolSha256
+    row.candidateSummarySha256 = params.candidateSummarySha256
+    row.activeBaselineSummarySha256 = params.activeBaselineSummarySha256
     row.consecutiveFailureCount = 0
     row.evaluatedAt = params.at
     return Promise.resolve(true)
@@ -160,12 +169,13 @@ export class InMemoryAiEvaluationCoordinatorRepository implements AiEvaluationCo
   }
 
   markPromotionStatus(
-    modelVersion: string,
+    claim: AiEvaluationLeaseClaim,
     promotionStatus: AiEvaluationLedgerSnapshot['promotionStatus'],
-  ): Promise<void> {
-    const row = this.rows.get(modelVersion)
-    if (row !== undefined) row.promotionStatus = promotionStatus
-    return Promise.resolve()
+  ): Promise<boolean> {
+    const row = this.owned(claim)
+    if (row === null) return Promise.resolve(false)
+    row.promotionStatus = promotionStatus
+    return Promise.resolve(true)
   }
 
   appendRollbackEvent(

@@ -144,23 +144,17 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
     ])
   })
 
-  it('creates the expected indexes on ai-model-versions, including the partial unique ACTIVE index', async () => {
+  it('uses the single CAS reference as ACTIVE authority and keeps lifecycle indexes non-authoritative', async () => {
     const indexes = await db!.collection(AI_MODEL_VERSIONS_COLLECTION).indexes()
     const names = indexes.map((index) => index.name)
 
     expect(names).toEqual(
-      expect.arrayContaining([
-        '_id_',
-        'training_run_id_unique',
-        'model_state_sha256',
-        'active_unique',
-      ]),
+      expect.arrayContaining(['_id_', 'training_run_id_unique', 'model_state_sha256']),
     )
-    expect(indexes.find((index) => index.name === 'active_unique')).toMatchObject({
-      unique: true,
-      key: { state: 1 },
-      partialFilterExpression: { state: 'ACTIVE' },
-    })
+    expect(indexes.find((index) => index.name === 'active_unique')).toBeUndefined()
+    await expect(
+      db!.listCollections({ name: 'ai-model-active-reference' }).toArray(),
+    ).resolves.toHaveLength(1)
     expect(indexes.find((index) => index.name === 'training_run_id_unique')).toMatchObject({
       unique: true,
     })

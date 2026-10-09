@@ -36,7 +36,7 @@ const passingParity: ParityReportSummary = {
 const matchupRow = (
   matchupId: string,
   firstPolicy: 'NEURAL',
-  secondPolicy: 'RANDOM' | 'RULE_BASED',
+  secondPolicy: 'RANDOM' | 'RULE_BASED' | 'MCTS',
   wins: number,
   n: number,
   overrides: Partial<MatchupSummaryRow> = {},
@@ -73,6 +73,7 @@ const baseSummary = (overrides: Partial<EvaluationSummary> = {}): EvaluationSumm
     matchupRow('NEURAL_vs_RULE_BASED', 'NEURAL', 'RULE_BASED', 50, 100),
   ],
   fingerprints: {
+    evaluationProtocolSha256: hex('a'),
     evaluationConfigSha256: hex('a'),
     seedSetSha256: hex('b'),
     matchesSha256: hex('c'),
@@ -303,6 +304,7 @@ describe('PromotionPolicyV1 (EN-037.3, Management #572 §5, §14-A)', () => {
       const decision = evaluatePromotionPolicyV1({
         candidateEvaluation: baseSummary({
           fingerprints: {
+            evaluationProtocolSha256: sharedConfigSha256,
             evaluationConfigSha256: sharedConfigSha256,
             seedSetSha256: hex('e'),
             matchesSha256: hex('f'),
@@ -314,6 +316,7 @@ describe('PromotionPolicyV1 (EN-037.3, Management #572 §5, §14-A)', () => {
         }),
         activeBaselineEvaluation: baseSummary({
           fingerprints: {
+            evaluationProtocolSha256: sharedConfigSha256,
             evaluationConfigSha256: sharedConfigSha256,
             seedSetSha256: hex('e'),
             matchesSha256: hex('f'),
@@ -337,6 +340,7 @@ describe('PromotionPolicyV1 (EN-037.3, Management #572 §5, §14-A)', () => {
       const decision = evaluatePromotionPolicyV1({
         candidateEvaluation: baseSummary({
           fingerprints: {
+            evaluationProtocolSha256: sharedConfigSha256,
             evaluationConfigSha256: sharedConfigSha256,
             seedSetSha256: hex('e'),
             matchesSha256: hex('f'),
@@ -348,6 +352,7 @@ describe('PromotionPolicyV1 (EN-037.3, Management #572 §5, §14-A)', () => {
         }),
         activeBaselineEvaluation: baseSummary({
           fingerprints: {
+            evaluationProtocolSha256: sharedConfigSha256,
             evaluationConfigSha256: sharedConfigSha256,
             seedSetSha256: hex('e'),
             matchesSha256: hex('f'),
@@ -365,6 +370,7 @@ describe('PromotionPolicyV1 (EN-037.3, Management #572 §5, §14-A)', () => {
       const decision = evaluatePromotionPolicyV1({
         candidateEvaluation: baseSummary({
           fingerprints: {
+            evaluationProtocolSha256: hex('1'),
             evaluationConfigSha256: hex('1'),
             seedSetSha256: hex('e'),
             matchesSha256: hex('f'),
@@ -372,6 +378,7 @@ describe('PromotionPolicyV1 (EN-037.3, Management #572 §5, §14-A)', () => {
         }),
         activeBaselineEvaluation: baseSummary({
           fingerprints: {
+            evaluationProtocolSha256: hex('2'),
             evaluationConfigSha256: hex('2'),
             seedSetSha256: hex('e'),
             matchesSha256: hex('f'),
@@ -430,5 +437,39 @@ describe('PromotionPolicyV1 (EN-037.3, Management #572 §5, §14-A)', () => {
     if (decision.kind === 'FAIL') {
       expect(decision.reasons.some((reason) => reason.includes('partidas fallidas'))).toBe(true)
     }
+  })
+
+  it('rechaza un fallo causado por NEURAL en NEURAL_vs_MCTS aunque los matchups obligatorios pasen', () => {
+    const decision = evaluatePromotionPolicyV1(
+      input({
+        candidateEvaluation: baseSummary({
+          policySummary: [
+            {
+              policyId: 'NEURAL',
+              battles: 300,
+              completedBattles: 299,
+              wins: 200,
+              losses: 99,
+              draws: 0,
+              failures: 1,
+              failuresCaused: 1,
+              winRate: 200 / 299,
+              avgDamageDealt: 1,
+              avgHealthRemainingRatio: 1,
+              avgPowerRemaining: 1,
+              avgPlies: 1,
+              avgTurnsCompleted: 1,
+            },
+          ],
+          matchupSummary: [
+            matchupRow('NEURAL_vs_RANDOM', 'NEURAL', 'RANDOM', 70, 100),
+            matchupRow('NEURAL_vs_RULE_BASED', 'NEURAL', 'RULE_BASED', 60, 100),
+            matchupRow('NEURAL_vs_MCTS', 'NEURAL', 'MCTS', 0, 1, { failures: 1 }),
+          ],
+        }),
+      }),
+    )
+    expect(decision.kind).toBe('FAIL')
+    expect(decision.gates.find((gate) => gate.gate === 'EVIDENCE_COMPLETENESS')?.passed).toBe(false)
   })
 })

@@ -289,11 +289,24 @@ export interface EvaluationSummary {
   readonly policySummary: readonly PolicySummaryRow[]
   readonly matchupSummary: readonly MatchupSummaryRow[]
   readonly fingerprints: {
+    /** Configuracion experimental comparable; excluye rutas fisicas del artefacto. */
+    readonly evaluationProtocolSha256: string
     readonly evaluationConfigSha256: string
     readonly seedSetSha256: string
     readonly matchesSha256: string
   }
 }
+
+const evaluationProtocolOf = (config: EvaluationConfig): unknown => ({
+  ...config,
+  neuralArtifact:
+    config.neuralArtifact === null
+      ? null
+      : {
+          allowSmokeModel: config.neuralArtifact.allowSmokeModel,
+          inferenceTimeoutMs: config.neuralArtifact.inferenceTimeoutMs,
+        },
+})
 
 export const buildEvaluationSummary = (params: {
   readonly evaluationId: string
@@ -322,6 +335,7 @@ export const buildEvaluationSummary = (params: {
     policySummary: buildPolicySummary(results),
     matchupSummary: buildMatchupSummary(config, results),
     fingerprints: {
+      evaluationProtocolSha256: canonicalJsonSha256(evaluationProtocolOf(config)),
       evaluationConfigSha256: canonicalJsonSha256(config),
       seedSetSha256: canonicalJsonSha256(seedSet),
       matchesSha256: matchesSha256Of(results),
@@ -437,6 +451,7 @@ export const buildEvaluationSummaryMarkdown = (summary: EvaluationSummary): stri
   lines.push('## Fingerprints de reproducibilidad')
   lines.push('')
   lines.push(`- evaluationConfigSha256: \`${summary.fingerprints.evaluationConfigSha256}\``)
+  lines.push(`- evaluationProtocolSha256: \`${summary.fingerprints.evaluationProtocolSha256}\``)
   lines.push(`- seedSetSha256: \`${summary.fingerprints.seedSetSha256}\``)
   lines.push(`- matchesSha256: \`${summary.fingerprints.matchesSha256}\``)
   lines.push('')

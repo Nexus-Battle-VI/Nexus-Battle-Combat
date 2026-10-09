@@ -33,6 +33,7 @@ interface EvaluationDocument {
   readonly gateResults: readonly unknown[]
   readonly failureReasons: readonly string[]
   readonly previousActiveVersion: string | null
+  readonly previousActiveRevision: Int32 | null
   readonly promotionStatus: AiEvaluationPromotionStatus
   readonly promotionPolicyVersion: string | null
   readonly evaluationConfigVersion: string | null
@@ -40,6 +41,9 @@ interface EvaluationDocument {
   readonly seedSetSha256: string | null
   readonly matchesSha256: string | null
   readonly evaluationConfigSha256: string | null
+  readonly evaluationProtocolSha256: string | null
+  readonly candidateSummarySha256: string | null
+  readonly activeBaselineSummarySha256: string | null
   readonly consecutiveFailureCount: Int32
   readonly evaluatedAt: Date | null
   readonly rollbackHistory: readonly unknown[]
@@ -68,6 +72,7 @@ const toSnapshot = (document: EvaluationDocument): AiEvaluationLedgerSnapshot =>
   gateResults: document.gateResults,
   failureReasons: document.failureReasons,
   previousActiveVersion: document.previousActiveVersion,
+  previousActiveRevision: document.previousActiveRevision?.valueOf() ?? null,
   promotionStatus: document.promotionStatus,
   promotionPolicyVersion: document.promotionPolicyVersion,
   evaluationConfigVersion: document.evaluationConfigVersion,
@@ -75,6 +80,9 @@ const toSnapshot = (document: EvaluationDocument): AiEvaluationLedgerSnapshot =>
   seedSetSha256: document.seedSetSha256,
   matchesSha256: document.matchesSha256,
   evaluationConfigSha256: document.evaluationConfigSha256,
+  evaluationProtocolSha256: document.evaluationProtocolSha256,
+  candidateSummarySha256: document.candidateSummarySha256,
+  activeBaselineSummarySha256: document.activeBaselineSummarySha256,
   consecutiveFailureCount: document.consecutiveFailureCount.valueOf(),
   evaluatedAt: document.evaluatedAt,
   rollbackHistory: document.rollbackHistory,
@@ -127,6 +135,7 @@ export class MongoAiEvaluationCoordinatorRepository implements AiEvaluationCoord
         gateResults: [],
         failureReasons: [],
         previousActiveVersion: null,
+        previousActiveRevision: null,
         promotionStatus: 'NOT_APPLICABLE',
         promotionPolicyVersion: null,
         evaluationConfigVersion: null,
@@ -134,6 +143,9 @@ export class MongoAiEvaluationCoordinatorRepository implements AiEvaluationCoord
         seedSetSha256: null,
         matchesSha256: null,
         evaluationConfigSha256: null,
+        evaluationProtocolSha256: null,
+        candidateSummarySha256: null,
+        activeBaselineSummarySha256: null,
         consecutiveFailureCount: new Int32(0),
         evaluatedAt: null,
         rollbackHistory: [],
@@ -221,13 +233,14 @@ export class MongoAiEvaluationCoordinatorRepository implements AiEvaluationCoord
   async recordDecision(params: AiEvaluationDecisionParams): Promise<boolean> {
     const result = await this.evaluations.updateOne(this.ownedByFilter(params.claim), {
       $set: {
-        ...releasedLeaseFields,
         status: 'DECIDED',
         evaluationId: params.evaluationId,
         evaluationOutcome: params.evaluationOutcome,
         gateResults: params.gateResults,
         failureReasons: params.failureReasons,
         previousActiveVersion: params.previousActiveVersion,
+        previousActiveRevision:
+          params.previousActiveRevision === null ? null : new Int32(params.previousActiveRevision),
         promotionStatus: params.evaluationOutcome === 'PASS' ? 'NOT_STARTED' : 'NOT_APPLICABLE',
         promotionPolicyVersion: params.promotionPolicyVersion,
         evaluationConfigVersion: params.evaluationConfigVersion,
@@ -235,6 +248,9 @@ export class MongoAiEvaluationCoordinatorRepository implements AiEvaluationCoord
         seedSetSha256: params.seedSetSha256,
         matchesSha256: params.matchesSha256,
         evaluationConfigSha256: params.evaluationConfigSha256,
+        evaluationProtocolSha256: params.evaluationProtocolSha256,
+        candidateSummarySha256: params.candidateSummarySha256,
+        activeBaselineSummarySha256: params.activeBaselineSummarySha256,
         consecutiveFailureCount: new Int32(0),
         evaluatedAt: params.at,
         updatedAt: params.at,
@@ -260,14 +276,14 @@ export class MongoAiEvaluationCoordinatorRepository implements AiEvaluationCoord
   }
 
   async markPromotionStatus(
-    modelVersion: string,
+    claim: AiEvaluationLeaseClaim,
     promotionStatus: AiEvaluationPromotionStatus,
     at: Date,
-  ): Promise<void> {
-    await this.evaluations.updateOne(
-      { _id: modelVersion },
-      { $set: { promotionStatus, updatedAt: at } },
-    )
+  ): Promise<boolean> {
+    const result = await this.evaluations.updateOne(this.ownedByFilter(claim), {
+      $set: { promotionStatus, updatedAt: at },
+    })
+    return result.matchedCount === 1
   }
 
   async appendRollbackEvent(

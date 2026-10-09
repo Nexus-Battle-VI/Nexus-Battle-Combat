@@ -396,4 +396,34 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       state: 'EVALUATING',
     })
   })
+
+  it('rechaza promocion si el ACTIVE cambio despues de evaluar el baseline', async () => {
+    const registry = newRegistry()
+    for (const modelVersion of ['m-old', 'm-winner', 'm-stale']) {
+      await registry.startTraining(trainingLineage(modelVersion))
+      await registry.registerCandidate({
+        modelVersion,
+        manifest: manifest(),
+        manifestBytes,
+        onnxBytes,
+        metricsBytes,
+        parityReferenceBytes,
+      })
+      await registry.beginEvaluation(modelVersion)
+    }
+
+    const old = await registry.promoteEvaluatedCandidate('m-old')
+    await registry.promoteEvaluatedCandidate('m-winner', {
+      modelVersion: old.modelVersion,
+      revision: old.revision,
+    })
+
+    await expect(
+      registry.promoteEvaluatedCandidate('m-stale', {
+        modelVersion: old.modelVersion,
+        revision: old.revision,
+      }),
+    ).rejects.toBeInstanceOf(ActiveModelConflictError)
+    await expect(registry.findActive()).resolves.toMatchObject({ modelVersion: 'm-winner' })
+  })
 })
