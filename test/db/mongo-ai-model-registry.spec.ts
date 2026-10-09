@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb'
@@ -44,6 +45,25 @@ const realManifest = parseAndValidateModelTrainingManifest(
 const realTrainingSeed = realManifest.trainingConfig.trainingSeed as number
 
 /**
+ * El fixture real de `#567` NO incluye `model.pt` (#570 solo conserva
+ * `model.onnx`/`metrics.json`/`training-manifest.json` como fixtures,
+ * ver `test/fixtures/ai-model-registry/`) -- sin el checkpoint original
+ * no se puede regenerar una `pytorch-parity-reference.json` REAL con
+ * `nexus-combat-parity-reference` (#569) para este fixture concreto. Esta
+ * prueba cubre invariantes de PERSISTENCIA Mongo (hash real, content-
+ * addressed, conflicto, idempotencia), no la matematica de paridad de
+ * #569 (eso vive en su propia suite) -- unos bytes claramente sinteticos
+ * bastan, igual criterio que `metricsBytes`/`manifestBytes` fake de
+ * `test/unit/ai-model-registry.spec.ts`.
+ */
+const realParityReferenceBytes = Buffer.from(
+  JSON.stringify({ synthetic: 'pytorch-parity-reference-for-mongo-real-test' }),
+)
+const realParityReferenceSha256 = createHash('sha256')
+  .update(realParityReferenceBytes)
+  .digest('hex')
+
+/**
  * El fixture real de `#567` trae `artifactPurpose=SMOKE_TEST` (es honesto:
  * un dataset sintetico de CI, #570 §117-119) -- desde la revision de
  * codigo de este PR, `registerCandidate` exige CANDIDATE, asi que CADA
@@ -56,6 +76,7 @@ const candidateManifest = (
 ): CandidateArtifactManifest => ({
   ...realManifest,
   artifactPurpose: 'CANDIDATE',
+  parityReferenceSha256: realParityReferenceSha256,
   ...overrides,
 })
 
@@ -123,26 +144,56 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
     ])
   })
 
-  it('creates the expected indexes on ai-model-versions, including the partial unique ACTIVE index', async () => {
+  it('uses the single CAS reference as ACTIVE authority and keeps lifecycle indexes non-authoritative', async () => {
     const indexes = await db!.collection(AI_MODEL_VERSIONS_COLLECTION).indexes()
     const names = indexes.map((index) => index.name)
 
     expect(names).toEqual(
-      expect.arrayContaining([
-        '_id_',
-        'training_run_id_unique',
-        'model_state_sha256',
-        'active_unique',
-      ]),
+      expect.arrayContaining(['_id_', 'training_run_id_unique', 'model_state_sha256']),
     )
-    expect(indexes.find((index) => index.name === 'active_unique')).toMatchObject({
-      unique: true,
-      key: { state: 1 },
-      partialFilterExpression: { state: 'ACTIVE' },
-    })
+    expect(indexes.find((index) => index.name === 'active_unique')).toBeUndefined()
+    await expect(
+      db!.listCollections({ name: 'ai-model-active-reference' }).toArray(),
+    ).resolves.toHaveLength(1)
     expect(indexes.find((index) => index.name === 'training_run_id_unique')).toMatchObject({
       unique: true,
     })
+  })
+
+  it('ACTIVE reference CAS accepts only the exact version/revision/generation expected', async () => {
+    const repository = new MongoAiModelRegistryRepository(db!)
+    expect(await repository.getActiveReference()).toBeNull()
+
+    const first = await repository.compareAndSwapActiveReference(
+      null,
+      { modelVersion: 'cas-a', modelRevision: 3 },
+      AT,
+    )
+    expect(first).toEqual({ modelVersion: 'cas-a', modelRevision: 3, generation: 1 })
+
+    await expect(
+      repository.compareAndSwapActiveReference(
+        null,
+        { modelVersion: 'cas-duplicate', modelRevision: 1 },
+        AT,
+      ),
+    ).resolves.toBeNull()
+
+    const second = await repository.compareAndSwapActiveReference(
+      first,
+      { modelVersion: 'cas-b', modelRevision: 7 },
+      AT,
+    )
+    expect(second).toEqual({ modelVersion: 'cas-b', modelRevision: 7, generation: 2 })
+
+    await expect(
+      repository.compareAndSwapActiveReference(
+        first,
+        { modelVersion: 'cas-stale', modelRevision: 9 },
+        AT,
+      ),
+    ).resolves.toBeNull()
+    await db!.collection('ai-model-active-reference').deleteMany({})
   })
 
   it('creates the ai-model-artifacts collection', async () => {
@@ -160,6 +211,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
       manifestBytes: realManifestBytes,
       onnxBytes: realOnnxBytes,
       metricsBytes: realMetricsBytes,
+      parityReferenceBytes: realParityReferenceBytes,
     })
 
     expect(candidate.state).toBe('CANDIDATE')
@@ -185,6 +237,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: corrupted,
         metricsBytes: realMetricsBytes,
+        parityReferenceBytes: realParityReferenceBytes,
       }),
     ).rejects.toThrow()
 
@@ -204,6 +257,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: corrupted,
+        parityReferenceBytes: realParityReferenceBytes,
       }),
     ).rejects.toThrow()
 
@@ -232,6 +286,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: realMetricsBytes,
+        parityReferenceBytes: realParityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ArtifactPurposeNotCandidateError)
 
@@ -250,6 +305,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: realMetricsBytes,
+        parityReferenceBytes: realParityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ModelTrainingLineageMismatchError)
 
@@ -277,6 +333,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: realMetricsBytes,
+        parityReferenceBytes: realParityReferenceBytes,
       })
       await registry.beginEvaluation(modelVersion)
     }
@@ -305,6 +362,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
       manifestBytes: realManifestBytes,
       onnxBytes: realOnnxBytes,
       metricsBytes: realMetricsBytes,
+      parityReferenceBytes: realParityReferenceBytes,
     })
     await firstProcessRegistry.beginEvaluation('restart-check')
 
@@ -360,6 +418,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
       manifestBytes: realManifestBytes,
       onnxBytes: realOnnxBytes,
       metricsBytes: realMetricsBytes,
+      parityReferenceBytes: realParityReferenceBytes,
     })
 
     const fromWriterA = candidate.beginEvaluation(AT)

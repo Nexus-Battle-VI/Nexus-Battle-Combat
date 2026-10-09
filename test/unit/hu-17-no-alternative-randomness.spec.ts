@@ -116,7 +116,10 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
     // `infrastructure/training/ContinuousTrainingPipeline.ts` (EN-037.2,
     // #571 §6.1) deriva un `ownerId` unico de lease con `randomBytes` --
     // identificador tecnico de propietario de un worker standalone, nunca
-    // una fuente de aleatoriedad del motor ni una decision de juego.
+    // una fuente de aleatoriedad del motor ni una decision de juego;
+    // `automatic-evaluation-worker.ts` (#572) usa `randomUUID` con la misma
+    // finalidad exclusiva de ownership, y el E2E de #572 usa SHA-256 para
+    // comprobar integridad de la referencia de paridad temporal.
     expect(users).toEqual([
       'adapters/outbound/http/inventory-grant-operation-id.ts',
       'adapters/outbound/identity/internal-signature.ts',
@@ -130,6 +133,8 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
       'evaluation/canonical/CanonicalJson.ts',
       'evaluation/experiment/EvaluationSeedSchedule.ts',
       'infrastructure/ai/NeuralModelArtifactLoader.ts',
+      'infrastructure/evaluation/automatic-evaluation-worker.ts',
+      'infrastructure/evaluation/verify-automatic-model-promotion-e2e.ts',
       'infrastructure/training/ContinuousTrainingPipeline.ts',
     ])
   })

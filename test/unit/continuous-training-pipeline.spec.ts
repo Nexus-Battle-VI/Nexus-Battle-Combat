@@ -161,6 +161,7 @@ interface FakePythonFixture {
   readonly trainingManifest: Record<string, unknown>
   readonly failDatasetBuild?: boolean
   readonly failTraining?: boolean
+  readonly failParityReference?: boolean
   readonly onTrainingStart?: () => void
   readonly onDatasetBuildArgs?: (args: readonly string[]) => void
 }
@@ -213,6 +214,18 @@ const createFakePythonRunner = (fixture: FakePythonFixture): ChildProcessRunner 
           join(runDir, 'training-manifest.json'),
           JSON.stringify(fixture.trainingManifest),
         )
+        return { exitCode: 0, stdout: '', stderr: '' }
+      })()
+      return { result: promise, cancel: () => undefined }
+    }
+
+    if (args.includes('nexus-combat-parity-reference')) {
+      const promise = (async (): Promise<ChildProcessResult> => {
+        if (fixture.failParityReference === true) {
+          return { exitCode: 1, stdout: '', stderr: 'error: fake parity reference failure' }
+        }
+        const outputPath = argAfter(args, '--output')
+        await writeFile(outputPath, JSON.stringify({ fake: 'pytorch-parity-reference' }))
         return { exitCode: 0, stdout: '', stderr: '' }
       })()
       return { result: promise, cancel: () => undefined }
@@ -366,11 +379,38 @@ describe('runContinuousTrainingIteration (EN-037.2, Management #571)', () => {
 
     const registered = await deps.registry.findByVersion(IDENTITY.runId)
     expect(registered?.state).toBe('CANDIDATE')
+    // EN-037.3 (#572 §6): la referencia de paridad PyTorch debe quedar
+    // ligada al candidato ANTES de que el work dir se borre -- sin ella
+    // el gate de paridad de #572 no tendria nada que comparar.
+    expect(registered?.artifactLineage?.parityReferenceSha256).toMatch(/^[0-9a-f]{64}$/)
 
     const snapshot = await deps.coordinator.getSnapshot()
     expect(snapshot.leaseState).toBe('IDLE')
     expect(snapshot.lastRunOutcome).toBe('SUCCESS')
     expect(snapshot.lastRunModelVersion).toBe(IDENTITY.runId)
+  })
+
+  it('revision de codigo (EN-037.3, #572 §6): a failed nexus-combat-parity-reference surfaces as ARTIFACT_INVALID, never registers a candidate without parity evidence', async () => {
+    const battleRoom = finishedRoomAt(new Date('2026-12-01T00:00:00.000Z'))
+    const runner = createFakePythonRunner({
+      datasetManifest: DATASET_MANIFEST_TRAINABLE,
+      identity: IDENTITY,
+      trainingManifest: trainingManifestFor(IDENTITY),
+      failParityReference: true,
+    })
+    const deps = newDeps(new FakeBattleRoomRepository([battleRoom]), runner)
+
+    const { outcome } = await runContinuousTrainingIteration(
+      deps,
+      baseConfig(workRootDir),
+      new Date(0),
+    )
+
+    expect(outcome.kind).toBe('FAILED')
+    if (outcome.kind === 'FAILED') expect(outcome.reasonCode).toBe('ARTIFACT_INVALID')
+
+    const registered = await deps.registry.findByVersion(IDENTITY.runId)
+    expect(registered?.state).toBe('TRAINING')
   })
 
   it('revision de codigo (#571 §4/§7.3): the dataset cutoff is finishedAt + gracePeriodMs, not the raw battle finishedAt', async () => {

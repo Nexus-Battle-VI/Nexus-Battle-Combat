@@ -40,6 +40,7 @@ const candidateArtifactLineage: AiModelArtifactLineage = {
   onnxArtifactSha256: hex('5'),
   pytorchArtifactSha256: hex('6'),
   metricsFileSha256: hex('7'),
+  parityReferenceSha256: hex('9'),
   artifactPurpose: 'CANDIDATE',
   trainingManifestSha256: hex('8'),
   trainingConfig: { trainingSeed: 7 },
@@ -86,6 +87,30 @@ describe('AiModelVersion (EN-037.1, Management #570 §9-19, §49-58)', () => {
 
     expect(active.state).toBe(AiModelState.Active)
     expect(active.revision).toBe(3)
+  })
+
+  it('restaura un ACTIVE historico de #570 sin fabricar parityReferenceSha256', () => {
+    const current = AiModelVersion.startTraining(trainingLineage, AT)
+      .registerCandidate(candidateArtifactLineage, AT)
+      .beginEvaluation(AT)
+      .activate(LATER)
+    const legacy = AiModelVersion.restore({
+      ...current.toProps(),
+      artifactLineage: { ...candidateArtifactLineage, parityReferenceSha256: null },
+    })
+
+    expect(legacy.artifactLineage?.parityReferenceSha256).toBeNull()
+    expect(legacy.supersede(LATER).state).toBe(AiModelState.Superseded)
+  })
+
+  it('un candidato NUEVO sin parityReferenceSha256 se rechaza', () => {
+    const training = AiModelVersion.startTraining(trainingLineage, AT)
+    expect(() =>
+      training.registerCandidate(
+        { ...candidateArtifactLineage, parityReferenceSha256: null },
+        LATER,
+      ),
+    ).toThrow('parityReferenceSha256')
   })
 
   it('MR-05: EVALUATING -> REJECTED guarda reasonCode/reason/rejectedAt', () => {

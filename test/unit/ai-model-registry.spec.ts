@@ -6,6 +6,7 @@ import {
 } from '../../src/application/services/AiModelRegistry'
 import type { ClockPort } from '../../src/application/ports/ClockPort'
 import type { AiModelTrainingLineage } from '../../src/domain/entities/AiModelVersion'
+import type { AiModelVersion } from '../../src/domain/entities/AiModelVersion'
 import {
   ActiveModelConflictError,
   ArtifactConflictError,
@@ -26,8 +27,10 @@ const hex = (digit: string): string => digit.repeat(64)
 const onnxBytes = Buffer.from('fake-onnx-bytes-for-ai-model-registry-unit-test')
 const metricsBytes = Buffer.from('{"winRate":null}')
 const manifestBytes = Buffer.from('{"fake":"manifest-bytes-for-unit-test"}')
+const parityReferenceBytes = Buffer.from('{"fake":"pytorch-parity-reference-for-unit-test"}')
 const onnxArtifactSha256 = createHash('sha256').update(onnxBytes).digest('hex')
 const metricsFileSha256 = createHash('sha256').update(metricsBytes).digest('hex')
+const parityReferenceSha256 = createHash('sha256').update(parityReferenceBytes).digest('hex')
 
 /** Fuente UNICA para training lineage + manifest, para que nunca diverjan por accidente entre tests. */
 const FIXED_TRAINING_FIELDS = {
@@ -71,6 +74,7 @@ const manifest = (
   onnxArtifactSha256,
   pytorchArtifactSha256: hex('6'),
   metricsFileSha256,
+  parityReferenceSha256,
   artifactPurpose: 'CANDIDATE',
   ...overrides,
 })
@@ -93,6 +97,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       manifestBytes,
       onnxBytes,
       metricsBytes,
+      parityReferenceBytes,
     })
 
     expect(candidate.state).toBe('CANDIDATE')
@@ -114,6 +119,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
         manifestBytes,
         onnxBytes,
         metricsBytes,
+        parityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ModelArtifactHashMismatchError)
   })
@@ -129,6 +135,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
         manifestBytes,
         onnxBytes,
         metricsBytes,
+        parityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ModelArtifactHashMismatchError)
   })
@@ -144,6 +151,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
         manifestBytes,
         onnxBytes,
         metricsBytes,
+        parityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ArtifactPurposeNotCandidateError)
 
@@ -162,6 +170,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
         manifestBytes,
         onnxBytes,
         metricsBytes,
+        parityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ModelTrainingLineageMismatchError)
   })
@@ -177,6 +186,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
         manifestBytes,
         onnxBytes,
         metricsBytes,
+        parityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ModelTrainingLineageMismatchError)
   })
@@ -190,6 +200,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       manifestBytes,
       onnxBytes,
       metricsBytes,
+      parityReferenceBytes,
     })
     await registry.beginEvaluation('m-5')
     const active = await registry.activate('m-5')
@@ -212,6 +223,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       manifestBytes,
       onnxBytes,
       metricsBytes,
+      parityReferenceBytes,
     })
     await registry.beginEvaluation('m-6')
 
@@ -238,6 +250,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
         manifestBytes,
         onnxBytes,
         metricsBytes,
+        parityReferenceBytes,
       })
       await registry.beginEvaluation(modelVersion)
     }
@@ -257,6 +270,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       manifestBytes,
       onnxBytes,
       metricsBytes,
+      parityReferenceBytes,
     })
     await expect(
       registry.registerCandidate({
@@ -265,6 +279,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
         manifestBytes,
         onnxBytes,
         metricsBytes,
+        parityReferenceBytes,
       }),
     ).resolves.toBeDefined()
   })
@@ -290,6 +305,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
         manifestBytes,
         onnxBytes,
         metricsBytes,
+        parityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ArtifactConflictError)
   })
@@ -308,6 +324,7 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
       manifestBytes,
       onnxBytes,
       metricsBytes,
+      parityReferenceBytes,
     })
     expect(candidate.revision).toBe(1)
 
@@ -328,5 +345,85 @@ describe('AiModelRegistry (EN-037.1, Management #570 §48, §53-58)', () => {
     await expect(registry.beginEvaluation('never-existed')).rejects.toBeInstanceOf(
       ModelVersionConflictError,
     )
+  })
+
+  it('PR-10: a controlled promotion failure restores the previous ACTIVE', async () => {
+    class FailCandidateActivationRepository extends InMemoryAiModelRegistryRepository {
+      private failed = false
+
+      override replaceWithExpectedRevision(
+        version: AiModelVersion,
+        expectedRevision: number,
+      ): Promise<void> {
+        if (!this.failed && version.modelVersion === 'm-new' && version.state === 'ACTIVE') {
+          this.failed = true
+          return Promise.reject(new Error('simulated candidate activation failure'))
+        }
+        return super.replaceWithExpectedRevision(version, expectedRevision)
+      }
+    }
+
+    const repository = new FailCandidateActivationRepository()
+    const registry = new AiModelRegistry(
+      repository,
+      new InMemoryAiModelArtifactRepository(),
+      fixedClock(),
+    )
+
+    for (const modelVersion of ['m-old', 'm-new']) {
+      await registry.startTraining(trainingLineage(modelVersion))
+      await registry.registerCandidate({
+        modelVersion,
+        manifest: manifest(),
+        manifestBytes,
+        onnxBytes,
+        metricsBytes,
+        parityReferenceBytes,
+      })
+      await registry.beginEvaluation(modelVersion)
+    }
+
+    await registry.promoteEvaluatedCandidate('m-old')
+    await expect(registry.promoteEvaluatedCandidate('m-new')).rejects.toThrow(
+      'simulated candidate activation failure',
+    )
+
+    await expect(registry.findActive()).resolves.toMatchObject({
+      modelVersion: 'm-old',
+      state: 'ACTIVE',
+    })
+    await expect(registry.findByVersion('m-new')).resolves.toMatchObject({
+      state: 'EVALUATING',
+    })
+  })
+
+  it('rechaza promocion si el ACTIVE cambio despues de evaluar el baseline', async () => {
+    const registry = newRegistry()
+    for (const modelVersion of ['m-old', 'm-winner', 'm-stale']) {
+      await registry.startTraining(trainingLineage(modelVersion))
+      await registry.registerCandidate({
+        modelVersion,
+        manifest: manifest(),
+        manifestBytes,
+        onnxBytes,
+        metricsBytes,
+        parityReferenceBytes,
+      })
+      await registry.beginEvaluation(modelVersion)
+    }
+
+    const old = await registry.promoteEvaluatedCandidate('m-old')
+    await registry.promoteEvaluatedCandidate('m-winner', {
+      modelVersion: old.modelVersion,
+      revision: old.revision,
+    })
+
+    await expect(
+      registry.promoteEvaluatedCandidate('m-stale', {
+        modelVersion: old.modelVersion,
+        revision: old.revision,
+      }),
+    ).rejects.toBeInstanceOf(ActiveModelConflictError)
+    await expect(registry.findActive()).resolves.toMatchObject({ modelVersion: 'm-winner' })
   })
 })

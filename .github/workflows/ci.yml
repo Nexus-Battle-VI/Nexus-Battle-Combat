@@ -217,6 +217,32 @@ jobs:
           path: ${{ env.run_dir }}
           retention-days: 7
 
+      # EN-037.3 (#572): fixture de INGENIERIA aislado para probar el flujo
+      # CANDIDATE -> evaluacion real -> PASS/FAIL -> ACTIVE/REJECTED. Usa el
+      # dataset sintetico de CI y por eso NUNCA se publica ni cuenta como
+      # evidencia competitiva; solo vive como artifact efimero de este run.
+      - name: 'E2E EN-037.3: entrenar CANDIDATE sintetico aislado'
+        working-directory: ai
+        run: |
+          uv run nexus-combat-train \
+            --dataset-dir /tmp/ai-training-dataset-ci \
+            --output /tmp/ai-en037-candidate-artifacts-ci \
+            --source-commit "${{ github.sha }}-synthetic-en037-e2e" \
+            --seed 43 \
+            --artifact-purpose CANDIDATE
+          candidate_run_dir="$(find /tmp/ai-en037-candidate-artifacts-ci -mindepth 1 -maxdepth 1 -type d)"
+          echo "candidate_run_dir=${candidate_run_dir}" >> "$GITHUB_ENV"
+          uv run nexus-combat-parity-reference \
+            --artifact-dir "${candidate_run_dir}" \
+            --output "${candidate_run_dir}/pytorch-parity-reference.json"
+
+      - name: Publicar CANDIDATE sintetico aislado para E2E EN-037.3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-mlp-v1-en037-e2e
+          path: ${{ env.candidate_run_dir }}
+          retention-days: 1
+
   ai-evaluation-smoke:
     name: Evaluacion de politicas de IA (smoke)
     runs-on: ubuntu-latest
@@ -252,6 +278,12 @@ jobs:
           name: candidate-mlp-v1-smoke
           path: /tmp/neural-smoke-artifact
 
+      - name: Descargar el CANDIDATE aislado para E2E EN-037.3
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: candidate-mlp-v1-en037-e2e
+          path: /tmp/neural-candidate-e2e-artifact
+
       # Paridad PyTorch<->ONNX + escenarios + los 6 matchups + reportes,
       # con una muestra pequena -- el harness entero, no un subconjunto
       # de su logica (#569 §118).
@@ -285,6 +317,11 @@ jobs:
           hash_b="$(node -p "require('/tmp/evaluation-out-smoke-b/summary.json').fingerprints.matchesSha256")"
           echo "matchesSha256 A=${hash_a} B=${hash_b}"
           [ "$hash_a" = "$hash_b" ]
+
+      - name: E2E EN-037.3 (registry, harness real, gates y activacion/rechazo)
+        env:
+          AI_EN037_E2E_ARTIFACT_DIR: /tmp/neural-candidate-e2e-artifact
+        run: npm run test:e2e:en-037
 
       - name: Publicar reporte de evaluacion (smoke)
         if: always()

@@ -109,6 +109,10 @@ import { MongoExperienceRollRepository } from '../../adapters/outbound/persisten
 import { MongoMissionSimulationIntakeRepository } from '../../adapters/outbound/persistence/MongoMissionSimulationIntakeRepository'
 import { MongoCombatDecisionTelemetryRepository } from '../../adapters/outbound/persistence/MongoCombatDecisionTelemetryRepository'
 import { MongoMctsTeacherLabelRepository } from '../../adapters/outbound/persistence/MongoMctsTeacherLabelRepository'
+import { InMemoryAiModelRegistryRepository } from '../../adapters/outbound/persistence/InMemoryAiModelRegistryRepository'
+import { MongoAiModelRegistryRepository } from '../../adapters/outbound/persistence/MongoAiModelRegistryRepository'
+import { InMemoryAiModelArtifactRepository } from '../../adapters/outbound/persistence/InMemoryAiModelArtifactRepository'
+import { MongoAiModelArtifactRepository } from '../../adapters/outbound/persistence/MongoAiModelArtifactRepository'
 import { InMemoryRealtimeTicketStore } from '../../adapters/outbound/realtime/InMemoryRealtimeTicketStore'
 import { CryptoRealtimeTicketCodec } from '../../adapters/outbound/system/CryptoRealtimeTicketCodec'
 import { CdfUniformIndexMapper } from '../../adapters/outbound/system/CdfUniformIndexMapper'
@@ -196,6 +200,14 @@ import {
   MCTS_TEACHER_LABEL_REPOSITORY,
   type MctsTeacherLabelRepositoryPort,
 } from '../../application/ports/MctsTeacherLabelRepositoryPort'
+import {
+  AI_MODEL_REGISTRY_REPOSITORY,
+  type AiModelRegistryRepositoryPort,
+} from '../../application/ports/AiModelRegistryRepositoryPort'
+import {
+  AI_MODEL_ARTIFACT_REPOSITORY,
+  type AiModelArtifactRepositoryPort,
+} from '../../application/ports/AiModelArtifactRepositoryPort'
 import { WALLET_STAKE_PORT, type WalletStakePort } from '../../application/ports/WalletStakePort'
 import {
   RANDOM_SEQUENCE_FACTORY,
@@ -226,6 +238,7 @@ import { MctsSearch } from '../../application/services/MctsSearch'
 import { MctsTeacher } from '../../application/services/MctsTeacher'
 import { PersistVersusDropDecision } from '../../application/services/PersistVersusDropDecision'
 import { BotParticipantFactory } from '../../application/services/BotParticipantFactory'
+import { AiModelRegistry } from '../../application/services/AiModelRegistry'
 import { StakeReleaser } from '../../application/services/StakeReleaser'
 import { StakeReserver } from '../../application/services/StakeReserver'
 import { StakeSettler } from '../../application/services/StakeSettler'
@@ -249,6 +262,10 @@ import {
 } from '../../application/services/DecisionPolicySelector'
 import { ExecuteAiTurn, AiTurnTrigger } from '../../application/use-cases/ExecuteAiTurn'
 import { loadNeuralPrimaryPolicy } from '../ai/NeuralModelArtifactLoader'
+import {
+  ActiveModelProvider,
+  DEFAULT_ACTIVE_MODEL_PROVIDER_OPTIONS,
+} from '../ai/ActiveModelProvider'
 import { HmacMissionSeedFactory } from '../../adapters/outbound/system/HmacMissionSeedFactory'
 import { ProcessBattleDeadlines } from '../../application/use-cases/ProcessBattleDeadlines'
 import { ProcessRewardWorkflow } from '../../application/use-cases/ProcessRewardWorkflow'
@@ -565,6 +582,50 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           ? new InMemoryCombatDecisionTelemetryRepository()
           : new MongoCombatDecisionTelemetryRepository(db),
       inject: [DATABASE],
+    },
+    {
+      provide: AI_MODEL_REGISTRY_REPOSITORY,
+      useFactory: (db: Db | null): AiModelRegistryRepositoryPort =>
+        db === null
+          ? new InMemoryAiModelRegistryRepository()
+          : new MongoAiModelRegistryRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: AI_MODEL_ARTIFACT_REPOSITORY,
+      useFactory: (db: Db | null): AiModelArtifactRepositoryPort =>
+        db === null
+          ? new InMemoryAiModelArtifactRepository()
+          : new MongoAiModelArtifactRepository(db),
+      inject: [DATABASE],
+    },
+    {
+      provide: AiModelRegistry,
+      useFactory: (
+        versions: AiModelRegistryRepositoryPort,
+        artifacts: AiModelArtifactRepositoryPort,
+        clock: ClockPort,
+      ): AiModelRegistry => new AiModelRegistry(versions, artifacts, clock),
+      inject: [AI_MODEL_REGISTRY_REPOSITORY, AI_MODEL_ARTIFACT_REPOSITORY, CLOCK],
+    },
+    {
+      provide: ActiveModelProvider,
+      useFactory: (
+        registry: AiModelRegistry,
+        artifacts: AiModelArtifactRepositoryPort,
+        logger: Logger,
+        config: AppConfig,
+      ): ActiveModelProvider =>
+        new ActiveModelProvider(registry, artifacts, logger, {
+          ...DEFAULT_ACTIVE_MODEL_PROVIDER_OPTIONS,
+          enabled:
+            config.neuralPolicyEnabled && config.persistenceDriver === PersistenceDriver.Mongo,
+          autoStart:
+            config.neuralPolicyEnabled && config.persistenceDriver === PersistenceDriver.Mongo,
+          nodeEnv: config.nodeEnv,
+          inferenceTimeoutMs: config.neuralInferenceTimeoutMs,
+        }),
+      inject: [AiModelRegistry, AI_MODEL_ARTIFACT_REPOSITORY, LOGGER, APP_CONFIG],
     },
     {
       provide: CombatDecisionRecorder,
@@ -1648,28 +1709,36 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       ): EpicRealtimeHandler => new EpicRealtimeHandler(epic, logger, finalizer, aiTurnTrigger),
       inject: [USE_EPIC, LOGGER, BATTLE_FINALIZER, AI_TURN_TRIGGER],
     },
-    // HU-93.2 (Management#558) + EN-036.4 (#568): el fallback fijo SIEMPRE es
+    // HU-93.2 (Management#558) + EN-036.4 (#568) + EN-037.3 (#572): el fallback fijo SIEMPRE es
     // `RuleBasedPolicy` -- nunca `RandomPolicy` (ese es solo el baseline
     // experimental de EN-035.3 para Misiones/evaluacion, jamas el fallback
-    // productivo de JcE). La primaria es condicional: `null` por defecto
-    // (`NEURAL_POLICY_ENABLED=false`, el deploy actual sigue exactamente
-    // igual que antes de #568) o `NeuralPolicy` cuando esta habilitada Y el
-    // artefacto carga/valida/pasa el smoke real (`loadNeuralPrimaryPolicy`,
-    // fail-open: cualquier fallo de carga deja `primary: null` sin tirar el
-    // arranque). `DecisionPolicySelector` ya captura cualquier fallo de la
-    // primaria en cada decision y cae a `RuleBasedPolicy` -- esta clase no
-    // cambia.
+    // productivo de JcE). Con Mongo, `ActiveModelProvider` resuelve exclusivamente
+    // la version ACTIVE del registry y hace hot-reload. Con persistencia en memoria
+    // se conserva el loader por rutas de #568 como modo local/legado; nunca puede
+    // invalidar una promocion productiva. `DecisionPolicySelector` captura ausencia,
+    // timeout, fallo o accion ilegal de cualquiera de las dos primarias.
     {
       provide: DECISION_POLICY_SELECTOR,
-      useFactory: async (config: AppConfig, logger: Logger): Promise<DecisionPolicySelector> => {
-        const primary: DecisionPolicyBinding | null = await loadNeuralPrimaryPolicy(config, logger)
+      useFactory: async (
+        config: AppConfig,
+        logger: Logger,
+        activeModels: ActiveModelProvider,
+      ): Promise<DecisionPolicySelector> => {
+        let primary: DecisionPolicyBinding | null = null
+
+        if (config.neuralPolicyEnabled) {
+          primary =
+            config.persistenceDriver === PersistenceDriver.Mongo
+              ? { policy: activeModels, source: 'NEURAL' }
+              : await loadNeuralPrimaryPolicy(config, logger)
+        }
 
         return new DecisionPolicySelector(primary, {
           policy: new RuleBasedPolicy(),
           source: 'RULE_BASED',
         })
       },
-      inject: [APP_CONFIG, LOGGER],
+      inject: [APP_CONFIG, LOGGER, ActiveModelProvider],
     },
     {
       provide: EXECUTE_AI_TURN,

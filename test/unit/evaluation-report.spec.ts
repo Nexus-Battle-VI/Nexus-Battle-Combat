@@ -70,6 +70,38 @@ const match = (overrides: Partial<EvaluationMatchResultV1> = {}): EvaluationMatc
 })
 
 describe('EvaluationReport (EN-036.5, Management #569 §46-47, §58, §81, §176)', () => {
+  it('fingerprint comparable ignora rutas temporales pero conserva el hash completo para trazabilidad', () => {
+    const withArtifact = (root: string): EvaluationConfig => ({
+      ...config,
+      neuralArtifact: {
+        onnxPath: `${root}/model.onnx`,
+        manifestPath: `${root}/training-manifest.json`,
+        allowSmokeModel: false,
+        inferenceTimeoutMs: 2_000,
+      },
+    })
+    const first = buildEvaluationSummary({
+      evaluationId: 'first',
+      config: withArtifact('active-baseline'),
+      results: [match()],
+      model: null,
+      parity: null,
+    })
+    const second = buildEvaluationSummary({
+      evaluationId: 'second',
+      config: withArtifact('candidate'),
+      results: [match()],
+      model: null,
+      parity: null,
+    })
+    expect(first.fingerprints.evaluationProtocolSha256).toBe(
+      second.fingerprints.evaluationProtocolSha256,
+    )
+    expect(first.fingerprints.evaluationConfigSha256).not.toBe(
+      second.fingerprints.evaluationConfigSha256,
+    )
+  })
+
   it('RP-01/RP-02: los conteos de summary reconcilian con los resultados', () => {
     const results = [
       match(),

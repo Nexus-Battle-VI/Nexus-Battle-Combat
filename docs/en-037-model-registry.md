@@ -19,8 +19,10 @@ carrera, sin corrupcion silenciosa).
 - `#571` (futuro) produce candidatos: dataset + entrenamiento + ONNX.
 - `#569` (ya implementado) evalua candidatos: Random/RuleBased/MCTS/Neural
   con combates acelerados.
-- `#572` (futuro) decide automaticamente, con gates versionados sobre esa
-  evaluacion: `PASS -> activate()` / `FAIL -> reject()`.
+- `#572` (implementado después de este documento base) decide automaticamente,
+  con gates versionados sobre esa evaluacion: `PASS -> ACTIVE` /
+  `FAIL -> REJECTED`; ver
+  [`en-037-automatic-model-promotion.md`](en-037-automatic-model-promotion.md).
 - `#570` (este PR) hace esas dos ultimas llamadas SEGURAS y AUDITABLES. No
   implementa gates, no conoce `RandomPolicy`/`RuleBasedPolicy`/MCTS/win
   rate/`EvaluationScenario`, y no tiene ningun umbral de calidad
@@ -37,9 +39,10 @@ CANDIDATE -> REJECTED
 
 Union cerrada en [`AiModelState.ts`](../src/domain/value-objects/AiModelState.ts):
 `TRAINING | CANDIDATE | EVALUATING | ACTIVE | REJECTED`, nunca strings
-libres. `ACTIVE` y `REJECTED` son terminales: que ocurre con un `ACTIVE`
-anterior al promover uno nuevo (swap/demote/rollback) es semantica de
-`#572`, que este PR no inventa.
+libres en el alcance histórico de #570. #572 amplió posteriormente el grafo
+con `SUPERSEDED` para reemplazo y rollback seguro; `REJECTED` continúa terminal.
+La evolución y sus límites de consistencia están documentados en
+[`en-037-automatic-model-promotion.md`](en-037-automatic-model-promotion.md).
 
 Transiciones explicitamente **prohibidas** (nunca compiladas, nunca
 alcanzables): `TRAINING -> ACTIVE`, `CANDIDATE -> ACTIVE` directo (debe

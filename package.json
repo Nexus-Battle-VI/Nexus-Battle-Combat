@@ -27,12 +27,15 @@
     "migrate": "node dist/infrastructure/persistence/migrate.js",
     "validate:neural-artifact": "node dist/infrastructure/ai/validate-neural-artifact.js",
     "evaluate:ai": "node dist/infrastructure/evaluation/run-ai-evaluation.js",
+    "evaluate:automatic": "node dist/infrastructure/evaluation/automatic-evaluation-worker.js",
+    "model:rollback": "node dist/infrastructure/evaluation/rollback-ai-model.js",
     "train:continuous": "node dist/infrastructure/training/continuous-training-worker.js",
     "test:db": "jest --config jest.db.config.ts --coverage",
     "test:perf": "jest --config jest.perf.config.ts",
     "test:e2e:hu-29": "jest --config jest.e2e-hu29.config.ts",
     "test:e2e:hu-30": "jest --config jest.e2e-hu30.config.ts",
-    "test:e2e:hu-31": "jest --config jest.e2e-hu31.config.ts"
+    "test:e2e:hu-31": "jest --config jest.e2e-hu31.config.ts",
+    "test:e2e:en-037": "node dist/infrastructure/evaluation/verify-automatic-model-promotion-e2e.js"
   },
   "dependencies": {
     "@nestjs/common": "11.2.1",

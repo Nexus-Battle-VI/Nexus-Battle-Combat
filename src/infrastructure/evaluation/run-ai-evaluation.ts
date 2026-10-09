@@ -27,13 +27,18 @@ import {
   buildEvaluationSummary,
   buildEvaluationSummaryMarkdown,
   buildMatchesJsonl,
+  type EvaluationSummary,
 } from '../../evaluation/experiment/EvaluationReport'
 import {
   assertSameTrainingRun,
   loadParityReference,
   runParityValidation,
+  type ParityReportSummary,
 } from '../../evaluation/parity/OnnxPytorchParityValidator'
-import { canonicalJsonStringify } from '../../evaluation/canonical/CanonicalJson'
+import {
+  canonicalJsonSha256,
+  canonicalJsonStringify,
+} from '../../evaluation/canonical/CanonicalJson'
 import { describeError } from '../observability/describe-error'
 
 /** Reloj FIJO (#569 §197): la evaluacion nunca depende de `Date.now()` real -- ni para el
@@ -159,9 +164,37 @@ const resolveSourceCommit = (explicit: string | null): string => {
   }
 }
 
-const main = async (): Promise<void> => {
-  const args = parseArgs(process.argv.slice(2))
-  const sourceCommit = resolveSourceCommit(args.sourceCommit)
+export interface RunAiEvaluationParams {
+  readonly artifactDir: string
+  readonly output: string
+  readonly purpose: EvaluationPurpose
+  readonly seedStart: number
+  readonly seedCount: number
+  readonly mctsSeedCount: number
+  readonly maxPlies: number
+  readonly sourceCommit: string
+  readonly skipExpensiveMcts: boolean
+  readonly allowSmokeModel: boolean
+}
+
+export interface RunAiEvaluationResult {
+  readonly summary: EvaluationSummary
+  readonly parityReport: ParityReportSummary
+}
+
+/**
+ * Nucleo reutilizable del harness (EN-036.5, Management #569), extraido
+ * de `main()` para que EN-037.3 (#572, `AutomaticModelEvaluationCoordinator`)
+ * pueda invocar la MISMA logica directamente en proceso -- nunca
+ * reimplementada, nunca invocada como subproceso separado (a diferencia
+ * de Python en `#571`, este harness YA corre en el mismo runtime
+ * Node/TypeScript que el coordinador). `main()` (CLI) y el coordinador
+ * comparten esta unica funcion.
+ */
+export const runAiEvaluation = async (
+  args: RunAiEvaluationParams,
+): Promise<RunAiEvaluationResult> => {
+  const sourceCommit = args.sourceCommit
 
   const onnxPath = join(args.artifactDir, 'model.onnx')
   const manifestPath = join(args.artifactDir, 'training-manifest.json')
@@ -178,9 +211,10 @@ const main = async (): Promise<void> => {
     inferenceTimeoutMs: 2_000,
   })
 
-  // 2. Validar paridad PyTorch <-> ONNX ANTES de correr ninguna partida
-  // (#569 §174, §131: si falla, es un quality gate TECNICO, nunca un
-  // warning).
+  // 2. Validar paridad PyTorch <-> ONNX. Un resultado medido FAIL es
+  // evidencia definitiva del modelo y se conserva en el summary para que
+  // PromotionPolicyV1 lo rechace; solo una imposibilidad tecnica de medir
+  // (artefacto ilegible/runtime caido) lanza y se reintenta como infraestructura.
   process.stderr.write('Validando paridad PyTorch <-> ONNX...\n')
   const parityReference = await loadParityReference(parityReferencePath)
   assertSameTrainingRun(parityReference, neuralPolicy.modelDescriptor)
@@ -191,12 +225,6 @@ const main = async (): Promise<void> => {
     `paridad: passed=${String(parityReport.passed)} argmaxAgreement=${String(parityReport.argmaxAgreement)} ` +
       `maxAbsoluteError=${String(parityReport.maxAbsoluteError)}\n`,
   )
-
-  if (!parityReport.passed) {
-    throw new Error(
-      'La paridad PyTorch <-> ONNX fallo: no se ejecuta ninguna partida (#569 §131, §174).',
-    )
-  }
 
   // 3. Construir dependencias compartidas (#569 §147-150: Neural y MCTS
   // reutilizan UNA instancia stateless durante todo el run).
@@ -240,7 +268,10 @@ const main = async (): Promise<void> => {
     clock: FIXED_EVALUATION_CLOCK,
   }
 
-  const evaluationId = `eval-${sourceCommit.slice(0, 12)}-${args.purpose}-seed${String(args.seedStart)}x${String(args.seedCount)}`
+  const evaluationConfigSha256 = canonicalJsonSha256(config)
+  const evaluationId =
+    `eval-${sourceCommit.slice(0, 12)}-${neuralPolicy.modelDescriptor.modelStateSha256.slice(0, 12)}-` +
+    `${evaluationConfigSha256.slice(0, 12)}-${args.purpose}-seed${String(args.seedStart)}x${String(args.seedCount)}`
 
   process.stderr.write(`Ejecutando evaluacion ${evaluationId}...\n`)
   const results = await runPolicyComparisonHarness(
@@ -293,9 +324,19 @@ const main = async (): Promise<void> => {
   }
 
   process.stderr.write('evaluacion valida: 0 violaciones de invariante, 0 fallos del motor.\n')
+
+  return { summary, parityReport }
 }
 
-main().catch((error: unknown) => {
-  process.stderr.write(`ai_evaluation_invalid: ${describeError(error)}\n`)
-  process.exitCode = 1
-})
+const main = async (): Promise<void> => {
+  const args = parseArgs(process.argv.slice(2))
+  const sourceCommit = resolveSourceCommit(args.sourceCommit)
+  await runAiEvaluation({ ...args, sourceCommit })
+}
+
+if (require.main === module) {
+  main().catch((error: unknown) => {
+    process.stderr.write(`ai_evaluation_invalid: ${describeError(error)}\n`)
+    process.exitCode = 1
+  })
+}

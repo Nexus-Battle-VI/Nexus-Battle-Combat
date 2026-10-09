@@ -70,6 +70,18 @@ export interface AiModelArtifactLineage {
   readonly onnxArtifactSha256: string
   readonly pytorchArtifactSha256: string
   readonly metricsFileSha256: string
+  /**
+   * SHA-256 de `pytorch-parity-reference.json` (EN-037.3, Management #572
+   * §6): generado por la herramienta YA existente
+   * `nexus-combat-parity-reference` (`ai/src/nexus_combat_ai/cli/parity_reference.py`,
+   * EN-036.5 #569) a partir del `model.pt` real ANTES de que #571 borre el
+   * directorio de trabajo. Sin esto, el gate de paridad de #572 no tendria
+   * ninguna referencia PyTorch durable que comparar contra el ONNX -- el
+   * checkpoint completo nunca se persiste (solo su hash), por diseno de
+   * #571, asi que esta referencia es la UNICA evidencia de paridad que
+   * sobrevive al cleanup del work dir.
+   */
+  readonly parityReferenceSha256: string | null
   readonly artifactPurpose: AiModelArtifactPurpose
   /** SHA-256 del `training-manifest.json` completo (revision #570): prueba que la metadata registrada corresponde exactamente al manifest real. */
   readonly trainingManifestSha256: string
@@ -151,6 +163,10 @@ const assertArtifactLineage = (
   assertSha256Hex(lineage.onnxArtifactSha256, 'onnxArtifactSha256')
   assertSha256Hex(lineage.pytorchArtifactSha256, 'pytorchArtifactSha256')
   assertSha256Hex(lineage.metricsFileSha256, 'metricsFileSha256')
+  if (lineage.parityReferenceSha256 === null) {
+    throw new TypeError('"parityReferenceSha256" es obligatorio para candidatos nuevos.')
+  }
+  assertSha256Hex(lineage.parityReferenceSha256, 'parityReferenceSha256')
   assertSha256Hex(lineage.trainingManifestSha256, 'trainingManifestSha256')
   if (lineage.artifactPurpose !== 'CANDIDATE') {
     throw new ArtifactPurposeNotCandidateError(lineage.artifactPurpose)
@@ -201,8 +217,11 @@ const assertRestoredInvariants = (props: AiModelVersionProps): void => {
   if (props.artifactLineage !== null && props.artifactLineage.artifactPurpose !== 'CANDIDATE') {
     throw new CorruptAiModelVersionError('"artifactLineage.artifactPurpose" distinto de CANDIDATE.')
   }
-  if (props.state === AiModelState.Active && props.artifactLineage === null) {
-    throw new CorruptAiModelVersionError('"ACTIVE" exige artifact lineage.')
+  if (
+    (props.state === AiModelState.Active || props.state === AiModelState.Superseded) &&
+    props.artifactLineage === null
+  ) {
+    throw new CorruptAiModelVersionError('"ACTIVE"/"SUPERSEDED" exigen artifact lineage.')
   }
 
   if (props.state === AiModelState.Rejected) {
@@ -342,6 +361,20 @@ export class AiModelVersion {
       )
     }
     return this.transitionTo(AiModelState.Active, at)
+  }
+
+  /**
+   * `ACTIVE -> SUPERSEDED` (#572 EN-037.3 §8): libera el slot
+   * `active_unique` para que otra version pueda convertirse en ACTIVE.
+   * PRIMITIVA segura, igual que `activate()`/`reject()`: decidir CUANDO
+   * reemplazar el ACTIVE vigente (gates, promocion automatica) es
+   * responsabilidad de la capa de aplicacion de `#572`, nunca de esta
+   * clase. Una version `SUPERSEDED` sigue siendo un rollback valido
+   * (`activate()` ya permite `SUPERSEDED -> ACTIVE` via el grafo de
+   * transiciones) -- nunca se trata como un estado degradado o corrupto.
+   */
+  supersede(at: Date): AiModelVersion {
+    return this.transitionTo(AiModelState.Superseded, at)
   }
 
   /** Cualquier transicion permitida hacia `REJECTED` (#570 §13, §57-58). */

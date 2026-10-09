@@ -17,7 +17,9 @@ recuperable**, capaz de incorporar nuevas partidas mediante coalescing y
 producir versiones `CANDIDATE` (o fallos trazables) en el Model Registry de
 `#570`.
 
-**Lo que este PR NO hace** (alcance negativo explicito, Management #571 §15):
+**Lo que este PR históricamente NO hizo** (alcance negativo explicito,
+Management #571 §15; implementado después por #572, ver
+[`en-037-automatic-model-promotion.md`](en-037-automatic-model-promotion.md)):
 gates de evaluacion Neural-vs-Random/RuleBased, umbrales 60%/45% o
 cualquier otro, `promotionPolicyVersion`, auto-promocion a `ACTIVE`,
 rollback de modelos activos, hot reload del modelo productivo en runtime,
