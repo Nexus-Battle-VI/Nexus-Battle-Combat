@@ -33,6 +33,17 @@ const FINISHED_AT = new Date('2026-09-15T00:00:00.000Z')
 /** Un poco despues de `FINISHED_AT` + el periodo de gracia (1s) de esta prueba. */
 const NOW = new Date('2026-09-15T00:00:10.000Z')
 const fixedClock = { now: () => NOW }
+const GRACE_PERIOD_MS = 1_000
+/**
+ * `cutoff = min(requestedThrough + gracePeriodMs, startedAt)`
+ * (`ContinuousTrainingPipeline.ts::runContinuousTrainingIteration`): el
+ * cutoff -- y por tanto `processedThrough` tras `recordSuccess` -- NUNCA es
+ * el `finishedAt` crudo de la battle room, siempre se le suma el periodo de
+ * gracia configurado (revision de codigo EN-037.5, Management #574: esta
+ * asercion comparaba contra `FINISHED_AT` sin ese margen, un desajuste que
+ * nunca se detecto en CI porque este archivo se omite alli sin `uv`/Python).
+ */
+const EXPECTED_CUTOFF = new Date(FINISHED_AT.getTime() + GRACE_PERIOD_MS)
 
 const readJsonlDocuments = async (path: string): Promise<readonly Record<string, unknown>[]> => {
   const raw = await readFile(path, 'utf8')
@@ -151,7 +162,7 @@ const isUvAvailable = (): boolean => {
         datasetSeed: 42,
         trainingSeed: 7,
         sourceCommit: 'continuous-training-e2e-test',
-        gracePeriodMs: 1_000,
+        gracePeriodMs: GRACE_PERIOD_MS,
         leaseDurationMs: 5 * 60_000,
         heartbeatIntervalMs: 20_000,
         datasetBuildTimeoutMs: 90_000,
@@ -197,7 +208,7 @@ const isUvAvailable = (): boolean => {
       expect(snapshot.leaseState).toBe('IDLE')
       expect(snapshot.lastRunOutcome).toBe('SUCCESS')
       expect(snapshot.lastRunModelVersion).toBe(outcome.modelVersion)
-      expect(snapshot.processedThrough).toEqual(FINISHED_AT)
+      expect(snapshot.processedThrough).toEqual(EXPECTED_CUTOFF)
     }, 420_000)
   },
 )
