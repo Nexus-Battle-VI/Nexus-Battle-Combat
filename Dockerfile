@@ -108,6 +108,18 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
+# `UV_NO_SYNC=1` (revision de codigo, #573): `ContinuousTrainingPipeline.ts`
+# invoca Python como `uv run nexus-combat-train ...` (nunca `uv run --no-sync`
+# explicito), y `uv run` SINCRONIZA el entorno antes de ejecutar -- incluido
+# el grupo `dev` por defecto, aunque la imagen ya corrio `uv sync --frozen
+# --no-dev` en build. Confirmado localmente: sin esta variable, cada
+# `uv run` durante un entrenamiento real reinstala `pytest`/`ruff` (6
+# paquetes) en tiempo de ejecucion -- red y escritura en el venv que la
+# imagen productiva no deberia necesitar nunca, justo al empezar el
+# trabajo real. Con `UV_NO_SYNC=1`, `uv run` usa el entorno YA resuelto en
+# build, tal cual, sin reintentar sincronizarlo.
+ENV UV_NO_SYNC=1
+
 # Mismo `dist`/`node_modules` que `runtime` (#573 §6.2): el worker ES el
 # mismo codigo Node de Combat (`ContinuousTrainingPipeline.ts`,
 # `continuous-training-worker.ts`), solo con Python anadido al lado -- nunca

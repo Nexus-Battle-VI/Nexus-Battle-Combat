@@ -495,53 +495,53 @@ jobs:
           print('torch', torch.__version__, platform.machine())
           "
 
-      # TODO(revision humana, sin acceso a red desde este entorno): fijar
-      # `docker/setup-qemu-action` a un commit SHA verificado (mismo
-      # criterio que las demas acciones de este workflow) antes de hacer
-      # merge -- no se pudo resolver el SHA real sin acceso a GitHub.
+      # ARM64 real (#573 §5.1, §14.3): Graviton es linux/arm64. Este
+      # repositorio restringe las Actions permitidas a una lista explicita
+      # (`actions/*`, `docker/setup-buildx-action@*`, `docker/build-push-action@*`
+      # -- `repos/.../actions/permissions/selected-actions`), que NO incluye
+      # `docker/setup-qemu-action`. Sin ese registro de binfmt_misc en el
+      # runner, `docker run --platform linux/arm64 <imagen>` (ejecutar de
+      # verdad un binario arm64) no es viable desde este workflow -- por
+      # eso esta verificacion se limita a CONSTRUIR para `linux/arm64`
+      # (que `buildx`/BuildKit YA resuelve sin `setup-qemu-action`, igual
+      # que el job `publish` de abajo construye `linux/amd64,linux/arm64`
+      # sin esa accion desde antes de esta Task) -- nunca a ejecutar el
+      # binario resultante.
       #
-      # ARM64 real (#573 §5.1, §14.3): Graviton es linux/arm64. El paso
-      # anterior corre en el runner amd64 de GitHub Actions; este paso
-      # ademas verifica, bajo emulacion QEMU (nunca hardware Graviton real
-      # -- ver docs/evidence/ para la distincion exacta), que el binario
-      # nativo de PyTorch resuelto para `manylinux_2_28_aarch64` carga y
-      # ejecuta de verdad, no solo que `uv.lock` declara un wheel.
-      - name: Configurar QEMU (verificacion ARM64)
-        uses: docker/setup-qemu-action@v3.6.0
-        with:
-          platforms: arm64
-
-      - name: Construir imagen del trainer para ARM64 (emulado)
+      # La verificacion de EJECUCION real (import de torch + forward pass,
+      # `onnxruntime-node` cargando su binding nativo) bajo `linux/arm64`
+      # SI se hizo, pero localmente (Docker Desktop con QEMU), no en este
+      # CI -- ver `docs/evidence/en-037-4-ai-deployment/architecture-compatibility.md`
+      # del PR de Infrastructure para esa evidencia completa. Si se quiere
+      # repetir esa verificacion de ejecucion DENTRO de este CI, hay que
+      # anadir primero `docker/setup-qemu-action@<sha-verificado>` a la
+      # lista de Actions permitidas del repositorio (configuracion de
+      # repositorio, fuera del alcance de este PR).
+      - name: Construir imagen del trainer para ARM64 (solo build, sin ejecutar)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           target: trainer
           platforms: linux/arm64
           push: false
-          load: true
+          load: false
           tags: nexus-battle-combat-trainer:ci-arm64
           build-args: |
             SOURCE_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=trainer-arm64
           cache-to: type=gha,mode=max,scope=trainer-arm64
 
-      - name: Verificar PyTorch CPU en ARM64 (emulado via QEMU, no hardware Graviton real)
-        run: |
-          docker run --rm --platform linux/arm64 nexus-battle-combat-trainer:ci-arm64 \
-            uv run --project ai python -c "
-          import torch, numpy, onnx, onnxscript, pymongo, platform
-          assert platform.machine() == 'aarch64'
-          assert torch.cuda.is_available() is False
-          print('torch', torch.__version__, platform.machine())
-          "
-
-      - name: Construir imagen runtime para ARM64 y verificar ONNX Runtime Node (emulado)
-        run: |
-          docker buildx build --platform linux/arm64 --target runtime -t nexus-battle-combat:ci-arm64 --load .
-          docker run --rm --platform linux/arm64 \
-            -e NODE_ENV=development \
-            nexus-battle-combat:ci-arm64 \
-            node -e "require('onnxruntime-node'); console.log('onnxruntime-node cargo correctamente en', process.arch)"
+      - name: Construir imagen runtime para ARM64 (solo build, sin ejecutar)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: runtime
+          platforms: linux/arm64
+          push: false
+          load: false
+          tags: nexus-battle-combat:ci-arm64
+          cache-from: type=gha,scope=runtime-arm64
+          cache-to: type=gha,mode=max,scope=runtime-arm64
 
   publish:
     name: Publicar imagen en GHCR
