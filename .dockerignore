@@ -16,4 +16,17 @@ Dockerfile
 .dockerignore
 
 # EN-036.2: paquete Python offline, nunca parte de la imagen Node de Combat
-ai/
+# (etapa `runtime`/`evaluator`, ver Dockerfile). EN-037.4 (Management #573)
+# necesita el codigo fuente/lockfile de `ai/` DENTRO del contexto de build
+# para la etapa `trainer` -- nunca el runtime Node, que jamas lo `COPY`.
+# Se excluyen explicitamente los subdirectorios pesados/no reproducibles en
+# vez de todo `ai/`, para que la etapa `trainer` pueda copiar justo lo que
+# necesita (codigo fuente + `pyproject.toml` + `uv.lock`), nunca un entorno
+# local, cache o dataset de desarrollador.
+ai/.venv/
+ai/tests/
+ai/examples/
+ai/.pytest_cache/
+ai/.ruff_cache/
+ai/**/__pycache__/
+ai/**/*.pyc

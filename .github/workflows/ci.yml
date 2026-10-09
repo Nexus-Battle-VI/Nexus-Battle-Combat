@@ -464,6 +464,85 @@ jobs:
           docker network rm combat-ci > /dev/null
           [ "$status" = "503" ]
 
+      # EN-037.4 (Management #573 §5, §14-A): la imagen `trainer` (Node +
+      # Python/uv/PyTorch CPU, ver Dockerfile etapa 5) construye y corre
+      # aparte de la imagen `runtime` de arriba -- el evaluador automatico
+      # reutiliza `runtime` sin cambios (nunca necesita Python, ver
+      # comentario de la etapa `trainer`).
+      - name: Construir imagen del trainer
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: trainer
+          push: false
+          load: true
+          tags: nexus-battle-combat-trainer:ci
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=trainer
+          cache-to: type=gha,mode=max,scope=trainer
+
+      # Verificacion REAL (#573 §5.3), no solo "el build termino": importar
+      # torch/numpy/onnx/onnxscript/pymongo dentro del contenedor -- si el
+      # `uv.lock` resuelto no tuviera wheel compatible, esto falla aqui,
+      # nunca despues del merge.
+      - name: Verificar PyTorch CPU dentro de la imagen del trainer
+        run: |
+          docker run --rm nexus-battle-combat-trainer:ci \
+            uv run --project ai python -c "
+          import torch, numpy, onnx, onnxscript, pymongo, platform
+          assert torch.cuda.is_available() is False
+          print('torch', torch.__version__, platform.machine())
+          "
+
+      # TODO(revision humana, sin acceso a red desde este entorno): fijar
+      # `docker/setup-qemu-action` a un commit SHA verificado (mismo
+      # criterio que las demas acciones de este workflow) antes de hacer
+      # merge -- no se pudo resolver el SHA real sin acceso a GitHub.
+      #
+      # ARM64 real (#573 §5.1, §14.3): Graviton es linux/arm64. El paso
+      # anterior corre en el runner amd64 de GitHub Actions; este paso
+      # ademas verifica, bajo emulacion QEMU (nunca hardware Graviton real
+      # -- ver docs/evidence/ para la distincion exacta), que el binario
+      # nativo de PyTorch resuelto para `manylinux_2_28_aarch64` carga y
+      # ejecuta de verdad, no solo que `uv.lock` declara un wheel.
+      - name: Configurar QEMU (verificacion ARM64)
+        uses: docker/setup-qemu-action@v3.6.0
+        with:
+          platforms: arm64
+
+      - name: Construir imagen del trainer para ARM64 (emulado)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: trainer
+          platforms: linux/arm64
+          push: false
+          load: true
+          tags: nexus-battle-combat-trainer:ci-arm64
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=trainer-arm64
+          cache-to: type=gha,mode=max,scope=trainer-arm64
+
+      - name: Verificar PyTorch CPU en ARM64 (emulado via QEMU, no hardware Graviton real)
+        run: |
+          docker run --rm --platform linux/arm64 nexus-battle-combat-trainer:ci-arm64 \
+            uv run --project ai python -c "
+          import torch, numpy, onnx, onnxscript, pymongo, platform
+          assert platform.machine() == 'aarch64'
+          assert torch.cuda.is_available() is False
+          print('torch', torch.__version__, platform.machine())
+          "
+
+      - name: Construir imagen runtime para ARM64 y verificar ONNX Runtime Node (emulado)
+        run: |
+          docker buildx build --platform linux/arm64 --target runtime -t nexus-battle-combat:ci-arm64 --load .
+          docker run --rm --platform linux/arm64 \
+            -e NODE_ENV=development \
+            nexus-battle-combat:ci-arm64 \
+            node -e "require('onnxruntime-node'); console.log('onnxruntime-node cargo correctamente en', process.arch)"
+
   publish:
     name: Publicar imagen en GHCR
     runs-on: ubuntu-latest
@@ -510,12 +589,20 @@ jobs:
           COMMIT: ${{ github.sha }}
         run: |
           imagen="ghcr.io/$(echo "$PROPIETARIO" | tr '[:upper:]' '[:lower:]')/nexus-battle-combat"
+          imagen_trainer="${imagen}-trainer"
           version="$(node -p "require('./package.json').version")"
           {
             echo 'lista<<FIN'
             echo "${imagen}:latest"
             echo "${imagen}:sha-${COMMIT:0:12}"
             echo "${imagen}:${version}"
+            echo 'FIN'
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo 'lista_trainer<<FIN'
+            echo "${imagen_trainer}:latest"
+            echo "${imagen_trainer}:sha-${COMMIT:0:12}"
+            echo "${imagen_trainer}:${version}"
             echo 'FIN'
           } >> "$GITHUB_OUTPUT"
 
@@ -538,3 +625,21 @@ jobs:
           tags: ${{ steps.etiquetas.outputs.lista }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # EN-037.4 (Management #573 §6, §14.3): la imagen del trainer se
+      # publica APARTE, con su propio nombre (`nexus-battle-combat-trainer`)
+      # -- nunca como un tag distinto de la misma imagen runtime, para que
+      # Infrastructure pueda referenciarla sin arrastrar PyTorch a un
+      # despliegue que solo necesita el runtime HTTP.
+      - name: Construir y publicar imagen del trainer
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: trainer
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.etiquetas.outputs.lista_trainer }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=trainer
+          cache-to: type=gha,mode=max,scope=trainer
