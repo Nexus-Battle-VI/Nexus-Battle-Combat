@@ -119,6 +119,17 @@ describe('HU-21 — temporizadores y un solo escritor', () => {
       // escritor de persistencia; `clearTimeout` siempre se ejecuta en un
       // `finally`.
       'application/policies/NeuralPolicy.ts',
+      // EN-037.3 (#572): polling del ACTIVE del registry para hot reload;
+      // no escribe gameplay y se cancela en shutdown.
+      'infrastructure/ai/ActiveModelProvider.ts',
+      // EN-037.3 (#572): heartbeat del lease de evaluacion automatica
+      // (`setInterval`/`clearInterval`, mismo patron que #571) -- un
+      // proceso standalone fuera del runtime de Combat, nunca un
+      // planificador de Combat en si.
+      'infrastructure/evaluation/AutomaticModelEvaluationCoordinator.ts',
+      // EN-037.3 (#572): `sleep()` de polling/backoff del worker tecnico
+      // standalone, fuera del proceso HTTP/gameplay.
+      'infrastructure/evaluation/automatic-evaluation-worker.ts',
       // EN-037.2 (#571): timeout de subprocesos Python (`setTimeout` para
       // cancelar un spawn colgado), siempre limpiado con `clearTimeout` en
       // el mismo handler -- ni planificador de barrido ni escritor de

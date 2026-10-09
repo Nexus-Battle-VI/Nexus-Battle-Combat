@@ -28,6 +28,8 @@ import * as mctsTeacherLabelsMigration from '../../adapters/outbound/persistence
 import * as tournamentCardinalityMigration from '../../adapters/outbound/persistence/migrations/026-battle-rooms-tournament-cardinality'
 import * as aiModelRegistryMigration from '../../adapters/outbound/persistence/migrations/027-ai-model-registry'
 import * as aiTrainingCoordinatorMigration from '../../adapters/outbound/persistence/migrations/028-ai-training-coordinator'
+import * as aiModelRegistryPromotionFieldsMigration from '../../adapters/outbound/persistence/migrations/029-ai-model-registry-promotion-fields'
+import * as aiEvaluationCoordinatorMigration from '../../adapters/outbound/persistence/migrations/030-ai-evaluation-coordinator'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -110,6 +112,11 @@ export const MIGRATIONS: readonly MongoMigration[] = [
   { name: '026-battle-rooms-tournament-cardinality', up: tournamentCardinalityMigration.up },
   { name: '027-ai-model-registry', up: aiModelRegistryMigration.up },
   { name: '028-ai-training-coordinator', up: aiTrainingCoordinatorMigration.up },
+  {
+    name: '029-ai-model-registry-promotion-fields',
+    up: aiModelRegistryPromotionFieldsMigration.up,
+  },
+  { name: '030-ai-evaluation-coordinator', up: aiEvaluationCoordinatorMigration.up },
 ]
 
 const REGISTRY = '_migrations'

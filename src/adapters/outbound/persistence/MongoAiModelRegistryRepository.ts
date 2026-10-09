@@ -1,7 +1,10 @@
 import { Int32, MongoServerError, type Collection, type Db } from 'mongodb'
 
 import type { AiModelVersion } from '../../../domain/entities/AiModelVersion'
-import { AiModelState } from '../../../domain/value-objects/AiModelState'
+import {
+  AiModelState,
+  type AiModelState as AiModelStateType,
+} from '../../../domain/value-objects/AiModelState'
 import {
   ActiveModelConflictError,
   ModelVersionConflictError,
@@ -93,5 +96,11 @@ export class MongoAiModelRegistryRepository implements AiModelRegistryRepository
     const document = await this.versions.findOne({ 'trainingLineage.trainingRunId': trainingRunId })
 
     return document === null ? null : toAiModelVersion(document)
+  }
+
+  async listByState(state: AiModelStateType): Promise<readonly AiModelVersion[]> {
+    const documents = await this.versions.find({ state }).sort({ createdAt: 1 }).toArray()
+
+    return documents.map(toAiModelVersion)
   }
 }

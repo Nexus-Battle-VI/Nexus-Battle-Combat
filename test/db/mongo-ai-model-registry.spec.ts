@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb'
@@ -44,6 +45,25 @@ const realManifest = parseAndValidateModelTrainingManifest(
 const realTrainingSeed = realManifest.trainingConfig.trainingSeed as number
 
 /**
+ * El fixture real de `#567` NO incluye `model.pt` (#570 solo conserva
+ * `model.onnx`/`metrics.json`/`training-manifest.json` como fixtures,
+ * ver `test/fixtures/ai-model-registry/`) -- sin el checkpoint original
+ * no se puede regenerar una `pytorch-parity-reference.json` REAL con
+ * `nexus-combat-parity-reference` (#569) para este fixture concreto. Esta
+ * prueba cubre invariantes de PERSISTENCIA Mongo (hash real, content-
+ * addressed, conflicto, idempotencia), no la matematica de paridad de
+ * #569 (eso vive en su propia suite) -- unos bytes claramente sinteticos
+ * bastan, igual criterio que `metricsBytes`/`manifestBytes` fake de
+ * `test/unit/ai-model-registry.spec.ts`.
+ */
+const realParityReferenceBytes = Buffer.from(
+  JSON.stringify({ synthetic: 'pytorch-parity-reference-for-mongo-real-test' }),
+)
+const realParityReferenceSha256 = createHash('sha256')
+  .update(realParityReferenceBytes)
+  .digest('hex')
+
+/**
  * El fixture real de `#567` trae `artifactPurpose=SMOKE_TEST` (es honesto:
  * un dataset sintetico de CI, #570 §117-119) -- desde la revision de
  * codigo de este PR, `registerCandidate` exige CANDIDATE, asi que CADA
@@ -56,6 +76,7 @@ const candidateManifest = (
 ): CandidateArtifactManifest => ({
   ...realManifest,
   artifactPurpose: 'CANDIDATE',
+  parityReferenceSha256: realParityReferenceSha256,
   ...overrides,
 })
 
@@ -160,6 +181,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
       manifestBytes: realManifestBytes,
       onnxBytes: realOnnxBytes,
       metricsBytes: realMetricsBytes,
+      parityReferenceBytes: realParityReferenceBytes,
     })
 
     expect(candidate.state).toBe('CANDIDATE')
@@ -185,6 +207,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: corrupted,
         metricsBytes: realMetricsBytes,
+        parityReferenceBytes: realParityReferenceBytes,
       }),
     ).rejects.toThrow()
 
@@ -204,6 +227,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: corrupted,
+        parityReferenceBytes: realParityReferenceBytes,
       }),
     ).rejects.toThrow()
 
@@ -232,6 +256,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: realMetricsBytes,
+        parityReferenceBytes: realParityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ArtifactPurposeNotCandidateError)
 
@@ -250,6 +275,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: realMetricsBytes,
+        parityReferenceBytes: realParityReferenceBytes,
       }),
     ).rejects.toBeInstanceOf(ModelTrainingLineageMismatchError)
 
@@ -277,6 +303,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
         manifestBytes: realManifestBytes,
         onnxBytes: realOnnxBytes,
         metricsBytes: realMetricsBytes,
+        parityReferenceBytes: realParityReferenceBytes,
       })
       await registry.beginEvaluation(modelVersion)
     }
@@ -305,6 +332,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
       manifestBytes: realManifestBytes,
       onnxBytes: realOnnxBytes,
       metricsBytes: realMetricsBytes,
+      parityReferenceBytes: realParityReferenceBytes,
     })
     await firstProcessRegistry.beginEvaluation('restart-check')
 
@@ -360,6 +388,7 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
       manifestBytes: realManifestBytes,
       onnxBytes: realOnnxBytes,
       metricsBytes: realMetricsBytes,
+      parityReferenceBytes: realParityReferenceBytes,
     })
 
     const fromWriterA = candidate.beginEvaluation(AT)

@@ -1,4 +1,5 @@
 import type { AiModelVersion } from '../../domain/entities/AiModelVersion'
+import type { AiModelState } from '../../domain/value-objects/AiModelState'
 
 /**
  * Puerto de persistencia del model registry (EN-037.1, Management #570
@@ -21,12 +22,23 @@ export interface AiModelRegistryRepositoryPort {
    * prospera si la revision almacenada sigue siendo `expectedRevision`.
    * Si no, lanza `ModelVersionConflictError`. Si la transicion es hacia
    * `ACTIVE` y ya existe otra version `ACTIVE`, lanza
-   * `ActiveModelConflictError` (indice unico parcial, #570 §41-42).
+   * `ActiveModelConflictError` (indice unico parcial, #570 §41-42). Una
+   * transicion hacia `SUPERSEDED` (#572 EN-037.3) nunca choca con ese
+   * indice -- solo protege `state=ACTIVE`, nunca `SUPERSEDED`.
    */
   replaceWithExpectedRevision(version: AiModelVersion, expectedRevision: number): Promise<void>
 
   /** `null` si no existe ninguna version con ese `modelVersion`. */
   findByVersion(modelVersion: string): Promise<AiModelVersion | null>
+
+  /**
+   * Todas las versiones en un estado dado, ordenadas por `createdAt`
+   * ascendente (#572 EN-037.3 §7.1): el mecanismo de descubrimiento del
+   * `AutomaticModelEvaluationCoordinator` para encontrar `CANDIDATE`
+   * pendientes de evaluacion, sin inventar una cola externa. Lista
+   * potencialmente vacia, nunca `null`.
+   */
+  listByState(state: AiModelState): Promise<readonly AiModelVersion[]>
 
   /**
    * La UNICA version `ACTIVE`, determinista (#570 §45): `null` si ninguna

@@ -12,6 +12,7 @@ import { MAX_ARTIFACT_BYTES } from './MongoAiModelArtifactRepository'
 export class InMemoryAiModelArtifactRepository implements AiModelArtifactRepositoryPort {
   private readonly artifacts = new Map<string, AiModelArtifact>()
 
+  /** `artifactType` ignorado (revision de codigo, #572 §6): es solo una etiqueta de auditoria en el documento Mongo, este store nunca la discrimina. */
   put(sha256: string, bytes: Buffer, at: Date): Promise<void> {
     if (bytes.length > MAX_ARTIFACT_BYTES) {
       return Promise.reject(new ModelArtifactTooLargeError(bytes.length, MAX_ARTIFACT_BYTES))

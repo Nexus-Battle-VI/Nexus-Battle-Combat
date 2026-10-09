@@ -71,4 +71,12 @@ export class InMemoryAiModelRegistryRepository implements AiModelRegistryReposit
     }
     return Promise.resolve(null)
   }
+
+  listByState(state: AiModelState): Promise<readonly AiModelVersion[]> {
+    const matches = [...this.versions.values()]
+      .filter((entry) => entry.version.state === state)
+      .sort((left, right) => left.version.createdAt.getTime() - right.version.createdAt.getTime())
+      .map((entry) => entry.version)
+    return Promise.resolve(matches)
+  }
 }

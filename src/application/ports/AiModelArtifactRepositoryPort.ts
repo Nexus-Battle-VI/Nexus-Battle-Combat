@@ -12,6 +12,9 @@ export interface AiModelArtifact {
  * nunca se mezcle con el documento mutable de estado. Application/domain
  * nunca importa `mongodb`/`Binary`.
  */
+/** `PARITY_REFERENCE` (EN-037.3, Management #572 §6): `pytorch-parity-reference.json`, nunca interpretado por este puerto, solo persistido content-addressed igual que `ONNX_MODEL`. */
+export type AiModelArtifactType = 'ONNX_MODEL' | 'PARITY_REFERENCE'
+
 export interface AiModelArtifactRepositoryPort {
   /**
    * Content-addressed (#570 §30, §33): `sha256` DEBE ser el SHA-256 real
@@ -20,9 +23,11 @@ export interface AiModelArtifactRepositoryPort {
    * Mismo `sha256` + bytes distintos -> `ArtifactConflictError` (nunca
    * sobreescribe). Si `bytes.length` excede el limite de la estrategia
    * de almacenamiento elegida -> `ModelArtifactTooLargeError`, fail
-   * closed ANTES de insertar nada.
+   * closed ANTES de insertar nada. `artifactType` es solo una etiqueta de
+   * auditoria en el documento Mongo (#572 §6) -- este puerto nunca la lee
+   * de vuelta ni discrimina comportamiento por ella.
    */
-  put(sha256: string, bytes: Buffer, at: Date): Promise<void>
+  put(sha256: string, bytes: Buffer, at: Date, artifactType?: AiModelArtifactType): Promise<void>
 
   /** `null` si no existe ningun artefacto con ese `sha256`. */
   getBySha256(sha256: string): Promise<AiModelArtifact | null>

@@ -7,6 +7,7 @@ import {
 import type {
   AiModelArtifact,
   AiModelArtifactRepositoryPort,
+  AiModelArtifactType,
 } from '../../../application/ports/AiModelArtifactRepositoryPort'
 
 export const AI_MODEL_ARTIFACTS_COLLECTION = 'ai-model-artifacts'
@@ -27,7 +28,7 @@ export const MAX_ARTIFACT_BYTES = BSON_DOCUMENT_LIMIT_BYTES - ARTIFACT_MARGIN_BY
 interface AiModelArtifactDocument {
   readonly _id: string
   readonly schemaVersion: number
-  readonly artifactType: 'ONNX_MODEL'
+  readonly artifactType: AiModelArtifactType
   readonly sizeBytes: number
   readonly bytes: Binary
   readonly createdAt: Date
@@ -47,7 +48,12 @@ export class MongoAiModelArtifactRepository implements AiModelArtifactRepository
     this.artifacts = db.collection<AiModelArtifactDocument>(AI_MODEL_ARTIFACTS_COLLECTION)
   }
 
-  async put(sha256: string, bytes: Buffer, at: Date): Promise<void> {
+  async put(
+    sha256: string,
+    bytes: Buffer,
+    at: Date,
+    artifactType: AiModelArtifactType = 'ONNX_MODEL',
+  ): Promise<void> {
     if (bytes.length > MAX_ARTIFACT_BYTES) {
       throw new ModelArtifactTooLargeError(bytes.length, MAX_ARTIFACT_BYTES)
     }
@@ -56,7 +62,7 @@ export class MongoAiModelArtifactRepository implements AiModelArtifactRepository
       await this.artifacts.insertOne({
         _id: sha256,
         schemaVersion: ARTIFACT_SCHEMA_VERSION,
-        artifactType: 'ONNX_MODEL',
+        artifactType,
         sizeBytes: bytes.length,
         bytes: new Binary(bytes),
         createdAt: at,

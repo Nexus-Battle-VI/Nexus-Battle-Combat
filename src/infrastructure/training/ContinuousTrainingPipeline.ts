@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -301,6 +301,54 @@ const runTraining = async (
   }
 }
 
+/**
+ * Genera `pytorch-parity-reference.json` (EN-037.3, Management #572 §6)
+ * invocando la herramienta YA existente `nexus-combat-parity-reference`
+ * (#569, `ai/src/nexus_combat_ai/cli/parity_reference.py`) sobre el
+ * `model.pt`/`training-manifest.json` REALES que `runTraining` acaba de
+ * producir en `runDir` -- esta pipeline NUNCA reimplementa el calculo de
+ * paridad, solo invoca la CLI Python que ya lo hace y persiste su salida
+ * ANTES de que el `finally` de `runContinuousTrainingIteration` borre
+ * `workDir` (y con el, `model.pt`, nunca persistido en otro lugar).
+ */
+const generateParityReference = async (
+  deps: ContinuousTrainingPipelineDeps,
+  config: ContinuousTrainingPipelineConfig,
+  runDir: string,
+  trackRunning: (running: RunningChildProcess | null) => void,
+): Promise<Buffer> => {
+  const outputPath = join(runDir, 'pytorch-parity-reference.json')
+  try {
+    await runTrackedToCompletion(
+      deps.runChildProcess,
+      config.pythonCommand,
+      pythonArgs([
+        'nexus-combat-parity-reference',
+        '--artifact-dir',
+        runDir,
+        '--output',
+        outputPath,
+      ]),
+      { cwd: config.aiDir, env: process.env, timeoutMs: config.identityTimeoutMs },
+      trackRunning,
+    )
+  } catch (error) {
+    throw new ClassifiedPipelineError(
+      'ARTIFACT_INVALID',
+      `nexus-combat-parity-reference fallo: ${describeError(error)}`,
+    )
+  }
+
+  try {
+    return await readFile(outputPath)
+  } catch (error) {
+    throw new ClassifiedPipelineError(
+      'ARTIFACT_INVALID',
+      `No se pudo leer pytorch-parity-reference.json generado: ${describeError(error)}`,
+    )
+  }
+}
+
 export const runContinuousTrainingIteration = async (
   deps: ContinuousTrainingPipelineDeps,
   config: ContinuousTrainingPipelineConfig,
@@ -534,6 +582,9 @@ export const runContinuousTrainingIteration = async (
       )
     }
 
+    const parityReferenceBytes = await generateParityReference(deps, config, runDir, trackRunning)
+    const parityReferenceSha256 = createHash('sha256').update(parityReferenceBytes).digest('hex')
+
     const stillOwnerBeforeRegistering = await deps.coordinator.renewLease(
       claim,
       config.leaseDurationMs,
@@ -547,10 +598,11 @@ export const runContinuousTrainingIteration = async (
     try {
       const candidate = await deps.registry.registerCandidate({
         modelVersion: lineage.modelVersion,
-        manifest,
+        manifest: { ...manifest, parityReferenceSha256 },
         manifestBytes,
         onnxBytes,
         metricsBytes,
+        parityReferenceBytes,
       })
       candidateVersion = candidate.modelVersion
     } catch (error) {
