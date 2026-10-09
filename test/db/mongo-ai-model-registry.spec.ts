@@ -160,6 +160,42 @@ describe('AiModelRegistry sobre MongoDB real (EN-037.1, Management #570)', () =>
     })
   })
 
+  it('ACTIVE reference CAS accepts only the exact version/revision/generation expected', async () => {
+    const repository = new MongoAiModelRegistryRepository(db!)
+    expect(await repository.getActiveReference()).toBeNull()
+
+    const first = await repository.compareAndSwapActiveReference(
+      null,
+      { modelVersion: 'cas-a', modelRevision: 3 },
+      AT,
+    )
+    expect(first).toEqual({ modelVersion: 'cas-a', modelRevision: 3, generation: 1 })
+
+    await expect(
+      repository.compareAndSwapActiveReference(
+        null,
+        { modelVersion: 'cas-duplicate', modelRevision: 1 },
+        AT,
+      ),
+    ).resolves.toBeNull()
+
+    const second = await repository.compareAndSwapActiveReference(
+      first,
+      { modelVersion: 'cas-b', modelRevision: 7 },
+      AT,
+    )
+    expect(second).toEqual({ modelVersion: 'cas-b', modelRevision: 7, generation: 2 })
+
+    await expect(
+      repository.compareAndSwapActiveReference(
+        first,
+        { modelVersion: 'cas-stale', modelRevision: 9 },
+        AT,
+      ),
+    ).resolves.toBeNull()
+    await db!.collection('ai-model-active-reference').deleteMany({})
+  })
+
   it('creates the ai-model-artifacts collection', async () => {
     const collections = await db!.listCollections({ name: AI_MODEL_ARTIFACTS_COLLECTION }).toArray()
     expect(collections).toHaveLength(1)
