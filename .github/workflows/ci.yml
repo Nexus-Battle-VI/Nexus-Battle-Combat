@@ -348,10 +348,20 @@ jobs:
 
       # Este job solo construye y verifica. Publicar es trabajo de `publish`, que
       # solo se ejecuta desde `main` y depende de que este termine en verde.
+      # `target: runtime` explicito (revision de codigo, #573): el
+      # `Dockerfile` ahora tiene una etapa `trainer` DESPUES de `runtime`
+      # (EN-037.4). Sin `target:`, Docker construye la ULTIMA etapa del
+      # fichero por defecto -- antes de #573 eso coincidia con `runtime`
+      # porque era la unica/ultima etapa; ahora, sin esta linea, este paso
+      # construiria SILENCIOSAMENTE la imagen del trainer y la arrancaria
+      # como si fuera el servidor HTTP (confirmado: asi fallaba el CI real
+      # de este PR -- `combat-ci` arrancaba `continuous-training-worker.js`
+      # en vez de `main.js`, y moria al no encontrar `git`/`--source-commit`).
       - name: Construir imagen
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          target: runtime
           push: false
           load: true
           tags: nexus-battle-combat:ci
@@ -464,6 +474,85 @@ jobs:
           docker network rm combat-ci > /dev/null
           [ "$status" = "503" ]
 
+      # EN-037.4 (Management #573 §5, §14-A): la imagen `trainer` (Node +
+      # Python/uv/PyTorch CPU, ver Dockerfile etapa 5) construye y corre
+      # aparte de la imagen `runtime` de arriba -- el evaluador automatico
+      # reutiliza `runtime` sin cambios (nunca necesita Python, ver
+      # comentario de la etapa `trainer`).
+      - name: Construir imagen del trainer
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: trainer
+          push: false
+          load: true
+          tags: nexus-battle-combat-trainer:ci
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=trainer
+          cache-to: type=gha,mode=max,scope=trainer
+
+      # Verificacion REAL (#573 §5.3), no solo "el build termino": importar
+      # torch/numpy/onnx/onnxscript/pymongo dentro del contenedor -- si el
+      # `uv.lock` resuelto no tuviera wheel compatible, esto falla aqui,
+      # nunca despues del merge.
+      - name: Verificar PyTorch CPU dentro de la imagen del trainer
+        run: |
+          docker run --rm nexus-battle-combat-trainer:ci \
+            uv run --project ai python -c "
+          import torch, numpy, onnx, onnxscript, pymongo, platform
+          assert torch.cuda.is_available() is False
+          print('torch', torch.__version__, platform.machine())
+          "
+
+      # ARM64 real (#573 §5.1, §14.3): Graviton es linux/arm64. Este
+      # repositorio restringe las Actions permitidas a una lista explicita
+      # (`actions/*`, `docker/setup-buildx-action@*`, `docker/build-push-action@*`
+      # -- `repos/.../actions/permissions/selected-actions`), que NO incluye
+      # `docker/setup-qemu-action`. Sin ese registro de binfmt_misc en el
+      # runner, `docker run --platform linux/arm64 <imagen>` (ejecutar de
+      # verdad un binario arm64) no es viable desde este workflow -- por
+      # eso esta verificacion se limita a CONSTRUIR para `linux/arm64`
+      # (que `buildx`/BuildKit YA resuelve sin `setup-qemu-action`, igual
+      # que el job `publish` de abajo construye `linux/amd64,linux/arm64`
+      # sin esa accion desde antes de esta Task) -- nunca a ejecutar el
+      # binario resultante.
+      #
+      # La verificacion de EJECUCION real (import de torch + forward pass,
+      # `onnxruntime-node` cargando su binding nativo) bajo `linux/arm64`
+      # SI se hizo, pero localmente (Docker Desktop con QEMU), no en este
+      # CI -- ver `docs/evidence/en-037-4-ai-deployment/architecture-compatibility.md`
+      # del PR de Infrastructure para esa evidencia completa. Si se quiere
+      # repetir esa verificacion de ejecucion DENTRO de este CI, hay que
+      # anadir primero `docker/setup-qemu-action@<sha-verificado>` a la
+      # lista de Actions permitidas del repositorio (configuracion de
+      # repositorio, fuera del alcance de este PR).
+      - name: Construir imagen del trainer para ARM64 (solo build, sin ejecutar)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: trainer
+          platforms: linux/arm64
+          push: false
+          load: false
+          tags: nexus-battle-combat-trainer:ci-arm64
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=trainer-arm64
+          cache-to: type=gha,mode=max,scope=trainer-arm64
+
+      - name: Construir imagen runtime para ARM64 (solo build, sin ejecutar)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: runtime
+          platforms: linux/arm64
+          push: false
+          load: false
+          tags: nexus-battle-combat:ci-arm64
+          cache-from: type=gha,scope=runtime-arm64
+          cache-to: type=gha,mode=max,scope=runtime-arm64
+
   publish:
     name: Publicar imagen en GHCR
     runs-on: ubuntu-latest
@@ -510,6 +599,7 @@ jobs:
           COMMIT: ${{ github.sha }}
         run: |
           imagen="ghcr.io/$(echo "$PROPIETARIO" | tr '[:upper:]' '[:lower:]')/nexus-battle-combat"
+          imagen_trainer="${imagen}-trainer"
           version="$(node -p "require('./package.json').version")"
           {
             echo 'lista<<FIN'
@@ -518,15 +608,30 @@ jobs:
             echo "${imagen}:${version}"
             echo 'FIN'
           } >> "$GITHUB_OUTPUT"
+          {
+            echo 'lista_trainer<<FIN'
+            echo "${imagen_trainer}:latest"
+            echo "${imagen_trainer}:sha-${COMMIT:0:12}"
+            echo "${imagen_trainer}:${version}"
+            echo 'FIN'
+          } >> "$GITHUB_OUTPUT"
 
       # Se reconstruye desde el mismo commit y con la misma cache que el job
       # anterior, asi que el trabajo real es un acierto de cache. Lo que
       # garantiza que se publica algo comprobado no es la cache, sino
       # `needs: docker`: sin ese job en verde, este no llega a ejecutarse.
+      # `target: runtime` explicito (revision de codigo, #573): mismo
+      # motivo critico que en el job `docker` de arriba -- sin esto, este
+      # paso PUBLICARIA la imagen del trainer (Python/PyTorch,
+      # `CMD ["node","dist/infrastructure/training/continuous-training-worker.js"]`)
+      # bajo el nombre del servicio principal (`nexus-battle-combat:latest`),
+      # reemplazando el servidor HTTP real de Combat en produccion por el
+      # worker de entrenamiento.
       - name: Construir y publicar
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          target: runtime
           push: true
           # Los nodos de la demo son Graviton: `t4g.small` es arm64. Sin esta
           # linea la imagen sale solo para amd64 y el nodo la rechaza con
@@ -538,3 +643,21 @@ jobs:
           tags: ${{ steps.etiquetas.outputs.lista }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # EN-037.4 (Management #573 §6, §14.3): la imagen del trainer se
+      # publica APARTE, con su propio nombre (`nexus-battle-combat-trainer`)
+      # -- nunca como un tag distinto de la misma imagen runtime, para que
+      # Infrastructure pueda referenciarla sin arrastrar PyTorch a un
+      # despliegue que solo necesita el runtime HTTP.
+      - name: Construir y publicar imagen del trainer
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: trainer
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.etiquetas.outputs.lista_trainer }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=trainer
+          cache-to: type=gha,mode=max,scope=trainer
