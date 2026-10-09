@@ -348,10 +348,20 @@ jobs:
 
       # Este job solo construye y verifica. Publicar es trabajo de `publish`, que
       # solo se ejecuta desde `main` y depende de que este termine en verde.
+      # `target: runtime` explicito (revision de codigo, #573): el
+      # `Dockerfile` ahora tiene una etapa `trainer` DESPUES de `runtime`
+      # (EN-037.4). Sin `target:`, Docker construye la ULTIMA etapa del
+      # fichero por defecto -- antes de #573 eso coincidia con `runtime`
+      # porque era la unica/ultima etapa; ahora, sin esta linea, este paso
+      # construiria SILENCIOSAMENTE la imagen del trainer y la arrancaria
+      # como si fuera el servidor HTTP (confirmado: asi fallaba el CI real
+      # de este PR -- `combat-ci` arrancaba `continuous-training-worker.js`
+      # en vez de `main.js`, y moria al no encontrar `git`/`--source-commit`).
       - name: Construir imagen
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          target: runtime
           push: false
           load: true
           tags: nexus-battle-combat:ci
@@ -610,10 +620,18 @@ jobs:
       # anterior, asi que el trabajo real es un acierto de cache. Lo que
       # garantiza que se publica algo comprobado no es la cache, sino
       # `needs: docker`: sin ese job en verde, este no llega a ejecutarse.
+      # `target: runtime` explicito (revision de codigo, #573): mismo
+      # motivo critico que en el job `docker` de arriba -- sin esto, este
+      # paso PUBLICARIA la imagen del trainer (Python/PyTorch,
+      # `CMD ["node","dist/infrastructure/training/continuous-training-worker.js"]`)
+      # bajo el nombre del servicio principal (`nexus-battle-combat:latest`),
+      # reemplazando el servidor HTTP real de Combat en produccion por el
+      # worker de entrenamiento.
       - name: Construir y publicar
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          target: runtime
           push: true
           # Los nodos de la demo son Graviton: `t4g.small` es arm64. Sin esta
           # linea la imagen sale solo para amd64 y el nodo la rechaza con
