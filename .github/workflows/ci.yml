@@ -334,7 +334,10 @@ jobs:
   docker:
     name: Imagen del servicio
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 60 (antes 15): el push a main construye en frio, sin la cache del PR, el trainer y el
+    # runtime para linux/arm64 bajo emulacion (PyTorch). El 2026-10-10 el job se cancelo a los
+    # 15 min en el paso del trainer ARM64 y el job `publish` quedo `skipped`: no se publico imagen.
+    timeout-minutes: 60
     needs: [quality, ai-pipeline]
 
     steps:
@@ -556,7 +559,8 @@ jobs:
   publish:
     name: Publicar imagen en GHCR
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 60 (antes 15): reconstruye y publica runtime y trainer para amd64+arm64; en frio supera 15 min.
+    timeout-minutes: 60
     needs: docker
     # Solo desde `main`, nunca desde un pull request. Si un PR pudiera publicar,
     # cualquiera capaz de abrir uno escribiria en el registro de la organizacion.
