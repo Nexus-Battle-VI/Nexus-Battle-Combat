@@ -262,12 +262,26 @@ nunca un bucle infinito.
 
 **`MctsTeacherLabel` no es automatico**: auditado explicitamente
 (`LiveMctsTeacherLabeler`, `MCTS_LIVE_TEACHER_LABELING_ENABLED`,
-default `false` por costo real de CPU). El dataset builder ya falla
+default `false` por costo real de CPU). El dataset builder falla
 cerrado (`--allow-missing-labels` requerido explicitamente) si faltan
-labels para decisiones ONLINE/TOURNAMENT -- el worker nunca pasa esa flag,
-asi que un periodo sin MCTS en vivo simplemente se clasifica
+labels para decisiones ONLINE/TOURNAMENT. **Por defecto el worker no pasa esa
+flag**, asi que un periodo sin MCTS en vivo se clasifica
 `DATASET_BUILD_FAILED` (nunca una CANDIDATE con datos faltantes
 disfrazados).
+
+**Hueco conocido de etiquetado (opt-in `--allow-missing-labels`)**: los labels
+solo pueden generarse EN VIVO (el `CombatDecisionEvent` no guarda la sala
+completa, ver `docs/en-036-mcts-teacher.md`), asi que las decisiones
+registradas antes de activar `MCTS_LIVE_TEACHER_LABELING_ENABLED` nunca podran
+etiquetarse. Como `nexus-combat-dataset build --source mongo` lee TODO el
+historial `COMBAT_DECISION` hasta el corte, esas decisiones viejas harian
+fallar cada build para siempre aunque el etiquetado ya estuviera activo. Para
+ese caso el worker acepta `--allow-missing-labels` (apagada por defecto), que
+solo reenvia la bandera del CLI Python: las decisiones sin label se OMITEN del
+dataset (el join cuenta `missing_label_unexpected` en sus estadisticas) y
+nunca se inventan. El dataset entrenable queda formado unicamente por
+decisiones con teacher label real; si no hay suficientes, la iteracion se
+clasifica `NOT_TRAINABLE` como siempre.
 
 ## 8. Identidad: `--emit-identity-only` (unica adicion a `ai/`)
 
