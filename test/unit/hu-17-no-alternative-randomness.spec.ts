@@ -119,7 +119,11 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
     // una fuente de aleatoriedad del motor ni una decision de juego;
     // `automatic-evaluation-worker.ts` (#572) usa `randomUUID` con la misma
     // finalidad exclusiva de ownership, y el E2E de #572 usa SHA-256 para
-    // comprobar integridad de la referencia de paridad temporal.
+    // comprobar integridad de la referencia de paridad temporal. El E2E de
+    // #574 (EN-037.5) usa SHA-256 con el mismo proposito: calcular el hash
+    // REAL de un artefacto ONNX deliberadamente invalido para el fixture de
+    // resiliencia de #574 §13 (nunca mentirle el hash a `AiModelRegistry`,
+    // nunca una fuente de azar).
     expect(users).toEqual([
       'adapters/outbound/http/inventory-grant-operation-id.ts',
       'adapters/outbound/identity/internal-signature.ts',
@@ -135,6 +139,7 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
       'infrastructure/ai/NeuralModelArtifactLoader.ts',
       'infrastructure/evaluation/automatic-evaluation-worker.ts',
       'infrastructure/evaluation/verify-automatic-model-promotion-e2e.ts',
+      'infrastructure/evaluation/verify-continuous-learning-e2e.ts',
       'infrastructure/training/ContinuousTrainingPipeline.ts',
     ])
   })
