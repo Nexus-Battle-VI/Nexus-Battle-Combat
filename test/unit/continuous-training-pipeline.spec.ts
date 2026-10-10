@@ -434,6 +434,48 @@ describe('runContinuousTrainingIteration (EN-037.2, Management #571)', () => {
     expect(new Date(capturedCutoff!).getTime()).toBe(finishedAt.getTime() + config.gracePeriodMs)
   })
 
+  it('fail-closed por defecto: sin allowMissingLabels el dataset build NO recibe --allow-missing-labels', async () => {
+    const battleRoom = finishedRoomAt(new Date('2026-12-01T00:00:00.000Z'))
+    let capturedArgs: readonly string[] | null = null
+    const runner = createFakePythonRunner({
+      datasetManifest: DATASET_MANIFEST_TRAINABLE,
+      identity: IDENTITY,
+      trainingManifest: trainingManifestFor(IDENTITY),
+      onDatasetBuildArgs: (args) => {
+        capturedArgs = args
+      },
+    })
+    const deps = newDeps(new FakeBattleRoomRepository([battleRoom]), runner)
+
+    await runContinuousTrainingIteration(deps, baseConfig(workRootDir), new Date(0))
+
+    expect(capturedArgs).not.toBeNull()
+    expect(capturedArgs).not.toContain('--allow-missing-labels')
+  })
+
+  it('con allowMissingLabels=true el dataset build recibe --allow-missing-labels (hueco conocido de etiquetado)', async () => {
+    const battleRoom = finishedRoomAt(new Date('2026-12-01T00:00:00.000Z'))
+    let capturedArgs: readonly string[] | null = null
+    const runner = createFakePythonRunner({
+      datasetManifest: DATASET_MANIFEST_TRAINABLE,
+      identity: IDENTITY,
+      trainingManifest: trainingManifestFor(IDENTITY),
+      onDatasetBuildArgs: (args) => {
+        capturedArgs = args
+      },
+    })
+    const deps = newDeps(new FakeBattleRoomRepository([battleRoom]), runner)
+
+    await runContinuousTrainingIteration(
+      deps,
+      { ...baseConfig(workRootDir), allowMissingLabels: true },
+      new Date(0),
+    )
+
+    expect(capturedArgs).not.toBeNull()
+    expect(capturedArgs).toContain('--allow-missing-labels')
+  })
+
   it('classifies a dataset build failure as DATASET_BUILD_FAILED and never advances processedThrough', async () => {
     const battleRoom = finishedRoomAt(new Date('2026-12-01T00:00:00.000Z'))
     const runner = createFakePythonRunner({

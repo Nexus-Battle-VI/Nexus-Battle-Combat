@@ -74,6 +74,17 @@ export interface ContinuousTrainingPipelineConfig {
    * (labels todavia en vuelo) sin que llegue ninguna partida nueva.
    */
   readonly maxNotTrainableRetries: number
+  /**
+   * Pasa `--allow-missing-labels` a `nexus-combat-dataset build`. Por defecto
+   * (ausente o `false`) el dataset falla cerrado si hay decisiones
+   * ONLINE/TOURNAMENT sin `MctsTeacherLabel`. Solo se activa explicitamente
+   * para un hueco CONOCIDO: el historial anterior a activar
+   * `MCTS_LIVE_TEACHER_LABELING_ENABLED` nunca podra etiquetarse (el evento no
+   * guarda la sala completa, ver `docs/en-036-mcts-teacher.md`), asi que sin
+   * esta opcion esas decisiones bloquearian cada build para siempre. Las
+   * decisiones sin etiqueta se OMITEN del dataset; nunca se inventan.
+   */
+  readonly allowMissingLabels?: boolean
 }
 
 export type ContinuousTrainingIterationOutcome =
@@ -195,6 +206,7 @@ const buildDataset = async (
         config.sourceCommit,
         '--seed',
         String(config.datasetSeed),
+        ...(config.allowMissingLabels === true ? ['--allow-missing-labels'] : []),
       ]),
       {
         cwd: config.aiDir,
