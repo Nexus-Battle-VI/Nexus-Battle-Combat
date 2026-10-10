@@ -198,12 +198,137 @@ jobs:
           print('onnx checker OK, manifest OK, run_id=', run_dir.rsplit('/', 1)[-1])
           "
 
+      # EN-036.5 (#569 §86-98, §163): referencia de paridad PyTorch sobre el
+      # MISMO checkpoint, para que `ai-evaluation-smoke` (job de abajo) la
+      # compare contra el runtime REAL de Node (`onnxruntime-node`) sin que
+      # Python necesite instalar `onnxruntime`.
+      - name: 'Smoke de entrenamiento: generar pytorch-parity-reference.json'
+        working-directory: ai
+        run: |
+          uv run nexus-combat-parity-reference \
+            --artifact-dir "${{ env.run_dir }}" \
+            --output "${{ env.run_dir }}/pytorch-parity-reference.json"
+
       - name: Publicar artefactos del smoke de entrenamiento
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-mlp-v1-smoke
           path: ${{ env.run_dir }}
+          retention-days: 7
+
+      # EN-037.3 (#572): fixture de INGENIERIA aislado para probar el flujo
+      # CANDIDATE -> evaluacion real -> PASS/FAIL -> ACTIVE/REJECTED. Usa el
+      # dataset sintetico de CI y por eso NUNCA se publica ni cuenta como
+      # evidencia competitiva; solo vive como artifact efimero de este run.
+      - name: 'E2E EN-037.3: entrenar CANDIDATE sintetico aislado'
+        working-directory: ai
+        run: |
+          uv run nexus-combat-train \
+            --dataset-dir /tmp/ai-training-dataset-ci \
+            --output /tmp/ai-en037-candidate-artifacts-ci \
+            --source-commit "${{ github.sha }}-synthetic-en037-e2e" \
+            --seed 43 \
+            --artifact-purpose CANDIDATE
+          candidate_run_dir="$(find /tmp/ai-en037-candidate-artifacts-ci -mindepth 1 -maxdepth 1 -type d)"
+          echo "candidate_run_dir=${candidate_run_dir}" >> "$GITHUB_ENV"
+          uv run nexus-combat-parity-reference \
+            --artifact-dir "${candidate_run_dir}" \
+            --output "${candidate_run_dir}/pytorch-parity-reference.json"
+
+      - name: Publicar CANDIDATE sintetico aislado para E2E EN-037.3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-mlp-v1-en037-e2e
+          path: ${{ env.candidate_run_dir }}
+          retention-days: 1
+
+  ai-evaluation-smoke:
+    name: Evaluacion de politicas de IA (smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [quality, ai-pipeline]
+
+    # EN-036.5 (#569 §117-121, §164-165): harness OFFLINE, no necesita
+    # esperar al job `docker` (la compatibilidad Docker de onnxruntime-node
+    # ya la cubre #568) -- corre en paralelo. Smoke de INGENIERIA: pocas
+    # semillas, MCTS con rollouts reducidos (el propio CLI los baja cuando
+    # `--purpose SMOKE_TEST`), nunca evidencia de calidad (#569 §74, §119).
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Compilar el servicio
+        run: npm run build
+
+      - name: Descargar el artefacto SMOKE_TEST de ai-pipeline
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: candidate-mlp-v1-smoke
+          path: /tmp/neural-smoke-artifact
+
+      - name: Descargar el CANDIDATE aislado para E2E EN-037.3
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: candidate-mlp-v1-en037-e2e
+          path: /tmp/neural-candidate-e2e-artifact
+
+      # Paridad PyTorch<->ONNX + escenarios + los 6 matchups + reportes,
+      # con una muestra pequena -- el harness entero, no un subconjunto
+      # de su logica (#569 §118).
+      - name: Correr evaluacion SMOKE (paridad + mirror pairs + 4 politicas)
+        run: |
+          node dist/infrastructure/evaluation/run-ai-evaluation.js \
+            --artifact-dir /tmp/neural-smoke-artifact \
+            --output /tmp/evaluation-out-smoke \
+            --purpose SMOKE_TEST \
+            --seed-start 3000000 \
+            --seed-count 2 \
+            --mcts-seed-count 2 \
+            --max-plies 300 \
+            --allow-smoke-model
+
+      # #569 §79, §82, §186: misma config/modelo/seeds -> mismo
+      # matchesSha256. Se corre una SEGUNDA vez y se compara, en vez de
+      # confiar en que "deberia" ser determinista.
+      - name: Verificar reproducibilidad (correr de nuevo y comparar matchesSha256)
+        run: |
+          node dist/infrastructure/evaluation/run-ai-evaluation.js \
+            --artifact-dir /tmp/neural-smoke-artifact \
+            --output /tmp/evaluation-out-smoke-b \
+            --purpose SMOKE_TEST \
+            --seed-start 3000000 \
+            --seed-count 2 \
+            --mcts-seed-count 2 \
+            --max-plies 300 \
+            --allow-smoke-model
+          hash_a="$(node -p "require('/tmp/evaluation-out-smoke/summary.json').fingerprints.matchesSha256")"
+          hash_b="$(node -p "require('/tmp/evaluation-out-smoke-b/summary.json').fingerprints.matchesSha256")"
+          echo "matchesSha256 A=${hash_a} B=${hash_b}"
+          [ "$hash_a" = "$hash_b" ]
+
+      - name: E2E EN-037.3 (registry, harness real, gates y activacion/rechazo)
+        env:
+          AI_EN037_E2E_ARTIFACT_DIR: /tmp/neural-candidate-e2e-artifact
+        run: npm run test:e2e:en-037
+
+      - name: Publicar reporte de evaluacion (smoke)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ai-evaluation-smoke
+          path: /tmp/evaluation-out-smoke/
           retention-days: 7
 
   docker:
@@ -223,10 +348,20 @@ jobs:
 
       # Este job solo construye y verifica. Publicar es trabajo de `publish`, que
       # solo se ejecuta desde `main` y depende de que este termine en verde.
+      # `target: runtime` explicito (revision de codigo, #573): el
+      # `Dockerfile` ahora tiene una etapa `trainer` DESPUES de `runtime`
+      # (EN-037.4). Sin `target:`, Docker construye la ULTIMA etapa del
+      # fichero por defecto -- antes de #573 eso coincidia con `runtime`
+      # porque era la unica/ultima etapa; ahora, sin esta linea, este paso
+      # construiria SILENCIOSAMENTE la imagen del trainer y la arrancaria
+      # como si fuera el servidor HTTP (confirmado: asi fallaba el CI real
+      # de este PR -- `combat-ci` arrancaba `continuous-training-worker.js`
+      # en vez de `main.js`, y moria al no encontrar `git`/`--source-commit`).
       - name: Construir imagen
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          target: runtime
           push: false
           load: true
           tags: nexus-battle-combat:ci
@@ -339,6 +474,85 @@ jobs:
           docker network rm combat-ci > /dev/null
           [ "$status" = "503" ]
 
+      # EN-037.4 (Management #573 §5, §14-A): la imagen `trainer` (Node +
+      # Python/uv/PyTorch CPU, ver Dockerfile etapa 5) construye y corre
+      # aparte de la imagen `runtime` de arriba -- el evaluador automatico
+      # reutiliza `runtime` sin cambios (nunca necesita Python, ver
+      # comentario de la etapa `trainer`).
+      - name: Construir imagen del trainer
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: trainer
+          push: false
+          load: true
+          tags: nexus-battle-combat-trainer:ci
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=trainer
+          cache-to: type=gha,mode=max,scope=trainer
+
+      # Verificacion REAL (#573 §5.3), no solo "el build termino": importar
+      # torch/numpy/onnx/onnxscript/pymongo dentro del contenedor -- si el
+      # `uv.lock` resuelto no tuviera wheel compatible, esto falla aqui,
+      # nunca despues del merge.
+      - name: Verificar PyTorch CPU dentro de la imagen del trainer
+        run: |
+          docker run --rm nexus-battle-combat-trainer:ci \
+            uv run --project ai python -c "
+          import torch, numpy, onnx, onnxscript, pymongo, platform
+          assert torch.cuda.is_available() is False
+          print('torch', torch.__version__, platform.machine())
+          "
+
+      # ARM64 real (#573 §5.1, §14.3): Graviton es linux/arm64. Este
+      # repositorio restringe las Actions permitidas a una lista explicita
+      # (`actions/*`, `docker/setup-buildx-action@*`, `docker/build-push-action@*`
+      # -- `repos/.../actions/permissions/selected-actions`), que NO incluye
+      # `docker/setup-qemu-action`. Sin ese registro de binfmt_misc en el
+      # runner, `docker run --platform linux/arm64 <imagen>` (ejecutar de
+      # verdad un binario arm64) no es viable desde este workflow -- por
+      # eso esta verificacion se limita a CONSTRUIR para `linux/arm64`
+      # (que `buildx`/BuildKit YA resuelve sin `setup-qemu-action`, igual
+      # que el job `publish` de abajo construye `linux/amd64,linux/arm64`
+      # sin esa accion desde antes de esta Task) -- nunca a ejecutar el
+      # binario resultante.
+      #
+      # La verificacion de EJECUCION real (import de torch + forward pass,
+      # `onnxruntime-node` cargando su binding nativo) bajo `linux/arm64`
+      # SI se hizo, pero localmente (Docker Desktop con QEMU), no en este
+      # CI -- ver `docs/evidence/en-037-4-ai-deployment/architecture-compatibility.md`
+      # del PR de Infrastructure para esa evidencia completa. Si se quiere
+      # repetir esa verificacion de ejecucion DENTRO de este CI, hay que
+      # anadir primero `docker/setup-qemu-action@<sha-verificado>` a la
+      # lista de Actions permitidas del repositorio (configuracion de
+      # repositorio, fuera del alcance de este PR).
+      - name: Construir imagen del trainer para ARM64 (solo build, sin ejecutar)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: trainer
+          platforms: linux/arm64
+          push: false
+          load: false
+          tags: nexus-battle-combat-trainer:ci-arm64
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=trainer-arm64
+          cache-to: type=gha,mode=max,scope=trainer-arm64
+
+      - name: Construir imagen runtime para ARM64 (solo build, sin ejecutar)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: runtime
+          platforms: linux/arm64
+          push: false
+          load: false
+          tags: nexus-battle-combat:ci-arm64
+          cache-from: type=gha,scope=runtime-arm64
+          cache-to: type=gha,mode=max,scope=runtime-arm64
+
   publish:
     name: Publicar imagen en GHCR
     runs-on: ubuntu-latest
@@ -385,6 +599,7 @@ jobs:
           COMMIT: ${{ github.sha }}
         run: |
           imagen="ghcr.io/$(echo "$PROPIETARIO" | tr '[:upper:]' '[:lower:]')/nexus-battle-combat"
+          imagen_trainer="${imagen}-trainer"
           version="$(node -p "require('./package.json').version")"
           {
             echo 'lista<<FIN'
@@ -393,15 +608,30 @@ jobs:
             echo "${imagen}:${version}"
             echo 'FIN'
           } >> "$GITHUB_OUTPUT"
+          {
+            echo 'lista_trainer<<FIN'
+            echo "${imagen_trainer}:latest"
+            echo "${imagen_trainer}:sha-${COMMIT:0:12}"
+            echo "${imagen_trainer}:${version}"
+            echo 'FIN'
+          } >> "$GITHUB_OUTPUT"
 
       # Se reconstruye desde el mismo commit y con la misma cache que el job
       # anterior, asi que el trabajo real es un acierto de cache. Lo que
       # garantiza que se publica algo comprobado no es la cache, sino
       # `needs: docker`: sin ese job en verde, este no llega a ejecutarse.
+      # `target: runtime` explicito (revision de codigo, #573): mismo
+      # motivo critico que en el job `docker` de arriba -- sin esto, este
+      # paso PUBLICARIA la imagen del trainer (Python/PyTorch,
+      # `CMD ["node","dist/infrastructure/training/continuous-training-worker.js"]`)
+      # bajo el nombre del servicio principal (`nexus-battle-combat:latest`),
+      # reemplazando el servidor HTTP real de Combat en produccion por el
+      # worker de entrenamiento.
       - name: Construir y publicar
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          target: runtime
           push: true
           # Los nodos de la demo son Graviton: `t4g.small` es arm64. Sin esta
           # linea la imagen sale solo para amd64 y el nodo la rechaza con
@@ -413,3 +643,21 @@ jobs:
           tags: ${{ steps.etiquetas.outputs.lista }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # EN-037.4 (Management #573 §6, §14.3): la imagen del trainer se
+      # publica APARTE, con su propio nombre (`nexus-battle-combat-trainer`)
+      # -- nunca como un tag distinto de la misma imagen runtime, para que
+      # Infrastructure pueda referenciarla sin arrastrar PyTorch a un
+      # despliegue que solo necesita el runtime HTTP.
+      - name: Construir y publicar imagen del trainer
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          target: trainer
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.etiquetas.outputs.lista_trainer }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=trainer
+          cache-to: type=gha,mode=max,scope=trainer

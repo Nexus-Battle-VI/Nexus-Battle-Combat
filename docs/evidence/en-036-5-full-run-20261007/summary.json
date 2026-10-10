@@ -1,0 +1,373 @@
+{
+  "evaluationConfigVersion": "evaluation-config-v1",
+  "evaluationId": "eval-abedfca1f7da-FULL_EVALUATION-seed3000000x50",
+  "evaluationPurpose": "FULL_EVALUATION",
+  "fingerprints": {
+    "evaluationConfigSha256": "5782508f1b9817859d8347072eac0d8ceac9722d4c5c7d44c6e413f24db94f60",
+    "matchesSha256": "b23bd12581d9cca3807f1b8909f23245911b009690c3876e17a67549fcb45580",
+    "seedSetSha256": "237123b8a33e3097be7d2516dedb29b8c03b6da991676647a1ecc7e4201865cc"
+  },
+  "globalEngineRejections": 0,
+  "globalInvalidPolicySelections": 0,
+  "matchupSummary": [
+    {
+      "byScenario": [
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 50,
+          "n": 100,
+          "scenarioId": "basic-attack-mirror",
+          "secondPolicyWins": 50
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 98,
+          "n": 100,
+          "scenarioId": "epic-vs-offensive",
+          "secondPolicyWins": 2
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 99,
+          "n": 100,
+          "scenarioId": "offensive-abilities",
+          "secondPolicyWins": 1
+        },
+        {
+          "draws": 0,
+          "failures": 57,
+          "firstPolicyWins": 43,
+          "n": 100,
+          "scenarioId": "support-vs-offensive",
+          "secondPolicyWins": 0
+        }
+      ],
+      "draws": 0,
+      "failures": 57,
+      "firstPolicy": "RANDOM",
+      "firstPolicyWins": 290,
+      "matchupId": "RANDOM_vs_RULE_BASED",
+      "n": 400,
+      "secondPolicy": "RULE_BASED",
+      "secondPolicyWins": 53,
+      "skippedForCost": false
+    },
+    {
+      "byScenario": [
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 8,
+          "n": 16,
+          "scenarioId": "basic-attack-mirror",
+          "secondPolicyWins": 8
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 9,
+          "n": 16,
+          "scenarioId": "epic-vs-offensive",
+          "secondPolicyWins": 7
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 12,
+          "n": 16,
+          "scenarioId": "offensive-abilities",
+          "secondPolicyWins": 4
+        },
+        {
+          "draws": 0,
+          "failures": 8,
+          "firstPolicyWins": 8,
+          "n": 16,
+          "scenarioId": "support-vs-offensive",
+          "secondPolicyWins": 0
+        }
+      ],
+      "draws": 0,
+      "failures": 8,
+      "firstPolicy": "MCTS",
+      "firstPolicyWins": 37,
+      "matchupId": "MCTS_vs_RANDOM",
+      "n": 64,
+      "secondPolicy": "RANDOM",
+      "secondPolicyWins": 19,
+      "skippedForCost": false
+    },
+    {
+      "byScenario": [
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 8,
+          "n": 16,
+          "scenarioId": "basic-attack-mirror",
+          "secondPolicyWins": 8
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 16,
+          "n": 16,
+          "scenarioId": "epic-vs-offensive",
+          "secondPolicyWins": 0
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 16,
+          "n": 16,
+          "scenarioId": "offensive-abilities",
+          "secondPolicyWins": 0
+        },
+        {
+          "draws": 0,
+          "failures": 8,
+          "firstPolicyWins": 8,
+          "n": 16,
+          "scenarioId": "support-vs-offensive",
+          "secondPolicyWins": 0
+        }
+      ],
+      "draws": 0,
+      "failures": 8,
+      "firstPolicy": "MCTS",
+      "firstPolicyWins": 48,
+      "matchupId": "MCTS_vs_RULE_BASED",
+      "n": 64,
+      "secondPolicy": "RULE_BASED",
+      "secondPolicyWins": 8,
+      "skippedForCost": false
+    },
+    {
+      "byScenario": [
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 50,
+          "n": 100,
+          "scenarioId": "basic-attack-mirror",
+          "secondPolicyWins": 50
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 16,
+          "n": 100,
+          "scenarioId": "epic-vs-offensive",
+          "secondPolicyWins": 84
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 46,
+          "n": 100,
+          "scenarioId": "offensive-abilities",
+          "secondPolicyWins": 54
+        },
+        {
+          "draws": 0,
+          "failures": 9,
+          "firstPolicyWins": 48,
+          "n": 100,
+          "scenarioId": "support-vs-offensive",
+          "secondPolicyWins": 43
+        }
+      ],
+      "draws": 0,
+      "failures": 9,
+      "firstPolicy": "NEURAL",
+      "firstPolicyWins": 160,
+      "matchupId": "NEURAL_vs_RANDOM",
+      "n": 400,
+      "secondPolicy": "RANDOM",
+      "secondPolicyWins": 231,
+      "skippedForCost": false
+    },
+    {
+      "byScenario": [
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 50,
+          "n": 100,
+          "scenarioId": "basic-attack-mirror",
+          "secondPolicyWins": 50
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 57,
+          "n": 100,
+          "scenarioId": "epic-vs-offensive",
+          "secondPolicyWins": 43
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 77,
+          "n": 100,
+          "scenarioId": "offensive-abilities",
+          "secondPolicyWins": 23
+        },
+        {
+          "draws": 0,
+          "failures": 52,
+          "firstPolicyWins": 48,
+          "n": 100,
+          "scenarioId": "support-vs-offensive",
+          "secondPolicyWins": 0
+        }
+      ],
+      "draws": 0,
+      "failures": 52,
+      "firstPolicy": "NEURAL",
+      "firstPolicyWins": 232,
+      "matchupId": "NEURAL_vs_RULE_BASED",
+      "n": 400,
+      "secondPolicy": "RULE_BASED",
+      "secondPolicyWins": 116,
+      "skippedForCost": false
+    },
+    {
+      "byScenario": [
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 8,
+          "n": 16,
+          "scenarioId": "basic-attack-mirror",
+          "secondPolicyWins": 8
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 4,
+          "n": 16,
+          "scenarioId": "epic-vs-offensive",
+          "secondPolicyWins": 12
+        },
+        {
+          "draws": 0,
+          "failures": 0,
+          "firstPolicyWins": 3,
+          "n": 16,
+          "scenarioId": "offensive-abilities",
+          "secondPolicyWins": 13
+        },
+        {
+          "draws": 0,
+          "failures": 7,
+          "firstPolicyWins": 1,
+          "n": 16,
+          "scenarioId": "support-vs-offensive",
+          "secondPolicyWins": 8
+        }
+      ],
+      "draws": 0,
+      "failures": 7,
+      "firstPolicy": "NEURAL",
+      "firstPolicyWins": 16,
+      "matchupId": "NEURAL_vs_MCTS",
+      "n": 64,
+      "secondPolicy": "MCTS",
+      "secondPolicyWins": 41,
+      "skippedForCost": false
+    }
+  ],
+  "model": {
+    "artifactPurpose": "SMOKE_TEST",
+    "featureSchemaVersion": "feature-schema-v1",
+    "modelArchitectureVersion": "candidate-mlp-v1",
+    "modelStateSha256": "32514bb6c0d6841d9696e541b24a64ca00d6ccd103d5834bb7ad588b98195257",
+    "onnxArtifactSha256": "de910cb74921f9484b21452ba6e64998f71e26f77c07109955c715509397f9a9"
+  },
+  "parity": {
+    "argmaxAgreement": 1,
+    "atol": 0.00001,
+    "cases": 2,
+    "maxAbsoluteError": 1.4901161193847656e-8,
+    "maxRelativeError": 2.8364362646034805e-7,
+    "meanAbsoluteError": 7.450580596923828e-9,
+    "passed": true,
+    "rtol": 0.00001,
+    "scoresCompared": 4
+  },
+  "policySummary": [
+    {
+      "avgDamageDealt": 46.739644970414204,
+      "avgHealthRemainingRatio": 0.49489053254437876,
+      "avgPlies": 20.11242603550296,
+      "avgPowerRemaining": 6.413223140495868,
+      "avgTurnsCompleted": 21.11242603550296,
+      "battles": 192,
+      "completedBattles": 169,
+      "draws": 0,
+      "failures": 23,
+      "failuresCaused": 23,
+      "losses": 43,
+      "policyId": "MCTS",
+      "winRate": 0.7455621301775148,
+      "wins": 126
+    },
+    {
+      "avgDamageDealt": 60.027638190954775,
+      "avgHealthRemainingRatio": 0.26487525125628136,
+      "avgPlies": 45.00879396984924,
+      "avgPowerRemaining": 5.2172413793103445,
+      "avgTurnsCompleted": 46.00879396984924,
+      "battles": 864,
+      "completedBattles": 796,
+      "draws": 0,
+      "failures": 68,
+      "failuresCaused": 0,
+      "losses": 388,
+      "policyId": "NEURAL",
+      "winRate": 0.5125628140703518,
+      "wins": 408
+    },
+    {
+      "avgDamageDealt": 86.85316455696203,
+      "avgHealthRemainingRatio": 0.4128589873417722,
+      "avgPlies": 46.675949367088606,
+      "avgPowerRemaining": 4.958188153310105,
+      "avgTurnsCompleted": 47.675949367088606,
+      "battles": 864,
+      "completedBattles": 790,
+      "draws": 0,
+      "failures": 74,
+      "failuresCaused": 0,
+      "losses": 250,
+      "policyId": "RANDOM",
+      "winRate": 0.6835443037974683,
+      "wins": 540
+    },
+    {
+      "avgDamageDealt": 24.29718875502008,
+      "avgHealthRemainingRatio": 0.06897282463186077,
+      "avgPlies": 43.44310575635877,
+      "avgPowerRemaining": 10,
+      "avgTurnsCompleted": 44.44310575635877,
+      "battles": 864,
+      "completedBattles": 747,
+      "draws": 0,
+      "failures": 117,
+      "failuresCaused": 0,
+      "losses": 570,
+      "policyId": "RULE_BASED",
+      "winRate": 0.23694779116465864,
+      "wins": 177
+    }
+  ],
+  "scenarioVersion": "evaluation-scenarios-v1",
+  "sourceCommit": "abedfca1f7dae0bc4d6c98cac8e5200ccec97108",
+  "summarySchemaVersion": "evaluation-summary-v1",
+  "totalMatches": 1392,
+  "totalMirrorPairs": 696
+}

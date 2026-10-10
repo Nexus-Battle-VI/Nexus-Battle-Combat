@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import math
 import platform
 import random
@@ -120,6 +121,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument(
+        "--emit-identity-only",
+        action="store_true",
+        help="Calcula y escribe en stdout {runId, trainingConfigSha256, "
+        "datasetOutputFingerprint} como JSON, SIN entrenar (EN-037.2, "
+        "Management #571): permite a un coordinador registrar TRAINING en "
+        "el Model Registry de EN-037.1 ANTES de ejecutar PyTorch, "
+        "reutilizando EXACTAMENTE el mismo calculo de identidad que el "
+        "entrenamiento real (_run_id + TrainingConfig.fingerprint) en vez "
+        "de duplicarlo en TypeScript.",
+    )
+    parser.add_argument(
         "--artifact-purpose",
         choices=_ARTIFACT_PURPOSES,
         default=ARTIFACT_PURPOSE_SMOKE_TEST,
@@ -159,6 +171,20 @@ def _run(args: argparse.Namespace, source_commit: str) -> int:
     bundle = load_frozen_dataset(args.dataset_dir)
     config = TrainingConfig(seed=args.seed)
     training_config_sha256 = config.fingerprint()
+
+    if args.emit_identity_only:
+        dataset_output_fingerprint = bundle.manifest["outputFingerprint"]
+        run_id = _run_id(dataset_output_fingerprint, training_config_sha256, args.seed)
+        print(
+            json.dumps(
+                {
+                    "runId": run_id,
+                    "trainingConfigSha256": training_config_sha256,
+                    "datasetOutputFingerprint": dataset_output_fingerprint,
+                }
+            )
+        )
+        return 0
 
     encoder = FeatureEncoder()
     train_loader = _build_loader(

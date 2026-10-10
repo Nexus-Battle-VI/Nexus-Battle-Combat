@@ -92,6 +92,60 @@ def test_full_pipeline_produces_all_artifacts(tmp_path: Path) -> None:
         assert key in metrics["test"]
 
 
+def test_emit_identity_only_matches_the_real_training_run_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """EN-037.2 (#571): el coordinador llama `--emit-identity-only` ANTES de
+    entrenar para registrar TRAINING en el Model Registry sin duplicar el
+    calculo de identidad en TypeScript -- debe coincidir EXACTAMENTE con lo
+    que produce el entrenamiento real para el mismo dataset/seed."""
+    dataset_dir = _frozen_dataset(tmp_path)
+
+    exit_code = main(
+        [
+            "--dataset-dir",
+            str(dataset_dir),
+            "--output",
+            str(tmp_path / "unused"),
+            "--source-commit",
+            "c",
+            "--seed",
+            "55",
+            "--emit-identity-only",
+        ]
+    )
+    assert exit_code == 0
+    identity = json.loads(capsys.readouterr().out)
+    assert set(identity) == {"runId", "trainingConfigSha256", "datasetOutputFingerprint"}
+
+    # `--emit-identity-only` nunca escribe nada en `--output`.
+    assert not (tmp_path / "unused").exists()
+
+    artifacts_dir = tmp_path / "artifacts"
+    assert (
+        main(
+            [
+                "--dataset-dir",
+                str(dataset_dir),
+                "--output",
+                str(artifacts_dir),
+                "--source-commit",
+                "c",
+                "--seed",
+                "55",
+            ]
+        )
+        == 0
+    )
+    run_dir = next(artifacts_dir.iterdir())
+    manifest = json.loads((run_dir / "training-manifest.json").read_bytes())
+
+    assert run_dir.name == identity["runId"]
+    assert manifest["trainingConfigSha256"] == identity["trainingConfigSha256"]
+    dataset_manifest = json.loads((dataset_dir / "manifest.json").read_bytes())
+    assert dataset_manifest["outputFingerprint"] == identity["datasetOutputFingerprint"]
+
+
 def test_artifact_purpose_can_be_marked_candidate(tmp_path: Path) -> None:
     dataset_dir = _frozen_dataset(tmp_path)
     artifacts_dir = tmp_path / "artifacts"

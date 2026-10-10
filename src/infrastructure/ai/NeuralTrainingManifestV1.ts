@@ -62,21 +62,26 @@ export const toNeuralModelDescriptor = (
   artifactPurpose: manifest.artifactPurpose,
 })
 
-const fail = (reason: string): never => {
+/**
+ * Primitivas de parseo reutilizadas por `AiModelTrainingManifestV1.ts`
+ * (EN-037.1, Management #570 §36): una sola autoridad de "como se lee un
+ * campo de este manifest", nunca copiada a un segundo archivo.
+ */
+export const fail = (reason: string): never => {
   throw new NeuralModelSchemaMismatchError(reason)
 }
 
-const requireString = (value: unknown, field: string): string => {
+export const requireString = (value: unknown, field: string): string => {
   if (typeof value !== 'string' || value === '') fail(`"${field}" debe ser texto no vacio.`)
   return value as string
 }
 
-const requireNumber = (value: unknown, field: string): number => {
+export const requireNumber = (value: unknown, field: string): number => {
   if (typeof value !== 'number' || !Number.isFinite(value)) fail(`"${field}" debe ser numerico.`)
   return value as number
 }
 
-const requireBoolean = (value: unknown, field: string): boolean => {
+export const requireBoolean = (value: unknown, field: string): boolean => {
   if (typeof value !== 'boolean') fail(`"${field}" debe ser booleano.`)
   return value as boolean
 }

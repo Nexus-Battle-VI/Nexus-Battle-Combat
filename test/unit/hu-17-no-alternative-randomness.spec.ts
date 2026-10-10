@@ -99,6 +99,31 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
     // `NeuralModelArtifactLoader.ts` (EN-036.4, #568) hashea `model.onnx` para
     // verificar su integridad contra `onnxArtifactSha256` -- verificacion de
     // artefacto, no una fuente de aleatoriedad ni de decision de juego.
+    // `evaluation/canonical/CanonicalJson.ts` (EN-036.5, #569) hashea JSON
+    // canonico para fingerprints de reproducibilidad,
+    // `evaluation/experiment/EvaluationSeedSchedule.ts` deriva semillas
+    // deterministas via SHA-256 (nunca RNG), y
+    // `evaluation/battle/EvaluationBattleFactory.ts` deriva el UUID v4 de
+    // `BattleRoomId` a partir de un string determinista (nunca
+    // `crypto.randomUUID()`, que romperia la reproducibilidad), y
+    // `evaluation/battle/AcceleratedBattleRunner.ts` resume
+    // `evaluationId:matchId` a un prefijo corto de `commandId` (el motor
+    // exige <= 100 caracteres, #569 §43) -- las cuatro son del harness
+    // OFFLINE de evaluacion, nunca tocan una batalla real ni su RNG, y
+    // `application/services/AiModelRegistry.ts` (EN-037.1, #570 §34)
+    // hashea bytes de artifact/metricas ya recibidos para comprobar su
+    // integridad contra el manifest, y
+    // `infrastructure/training/ContinuousTrainingPipeline.ts` (EN-037.2,
+    // #571 §6.1) deriva un `ownerId` unico de lease con `randomBytes` --
+    // identificador tecnico de propietario de un worker standalone, nunca
+    // una fuente de aleatoriedad del motor ni una decision de juego;
+    // `automatic-evaluation-worker.ts` (#572) usa `randomUUID` con la misma
+    // finalidad exclusiva de ownership, y el E2E de #572 usa SHA-256 para
+    // comprobar integridad de la referencia de paridad temporal. El E2E de
+    // #574 (EN-037.5) usa SHA-256 con el mismo proposito: calcular el hash
+    // REAL de un artefacto ONNX deliberadamente invalido para el fixture de
+    // resiliencia de #574 §13 (nunca mentirle el hash a `AiModelRegistry`,
+    // nunca una fuente de azar).
     expect(users).toEqual([
       'adapters/outbound/http/inventory-grant-operation-id.ts',
       'adapters/outbound/identity/internal-signature.ts',
@@ -106,7 +131,16 @@ describe('HU-17 no usa otra fuente de aleatoriedad ni conoce el motor (RF-17)', 
       'adapters/outbound/system/HmacMissionSeedFactory.ts',
       'adapters/outbound/system/Sha256CommandIdFingerprint.ts',
       'adapters/outbound/system/UuidGenerator.ts',
+      'application/services/AiModelRegistry.ts',
+      'evaluation/battle/AcceleratedBattleRunner.ts',
+      'evaluation/battle/EvaluationBattleFactory.ts',
+      'evaluation/canonical/CanonicalJson.ts',
+      'evaluation/experiment/EvaluationSeedSchedule.ts',
       'infrastructure/ai/NeuralModelArtifactLoader.ts',
+      'infrastructure/evaluation/automatic-evaluation-worker.ts',
+      'infrastructure/evaluation/verify-automatic-model-promotion-e2e.ts',
+      'infrastructure/evaluation/verify-continuous-learning-e2e.ts',
+      'infrastructure/training/ContinuousTrainingPipeline.ts',
     ])
   })
 
