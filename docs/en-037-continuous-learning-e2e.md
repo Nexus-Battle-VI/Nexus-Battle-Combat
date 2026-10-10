@@ -227,18 +227,20 @@ MctsTeacherLabel`/`CombatDecisionEvent` se persisten de forma asíncrona
    stacks presentes, exactamente la combinación que #574 exige. Corregido:
    la aserción ahora compara contra el cutoff real (`finishedAt +
 gracePeriodMs`), documentado inline.
-2. **Guardas arquitectónicas estáticas de HU-21/HU-17**
-   (`test/unit/hu-21-finish-guards.spec.ts`,
-   `test/unit/hu-17-no-alternative-randomness.spec.ts`): el nuevo script de
-   #574 necesitaba una `BattleRoom` ya cerrada (para que el pipeline tenga un
-   `finishedAt` del que avanzar su watermark) y SHA-256 real (para el
-   fixture de ONNX inválido de §7). En vez de construirla a mano en `src/`
-   (lo que habría violado la invariante "el cierre del agregado solo se
-   invoca desde `BattleRoom.ts`"), el script reutiliza el fixture
-   `finishedRoom()` ya existente en `test/fixtures/battle.ts` — exactamente
-   el mismo patrón que `continuous-training-worker-e2e.spec.ts` ya usa. El
-   nuevo archivo se añadió a la lista explícita y documentada de usos
-   legítimos de `node:crypto` (hashing de integridad, nunca una fuente de
+2. **`nest build` con `rootDir: src`** (descubierto al abrir el PR, CI falló
+   con `TS6059`): un primer intento reutilizaba el fixture `finishedRoom()`
+   de `test/fixtures/battle.ts` desde el script nuevo — válido para
+   `tsc --noEmit` y para Jest, pero `tsconfig.build.json` prohíbe que
+   cualquier archivo bajo `src/` importe algo fuera de `rootDir`. La
+   solución final construye la `BattleRoom` 1v1 mínima ya `FINISHED`
+   enteramente con dominio real (`BattleRoom.restore()`, el mismo método de
+   reconstrucción que usa `MongoBattleRoomRepository`, que solo valida forma
+   estructural) — nunca el método de cierre del agregado, respetando la
+   guarda de `test/unit/hu-21-finish-guards.spec.ts`, y nunca una
+   dependencia de `src/` hacia `test/`. El archivo se añadió a la lista
+   explícita y documentada de usos legítimos de `node:crypto` en
+   `test/unit/hu-17-no-alternative-randomness.spec.ts` (hashing de
+   integridad para el fixture de ONNX inválido de §7, nunca una fuente de
    azar), con la misma justificación que `verify-automatic-model-promotion-e2e.ts`
    ya tiene.
 

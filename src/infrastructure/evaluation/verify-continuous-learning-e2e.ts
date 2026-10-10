@@ -15,8 +15,12 @@ import { MongoBattleRoomRepository } from '../../adapters/outbound/persistence/M
 import { MongoContinuousTrainingCoordinatorRepository } from '../../adapters/outbound/persistence/MongoContinuousTrainingCoordinatorRepository'
 import type { ClockPort } from '../../application/ports/ClockPort'
 import { AiModelRegistry } from '../../application/services/AiModelRegistry'
+import { BattleRoom, type RestorableBattleRoomSnapshot } from '../../domain/entities/BattleRoom'
 import type { BattleDecisionState } from '../../domain/decision/BattleDecisionState'
 import type { LegalAction } from '../../domain/decision/LegalAction'
+import { ParticipantKind } from '../../domain/entities/Participant'
+import { BattleMode } from '../../domain/value-objects/BattleMode'
+import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import {
   createMongoClient,
   databaseOf,
@@ -29,20 +33,6 @@ import {
   type ContinuousTrainingPipelineDeps,
 } from '../../infrastructure/training/ContinuousTrainingPipeline'
 import { spawnChildProcess } from '../../infrastructure/training/ChildProcessRunner'
-// `finishedRoom`/`NOW` viven en `test/fixtures` (nunca en `src/`) a
-// proposito: la guarda estatica de HU-21 (`test/unit/hu-21-finish-guards.spec.ts`)
-// exige que el texto literal del metodo de cierre del agregado NUNCA
-// aparezca fuera de `BattleRoom.ts` en todo `src/` -- construir aqui una
-// sala terminada a mano lo violaria. Este script reutiliza el MISMO
-// fixture que ya usa `continuous-training-worker-e2e.spec.ts` (EN-037.2)
-// para el mismo proposito exacto (una `BattleRoom` cualquiera, ya cerrada,
-// solo para que el pipeline tenga un `finishedAt` del que avanzar su
-// watermark -- el dataset real nunca depende de su contenido).
-import {
-  finishedRoom,
-  silentLogger,
-  NOW as FIXTURE_FINISHED_AT,
-} from '../../../test/fixtures/battle'
 import { ActiveModelProvider } from '../ai/ActiveModelProvider'
 import { describeError } from '../observability/describe-error'
 import type { Logger } from '../observability/logger'
@@ -51,10 +41,120 @@ import { runAiEvaluation } from './run-ai-evaluation'
 
 const AI_DIR = resolve(__dirname, '../../../ai')
 const FIXTURES_DIR = join(AI_DIR, 'tests', 'fixtures', 'training')
-/** El instante exacto que usa internamente `finishedRoom()` (`test/fixtures/battle.ts`). */
-const FINISHED_AT = FIXTURE_FINISHED_AT
+const FINISHED_AT = new Date('2026-09-15T00:00:00.000Z')
 const NOW = new Date(FINISHED_AT.getTime() + 10_000)
 const fixedClock: ClockPort = { now: () => NOW }
+
+const silentLogger: Logger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+}
+
+/**
+ * Restaura (nunca "cierra": esta funcion jamas invoca el metodo de cierre
+ * del agregado, que la guarda estatica de HU-21,
+ * `test/unit/hu-21-finish-guards.spec.ts`, exige ver SOLO dentro de
+ * `BattleRoom.ts`) una `BattleRoom` 1v1 PVE minima ya en estado `FINISHED`,
+ * via `BattleRoom.restore()` -- el mismo metodo de reconstruccion desde
+ * persistencia que usa `MongoBattleRoomRepository`, que solo valida forma
+ * estructural ("los datos ya pasaron las reglas de negocio al escribirse").
+ * Exclusivamente para que el pipeline de EN-037.2 encuentre un `finishedAt`
+ * del que avanzar su watermark -- el dataset real nunca depende de su
+ * contenido, solo de `combat-decision-events`/`mcts-teacher-labels`
+ * (poblados por separado desde el fixture JSONL).
+ */
+const buildMinimalFinishedBattleRoom = (at: Date, finishedAt: Date): BattleRoom => {
+  const snapshot: RestorableBattleRoomSnapshot = {
+    id: '40000000-0000-4000-8000-000000000001',
+    mode: BattleMode.Pve,
+    status: BattleRoomStatus.Finished,
+    teams: [
+      {
+        label: 'A',
+        capacity: 1,
+        participants: [
+          {
+            kind: ParticipantKind.Human,
+            playerId: 'en037-5-e2e-player',
+            heroId: 'hero-en037-5-e2e-player',
+            displayName: 'EN-037.5 E2E',
+            joinedAt: at,
+          },
+        ],
+      },
+      {
+        label: 'B',
+        capacity: 1,
+        participants: [{ kind: ParticipantKind.Ai, heroId: 'en037-5-ai', joinedAt: at }],
+      },
+    ],
+    reward: { amount: 0 },
+    createdBy: 'en037-5-e2e',
+    createdAt: at,
+    version: 0,
+    battle: {
+      startedAt: at,
+      turnOrder: [
+        {
+          teamLabel: 'A',
+          seat: 0,
+          kind: ParticipantKind.Human,
+          playerId: 'en037-5-e2e-player',
+          displayName: 'EN-037.5 E2E',
+          heroId: 'hero-en037-5-e2e-player',
+          heroSubtype: null,
+        },
+        {
+          teamLabel: 'B',
+          seat: 0,
+          kind: ParticipantKind.Ai,
+          playerId: null,
+          displayName: null,
+          heroId: 'en037-5-ai',
+          heroSubtype: null,
+        },
+      ],
+      turnsCompleted: 0,
+      combatants: null,
+    },
+    result: {
+      reason: 'ELIMINATION',
+      outcome: 'WIN',
+      winnerTeamLabel: 'A',
+      finishedAt: finishedAt.toISOString(),
+      tiebreak: null,
+      disconnected: null,
+      teams: [
+        { teamLabel: 'A', remainingHealth: 1, maxHealth: 1, lifePercent: 100, eliminated: false },
+        { teamLabel: 'B', remainingHealth: 0, maxHealth: 1, lifePercent: 0, eliminated: true },
+      ],
+      participants: [
+        {
+          teamLabel: 'A',
+          seat: 0,
+          kind: ParticipantKind.Human,
+          playerId: 'en037-5-e2e-player',
+          displayName: 'EN-037.5 E2E',
+          heroId: 'hero-en037-5-e2e-player',
+          result: 'WON',
+        },
+        {
+          teamLabel: 'B',
+          seat: 0,
+          kind: ParticipantKind.Ai,
+          playerId: null,
+          displayName: null,
+          heroId: 'en037-5-ai',
+          result: 'LOST',
+        },
+      ],
+    },
+    tournament: null,
+  }
+  return BattleRoom.restore(snapshot)
+}
 
 const logger: Logger = {
   debug: () => undefined,
@@ -114,7 +214,10 @@ const trainRealCandidate = async (
   await db.collection('mcts-teacher-labels').insertMany(teacherLabels.map(toTeacherLabelDocument))
 
   const battleRooms = new MongoBattleRoomRepository(db)
-  await battleRooms.save(finishedRoom(), 0)
+  await battleRooms.save(
+    buildMinimalFinishedBattleRoom(new Date('2026-09-10T00:00:00.000Z'), FINISHED_AT),
+    0,
+  )
 
   const workRootDir = await mkdtemp(join(tmpdir(), 'en037-5-training-'))
   const registry = new AiModelRegistry(
