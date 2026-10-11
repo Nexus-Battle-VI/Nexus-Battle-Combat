@@ -286,6 +286,7 @@ describe('MctsSearch (teacher MCTS, EN-036.1)', () => {
       power: 10,
       health: 44,
       maxHealth: 44,
+      canAttack: true,
       enemyTarget: { scope: 'COMBATANT', combatant: { teamLabel: 'B', seat: 0 } },
     }
 

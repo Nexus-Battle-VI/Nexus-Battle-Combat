@@ -28,8 +28,8 @@ import type {
   BattleDecisionState,
   DecisionCombatant,
 } from '../../domain/decision/BattleDecisionState'
-import type { ActionIntent } from '../../domain/decision/ActionIntent'
 import type { LegalAction } from '../../domain/decision/LegalAction'
+import type { CombatDecisionSelection } from '../../domain/decision/CombatDecisionEvent'
 
 export interface MissionFighter {
   readonly maxHealth: number
@@ -128,7 +128,7 @@ export interface MissionSimulationResult {
 }
 
 interface ChosenAction {
-  readonly kind: 'BASIC_ATTACK' | 'ABILITY'
+  readonly kind: 'BASIC_ATTACK' | 'ABILITY' | 'END_TURN'
   readonly ability?: CombatAbility
   readonly strategy: MissionRotationStrategyTrace
 }
@@ -138,7 +138,7 @@ export interface MissionDecisionObservation {
   readonly decisionSequence: number
   readonly stateBefore: BattleDecisionState
   readonly legalActions: readonly LegalAction[]
-  readonly selectedAction: ActionIntent
+  readonly selectedAction: CombatDecisionSelection
 }
 
 export type MissionDecisionObserver = (decision: MissionDecisionObservation) => void
@@ -193,9 +193,10 @@ export const simulateMission = async (
   const random = createBoundedRandom(sequence)
   const rules: NonNullable<MissionSimulationRequest['rules']> = request.rules ?? DEFAULT_RULES
   const heroStats = request.hero.profile.effectiveStats
-  const supportHero = heroStats.attack === null || heroStats.damage === null
-  const heroAttack = heroStats.attack ?? rules.supportAttack ?? 10
-  const heroDamage = heroStats.damage ?? { mode: 'FIXED', amount: rules.supportDamage ?? 3 }
+  const canAttack = heroStats.attack !== null && heroStats.damage !== null
+  const supportHero = !canAttack
+  const heroAttack = heroStats.attack
+  const heroDamage = heroStats.damage
   const maxHealth = heroStats.health
   let health = maxHealth
   let power = heroStats.power
@@ -406,6 +407,7 @@ export const simulateMission = async (
       power,
       health,
       maxHealth,
+      canAttack,
       enemyTarget: MISSION_ENEMY_TARGET,
     })
     const state = buildDecisionState(
@@ -415,6 +417,17 @@ export const simulateMission = async (
       roundTurns,
       decisionSequence - 1,
     )
+    if (evaluation.legalActions.length === 0) {
+      const resolved = Object.freeze({ kind: 'END_TURN' as const })
+      observeDecision?.({
+        decisionSequence,
+        stateBefore: state,
+        legalActions: evaluation.legalActions,
+        selectedAction: resolved,
+      })
+      return { kind: 'END_TURN', strategy: evaluation.resolve(resolved) }
+    }
+
     const intent = await decisionPolicy.decide(state, evaluation.legalActions)
     const resolved = resolveLegalAction(intent, evaluation.legalActions)
     observeDecision?.({
@@ -545,7 +558,7 @@ export const simulateMission = async (
       const action = await chooseAction(enemy, enemyHealth, enemyModifiers, turns, totalTurns)
       let attackBonus = 0
       let damageBonus = 0
-      let attacks = true
+      let attacks = action.kind === 'BASIC_ATTACK'
       let powerSpent = 0
       const effects: Readonly<Record<string, unknown>>[] = []
       if (action.kind === 'ABILITY' && action.ability !== undefined) {
@@ -574,6 +587,9 @@ export const simulateMission = async (
       let dealt = 0
       let critical = false
       if (attacks && enemyHealth > 0) {
+        if (heroAttack === null || heroDamage === null) {
+          throw new NoLegalDecisionActionsError()
+        }
         hit =
           heroAttack + attackBonus + modifierOf(heroModifiers, 'ATTACK') + roll(20) >=
           enemy.defense + guard - modifierOf(enemyModifiers, 'DEFENSE') + 10

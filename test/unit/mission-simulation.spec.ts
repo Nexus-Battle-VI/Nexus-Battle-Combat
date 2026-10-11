@@ -7,6 +7,7 @@ import {
 } from '../../src/application/services/MissionSimulation'
 import type { CombatAbility } from '../../src/domain/entities/CombatProfile'
 import { RuleBasedPolicy } from '../../src/application/policies/RuleBasedPolicy'
+import type { AiDecisionPort } from '../../src/application/ports/AiDecisionPort'
 
 const fighter = (
   maxHealth: number,
@@ -239,6 +240,29 @@ describe('hero level multiplies the final damage result (HU-08 CA-06, option A)'
 })
 
 describe('rotation priority (HU-71 CA-02, CA-03)', () => {
+  it('offers only HIGH to any policy while HIGH is viable', async () => {
+    const request = duel(
+      [damageSkill('alta', 1), damageSkill('media', 1)],
+      [
+        { priority: 'HIGH', steps: [skill('alta')] },
+        { priority: 'MEDIUM', steps: [skill('media')] },
+      ],
+    )
+    const decide: jest.MockedFunction<AiDecisionPort['decide']> = jest.fn((_state, legalActions) =>
+      Promise.resolve(legalActions[0]!),
+    )
+    const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
+    const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
+
+    await simulateMission(request, seed, factory, { decide })
+
+    expect(decide).toHaveBeenCalled()
+    for (const [, legalActions] of decide.mock.calls) {
+      expect(legalActions).toHaveLength(1)
+      expect(legalActions[0]).toMatchObject({ kind: 'ABILITY', abilityId: 'alta' })
+    }
+  })
+
   it('D-2: when the high rotation lacks Power, the medium one acts', async () => {
     const actions = await heroActions(
       duel(
@@ -335,15 +359,8 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
       strategy: {
         rotation: 'MEDIUM',
         step: 1,
-        // Revisión de PR #71: MissionRotationConstraint evalúa TODAS las
-        // rotaciones (no se detiene en la primera viable), así que LOW
-        // también se reporta -- su propio paso ('embate-sangriento') sigue
-        // en recarga en este turno. La acción elegida no cambia: sigue
-        // siendo la de MEDIUM (RuleBasedPolicy toma la primera candidata).
-        skipped: [
-          { rotation: 'HIGH', step: 1, reason: 'ON_COOLDOWN' },
-          { rotation: 'LOW', step: 1, reason: 'ON_COOLDOWN' },
-        ],
+        // La prioridad es estricta: al encontrar MEDIUM viable, LOW no se evalua.
+        skipped: [{ rotation: 'HIGH', step: 1, reason: 'ON_COOLDOWN' }],
       },
     })
   })
@@ -414,6 +431,93 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
         fallback: true,
         skipped: [{ rotation: 'HIGH', step: 1, reason: 'UNKNOWN_ABILITY' }],
       },
+    })
+  })
+})
+
+describe('pure support mission turns (HU-71 PO clarification)', () => {
+  const supportRequest = (
+    abilities: readonly CombatAbility[],
+    rotations: readonly {
+      readonly priority: 'HIGH' | 'MEDIUM' | 'LOW'
+      readonly steps: readonly Step[]
+    }[],
+  ): MissionSimulationRequest => {
+    const request = duel(abilities, rotations)
+    return {
+      ...request,
+      operationId: `mission:support:${abilities.map((ability) => ability.abilityId).join('-')}`,
+      hero: {
+        ...request.hero,
+        profile: {
+          ...request.hero.profile,
+          subtype: 'MEDICO',
+          effectiveStats: {
+            ...request.hero.profile.effectiveStats,
+            health: 100,
+            attack: null,
+            damage: null,
+          },
+        },
+      },
+      encounters: [
+        {
+          index: 1,
+          kind: 'REGULAR',
+          powerStep: 0,
+          enemies: [
+            { enemyRef: 'dummy', name: 'Dummy', count: 1, profile: fighter(1000, 100, 0, 20) },
+          ],
+        },
+      ],
+      rules: { ...request.rules!, maxTurnsPerEncounter: 2, supportRegen: 0 },
+    }
+  }
+
+  it('ends the turn without invoking a policy or inventing basic attack/damage', async () => {
+    const request = supportRequest([], [])
+    const decide = jest.fn()
+    const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
+    const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
+    const result = await simulateMission(request, seed, factory, { decide })
+    const actions = result.combatLog.filter((event) => event.type === 'heroAction')
+
+    expect(decide).not.toHaveBeenCalled()
+    expect(actions).toHaveLength(2)
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: 'END_TURN', hit: false, damage: 0, attacked: false }),
+      ]),
+    )
+    expect(result.summary).toMatchObject({ damageDealt: 0, abilityDamage: 0, skillsUsed: [] })
+  })
+
+  it('uses a legal heal after damage, but never offers the offensive fallback', async () => {
+    const heal: CombatAbility = {
+      abilityId: 'curar',
+      name: 'curar',
+      powerCost: { mode: 'FIXED', amount: 1 },
+      chargeTurns: 1,
+      effects: [
+        {
+          kind: 'HEALING',
+          target: 'SELF',
+          magnitude: { mode: 'FIXED', amount: 30 },
+          hasActivationCondition: false,
+        },
+      ],
+    }
+    const request = supportRequest([heal], [{ priority: 'HIGH', steps: [skill('curar')] }])
+    const result = await logOf(request)
+    const actions = result.combatLog.filter((event) => event.type === 'heroAction')
+
+    expect(actions[0]).toMatchObject({ action: 'END_TURN', damage: 0, attacked: false })
+    expect(actions[1]).toMatchObject({
+      action: 'ABILITY',
+      abilityId: 'curar',
+      damage: 0,
+      attacked: false,
+      powerSpent: 1,
     })
   })
 })

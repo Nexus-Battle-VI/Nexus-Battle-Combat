@@ -54,7 +54,8 @@ export class RunMissionSimulation {
           decisionSequence: decision.decisionSequence,
           mode: BattleMode.Pve,
           actor: decision.stateBefore.actor.identity,
-          decisionSource: this.decisionPolicy.source,
+          decisionSource:
+            decision.selectedAction.kind === 'END_TURN' ? 'SYSTEM' : this.decisionPolicy.source,
           stateBefore: decision.stateBefore,
           legalActions: decision.legalActions,
           selectedAction: decision.selectedAction,
