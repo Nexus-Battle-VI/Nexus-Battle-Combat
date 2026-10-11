@@ -537,6 +537,7 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
             'powerCost',
             'status',
             'targetAudience',
+            'unlockLevel',
           ])
         }
       }
