@@ -125,4 +125,73 @@ describe('mission decision telemetry', () => {
     )
     expect(source).not.toMatch(/CombatDecisionRecorder|CombatDecisionTelemetryRepository/)
   })
+
+  it('records a pure-support turn with no legal action as SYSTEM END_TURN schema v2', async () => {
+    const supportOperationId = 'mission:telemetry-support-end-turn:simulate'
+    const supportRequest: MissionSimulationRequest = {
+      ...request,
+      operationId: supportOperationId,
+      hero: {
+        ...request.hero,
+        profile: {
+          ...request.hero.profile,
+          subtype: 'CHAMAN',
+          effectiveStats: {
+            ...request.hero.profile.effectiveStats,
+            attack: null,
+            damage: null,
+          },
+        },
+      },
+      encounters: [
+        {
+          index: 1,
+          kind: 'REGULAR',
+          powerStep: 0,
+          enemies: [
+            {
+              enemyRef: 'support-dummy',
+              name: 'Support dummy',
+              count: 1,
+              profile: {
+                maxHealth: 100,
+                attack: 100,
+                defense: 0,
+                damage: { mode: 'FIXED', amount: 100 },
+              },
+            },
+          ],
+        },
+      ],
+      rules: { ...request.rules!, maxTurnsPerEncounter: 1, supportRegen: 0 },
+    }
+    const intake = new InMemoryMissionSimulationIntakeRepository()
+    const telemetry = new InMemoryCombatDecisionTelemetryRepository()
+    const recorder = new CombatDecisionRecorder(
+      telemetry,
+      clock,
+      logger,
+      new Sha256CommandIdFingerprint(),
+    )
+    const requestHash = 'b'.repeat(64)
+    await intake.insertIfAbsent(supportOperationId, requestHash)
+    const useCase = new RunMissionSimulation(
+      intake,
+      sequences,
+      seeds,
+      { policy: new RuleBasedPolicy(), source: 'RULE_BASED' },
+      recorder,
+    )
+
+    await useCase.execute(supportRequest, requestHash)
+
+    await expect(telemetry.listDecisionsByBattle('MISSION', supportOperationId)).resolves.toEqual([
+      expect.objectContaining({
+        schemaVersion: 2,
+        decisionSource: 'SYSTEM',
+        legalActions: [],
+        selectedAction: { kind: 'END_TURN' },
+      }),
+    ])
+  })
 })

@@ -114,6 +114,7 @@ const baseInput = (overrides: {
   readonly power?: number
   readonly health?: number
   readonly maxHealth?: number
+  readonly canAttack?: boolean
   readonly cursors?: Map<number, number>
 }) => ({
   rotations: overrides.rotations,
@@ -123,6 +124,7 @@ const baseInput = (overrides: {
   power: overrides.power ?? 10,
   health: overrides.health ?? 100,
   maxHealth: overrides.maxHealth ?? 100,
+  canAttack: overrides.canAttack ?? true,
   enemyTarget: ENEMY_TARGET,
 })
 
@@ -141,7 +143,7 @@ describe('MissionRotationConstraint (EN-035.3, HU-71, revisión de PR #71)', () 
     ])
   })
 
-  it('MRC-02: several rotations viable at once are ALL offered, in priority order', () => {
+  it('MRC-02: only the first viable rotation is offered, enforcing strict priority', () => {
     const golpe = damageAbility('golpe')
     const barata = damageAbility('barata')
     const lento = damageAbility('lento')
@@ -158,8 +160,6 @@ describe('MissionRotationConstraint (EN-035.3, HU-71, revisión de PR #71)', () 
 
     expect(evaluation.legalActions).toEqual([
       { kind: 'ABILITY', abilityId: 'golpe', target: ENEMY_TARGET },
-      { kind: 'ABILITY', abilityId: 'barata', target: ENEMY_TARGET },
-      { kind: 'ABILITY', abilityId: 'lento', target: ENEMY_TARGET },
     ])
   })
 
@@ -223,7 +223,7 @@ describe('MissionRotationConstraint (EN-035.3, HU-71, revisión de PR #71)', () 
     expect(strategy.fallback).toBe(false)
   })
 
-  it('MRC-06: resolve() advances ONLY the cursor of the candidate actually selected', () => {
+  it('MRC-06: resolve() advances only the cursor of the strict-priority candidate', () => {
     const golpe = damageAbility('golpe')
     const barata = damageAbility('barata')
     const cursors = new Map<number, number>()
@@ -241,17 +241,16 @@ describe('MissionRotationConstraint (EN-035.3, HU-71, revisión de PR #71)', () 
       }),
     )
 
-    expect(evaluation.legalActions).toHaveLength(2)
+    expect(evaluation.legalActions).toEqual([
+      { kind: 'ABILITY', abilityId: 'golpe', target: ENEMY_TARGET },
+    ])
     expect(cursors.size).toBe(0)
 
-    // La política elige la candidata de MEDIUM, no la de HIGH (más prioritaria).
-    const mediumCandidate = evaluation.legalActions.find(
-      (action) => action.kind === 'ABILITY' && action.abilityId === 'barata',
-    )!
-    evaluation.resolve(mediumCandidate)
+    // La unica candidata ofrecida es la de HIGH.
+    evaluation.resolve(evaluation.legalActions[0]!)
 
-    expect(cursors.get(1)).toBe(1) // MEDIUM avanzó
-    expect(cursors.has(0)).toBe(false) // HIGH no avanzó aunque también era viable
+    expect(cursors.get(0)).toBe(1)
+    expect(cursors.has(1)).toBe(false)
   })
 
   it('MRC-07: a non-viable step keeps its rotation cursor (never advances on skip)', () => {
@@ -500,6 +499,48 @@ describe('MissionRotationConstraint (EN-035.3, HU-71, revisión de PR #71)', () 
       )
 
       expect(evaluation.legalActions).toEqual([{ kind: 'BASIC_ATTACK', target: ENEMY_TARGET }])
+    })
+  })
+
+  describe('MRC-11: pure support profiles never receive offensive actions', () => {
+    it('returns no legal action when only basic attack is available', () => {
+      const evaluation = new MissionRotationConstraint().evaluate(
+        baseInput({
+          canAttack: false,
+          rotations: [{ priority: 'HIGH', steps: [{ kind: 'BASIC_ATTACK' }] }],
+        }),
+      )
+
+      expect(evaluation.legalActions).toEqual([])
+      expect(evaluation.resolve({ kind: 'END_TURN' })).toEqual({
+        rotation: null,
+        step: null,
+        fallback: true,
+        skipped: [{ rotation: 'HIGH', step: 1, reason: 'OFFENSIVE_ACTION_NOT_AVAILABLE' }],
+      })
+    })
+
+    it('skips an offensive HIGH ability and offers a legal MEDIUM heal', () => {
+      const golpe = directDamageAbility('golpe')
+      const curar = healAbility('curar')
+      const evaluation = new MissionRotationConstraint().evaluate(
+        baseInput({
+          canAttack: false,
+          health: 50,
+          abilities: [golpe, curar],
+          rotations: [
+            { priority: 'HIGH', steps: [{ kind: 'ABILITY', abilityId: 'golpe' }] },
+            { priority: 'MEDIUM', steps: [{ kind: 'ABILITY', abilityId: 'curar' }] },
+          ],
+        }),
+      )
+
+      expect(evaluation.legalActions).toEqual([
+        { kind: 'ABILITY', abilityId: 'curar', target: SELF_TARGET },
+      ])
+      expect(evaluation.resolve(evaluation.legalActions[0]!).skipped).toEqual([
+        { rotation: 'HIGH', step: 1, reason: 'OFFENSIVE_ACTION_NOT_AVAILABLE' },
+      ])
     })
   })
 })
