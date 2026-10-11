@@ -256,6 +256,11 @@ const parseAbility = (value: unknown): EquippedHeroAbility => {
     powerCost: parsePowerCost(record.powerCost),
     chargeTurns: positiveInteger(record.chargeTurns),
     effects: record.effects.map(parseAbilityEffect),
+    // EN-031, aditivo: un Player-Inventory anterior no lo publica y la habilidad
+    // queda desbloqueada, como hasta ahora.
+    ...(record.unlockLevel === undefined
+      ? {}
+      : { unlockLevel: positiveInteger(record.unlockLevel) }),
   }
 }
 

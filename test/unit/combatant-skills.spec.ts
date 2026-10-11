@@ -8,6 +8,8 @@ import { NOW } from '../fixtures/battle'
 import {
   EMBATE,
   EMBATE_ID,
+  FOREST_SONG,
+  LIFE_TOUCH,
   REANIMATE,
   REANIMATE_ID,
   SHIELD_STRIKE,
@@ -285,7 +287,56 @@ describe('Combatant.toView — lo que ve el cliente (contrato §5.4)', () => {
       cooldownRemaining: 0,
       targetAudience: 'OPPONENT',
       status: 'READY',
+      unlockLevel: 1,
     })
+  })
+
+  it('EN-031: una habilidad cuyo nivel aun no llega se ve LOCKED con su nivel, aunque este en recarga', () => {
+    const view = Combatant.start(
+      KEY_A,
+      skillProfile({
+        level: 2,
+        abilities: [
+          { ...SHIELD_STRIKE, unlockLevel: 1 },
+          { ...EMBATE, unlockLevel: 3 },
+          { ...STONE_HAND, unlockLevel: 5 },
+        ],
+      }),
+    )
+      .withCooldown(EMBATE_ID, 1)
+      .toView()
+
+    expect(view.skills.map((skill) => [skill.name, skill.status, skill.unlockLevel])).toEqual([
+      ['Golpe con escudo', 'READY', 1],
+      ['Embate sangriento', 'LOCKED', 3],
+      ['Mano de piedra', 'LOCKED', 5],
+    ])
+  })
+
+  it('EN-031: al alcanzar el nivel la habilidad deja de estar LOCKED; sin nivel en el perfil cuenta como 1', () => {
+    const atLevel = Combatant.start(
+      KEY_A,
+      skillProfile({ level: 3, abilities: [{ ...EMBATE, unlockLevel: 3 }] }),
+    ).toView()
+    const noLevel = Combatant.start(
+      KEY_A,
+      skillProfile({ abilities: [{ ...EMBATE, unlockLevel: 3 }] }),
+    ).toView()
+
+    expect(atLevel.skills[0]?.status).toBe('READY')
+    expect(noLevel.skills[0]?.status).toBe('LOCKED')
+  })
+
+  it('EN-031: la familia HEALING (Toque de la Vida, Canto del Bosque) se ve con targetAudience ALLY', () => {
+    const view = Combatant.start(
+      KEY_A,
+      skillProfile({ attack: null, damage: null, abilities: [LIFE_TOUCH, FOREST_SONG] }),
+    ).toView()
+
+    expect(view.skills.map((skill) => [skill.name, skill.targetAudience])).toEqual([
+      ['Toque de la Vida', 'ALLY'],
+      ['Canto del Bosque', 'ALLY'],
+    ])
   })
 
   it('Reanimacion (excepcion de curacion, HU-12) se ve con targetAudience ALLY', () => {
