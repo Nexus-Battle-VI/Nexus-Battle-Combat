@@ -78,6 +78,13 @@ export interface CombatAbility {
   readonly powerCost: CombatPowerCost
   readonly chargeTurns: number
   readonly effects: readonly CombatAbilityEffect[]
+  /**
+   * EN-031: nivel del heroe desde el que se puede usar (`1..8`), tal como lo publica
+   * Player-Inventory (`AbilityUnlockPolicy`). Combat NO decide el escalon: solo compara
+   * con `CombatProfile.level`. Ausente (productor anterior, bots, simulaciones): nivel 1,
+   * es decir, desbloqueada.
+   */
+  readonly unlockLevel?: number
 }
 
 /**
@@ -261,6 +268,15 @@ const validateAbility = (ability: CombatAbility, index: number): CombatAbility =
 
   const effects = rawEffects as readonly CombatAbilityEffect[]
 
+  if (
+    ability.unlockLevel !== undefined &&
+    (!Number.isInteger(ability.unlockLevel) || ability.unlockLevel < 1 || ability.unlockLevel > 8)
+  ) {
+    throw new InvalidCombatProfileError(
+      `El nivel de desbloqueo de ${field} debe ser un entero entre 1 y 8.`,
+    )
+  }
+
   return Object.freeze({
     abilityId: ability.abilityId,
     name: ability.name,
@@ -271,6 +287,7 @@ const validateAbility = (ability: CombatAbility, index: number): CombatAbility =
         validateAbilityEffect(effect, `${field}.effects[${String(position)}]`),
       ),
     ),
+    ...(ability.unlockLevel === undefined ? {} : { unlockLevel: ability.unlockLevel }),
   })
 }
 

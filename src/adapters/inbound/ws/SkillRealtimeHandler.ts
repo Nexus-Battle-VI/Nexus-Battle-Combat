@@ -19,6 +19,7 @@ import {
   SkillOnCooldownError,
   SkillsNotAvailableError,
   TargetUnavailableError,
+  SkillLockedError,
   UnknownSkillError,
   UnsupportedCombatProfileError,
   UnsupportedSkillEffectError,
@@ -216,6 +217,7 @@ export class SkillRealtimeHandler {
       error instanceof UnsupportedCombatProfileError ||
       error instanceof SkillsNotAvailableError ||
       error instanceof UnknownSkillError ||
+      error instanceof SkillLockedError ||
       error instanceof SkillOnCooldownError ||
       error instanceof InsufficientPowerForHealError
     ) {

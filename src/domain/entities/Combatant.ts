@@ -89,14 +89,17 @@ export interface PowerView {
  * Estado de una habilidad para el cliente: lo decide Combat, no la interfaz.
  * `RECHARGING` si le faltan turnos de recarga; `UNSUPPORTED` si algun efecto no esta
  * formalmente soportado; si no, `READY`. El Poder NO cambia el estado: con Poder
- * insuficiente la accion se degrada a ataque basico (HU-11).
+ * insuficiente la accion se degrada a ataque basico (HU-11). EN-031: `LOCKED` si el
+ * nivel del heroe aun no la desbloquea; tiene prioridad sobre los demas estados.
  */
-export type SkillStatus = 'READY' | 'RECHARGING' | 'UNSUPPORTED'
+export type SkillStatus = 'READY' | 'RECHARGING' | 'UNSUPPORTED' | 'LOCKED'
 
 /**
  * A quien puede dirigirse una habilidad (excepcion de HU-12, sin Task de
  * Management): `OPPONENT` para toda habilidad ofensiva (el default de siempre,
- * HU-19); `ALLY` UNICAMENTE para la excepcion nombrada de curacion (Reanimacion).
+ * HU-19); `ALLY` para toda sanacion: la excepcion nombrada (Reanimacion, `HEAL`) y
+ * la familia `HEALING` de HU-19 v2 (EN-031: antes se publicaba como `OPPONENT` y el
+ * cliente enviaba un rival que `BattleRoom` rechazaba con `INVALID_HEAL_TARGET`).
  * Nunca lo decide el cliente: lo deriva Combat de `evaluateSkill`, mismo criterio
  * que `status`.
  */
@@ -111,6 +114,8 @@ export interface SkillView {
   readonly cooldownRemaining: number
   readonly targetAudience: SkillTargetAudience
   readonly status: SkillStatus
+  /** EN-031: nivel desde el que se puede usar (1 si el productor no lo publica). */
+  readonly unlockLevel: number
 }
 
 /** Un participante tal como lo ve un cliente: su Vida, su Poder y sus habilidades, nunca su perfil. */
@@ -383,6 +388,11 @@ export class Combatant {
   }
 
   /** Turnos propios que le faltan a la habilidad; `0` si esta disponible. */
+  /** EN-031: la habilidad existe pero el nivel del heroe aun no la desbloquea. */
+  isLocked(ability: CombatAbility): boolean {
+    return (this.profile?.level ?? 1) < (ability.unlockLevel ?? 1)
+  }
+
   cooldownOf(abilityId: string): number {
     return this.cooldowns[abilityId] ?? 0
   }
@@ -595,12 +605,18 @@ export class Combatant {
           powerCost: ability.powerCost,
           chargeTurns: ability.chargeTurns,
           cooldownRemaining,
-          targetAudience: support.supported && support.kind === 'HEAL' ? 'ALLY' : 'OPPONENT',
-          status: !support.supported
-            ? 'UNSUPPORTED'
-            : cooldownRemaining > 0
-              ? 'RECHARGING'
-              : 'READY',
+          targetAudience:
+            support.supported && (support.kind === 'HEAL' || support.kind === 'HEALING')
+              ? 'ALLY'
+              : 'OPPONENT',
+          status: this.isLocked(ability)
+            ? 'LOCKED'
+            : !support.supported
+              ? 'UNSUPPORTED'
+              : cooldownRemaining > 0
+                ? 'RECHARGING'
+                : 'READY',
+          unlockLevel: ability.unlockLevel ?? 1,
         }
       }),
     }

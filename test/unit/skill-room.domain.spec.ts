@@ -15,6 +15,7 @@ import {
   SkillOnCooldownError,
   SkillsNotAvailableError,
   TargetUnavailableError,
+  SkillLockedError,
   UnknownSkillError,
   UnsupportedCombatProfileError,
   UnsupportedSkillEffectError,
@@ -252,6 +253,37 @@ describe('BattleRoom.planSkill — validacion previa (0 sorteos)', () => {
     expect(() =>
       room.planSkill('a1', 'cmd-1', '99999999-9999-4999-8999-999999999999', TARGET_B),
     ).toThrow(UnknownSkillError)
+  })
+
+  it('EN-031: una habilidad aun bloqueada por nivel: SkillLockedError con el nivel; no se degrada', () => {
+    const room = battleWithSkills({
+      profiles: {
+        a1: skillProfile({ level: 2, abilities: [SHIELD_STRIKE, { ...STORM, unlockLevel: 3 }] }),
+        b1: skillProfile(),
+      },
+    })
+
+    let thrown: unknown
+    try {
+      room.planSkill('a1', 'cmd-1', STORM_ID, TARGET_B)
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(SkillLockedError)
+    expect(thrown).toMatchObject({ code: 'SKILL_LOCKED', unlockLevel: 3 })
+    expect(room.planSkill('a1', 'cmd-2', SHIELD_STRIKE_ID, TARGET_B).kind).not.toBe('degraded')
+  })
+
+  it('EN-031: con el nivel alcanzado la habilidad se planifica normalmente', () => {
+    const room = battleWithSkills({
+      profiles: {
+        a1: skillProfile({ level: 3, abilities: [{ ...STORM, unlockLevel: 3 }] }),
+        b1: skillProfile(),
+      },
+    })
+
+    expect(() => room.planSkill('a1', 'cmd-1', STORM_ID, TARGET_B)).not.toThrow()
   })
 
   it('la habilidad de OTRO participante no vale aunque exista en la batalla', () => {
