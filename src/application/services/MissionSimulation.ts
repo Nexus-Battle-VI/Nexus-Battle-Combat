@@ -1,6 +1,6 @@
 import type { RandomSequenceFactoryPort } from '../ports/RandomSequencePort'
 import type { MissionSeed } from '../ports/MissionSeedPort'
-import type { AiDecisionPort } from '../ports/AiDecisionPort'
+import type { DecisionPolicySelector } from './DecisionPolicySelector'
 import { createBoundedRandom } from './BoundedRandom'
 import {
   MissionRotationConstraint,
@@ -8,9 +8,11 @@ import {
   type MissionRotationStrategyTrace,
 } from './MissionRotationConstraint'
 import {
+  applyDamage,
   applyLevelToMagnitudeResult,
   calculateDamage,
 } from '../../domain/policies/BasicAttackDamagePolicy'
+import { compareAttackAgainstDefense } from '../../domain/policies/AttackResolutionPolicy'
 import { dieFaceFromIndex } from '../../domain/policies/AttackProfile'
 import {
   evaluateMissionAbility,
@@ -29,7 +31,10 @@ import type {
   DecisionCombatant,
 } from '../../domain/decision/BattleDecisionState'
 import type { LegalAction } from '../../domain/decision/LegalAction'
-import type { CombatDecisionSelection } from '../../domain/decision/CombatDecisionEvent'
+import type {
+  CombatDecisionSelection,
+  CombatDecisionSource,
+} from '../../domain/decision/CombatDecisionEvent'
 
 export interface MissionFighter {
   readonly maxHealth: number
@@ -131,6 +136,7 @@ interface ChosenAction {
   readonly kind: 'BASIC_ATTACK' | 'ABILITY' | 'END_TURN'
   readonly ability?: CombatAbility
   readonly strategy: MissionRotationStrategyTrace
+  readonly decisionSource: CombatDecisionSource
 }
 
 /** Observación interna; acumula hechos en memoria, nunca persiste durante el combate. */
@@ -139,6 +145,7 @@ export interface MissionDecisionObservation {
   readonly stateBefore: BattleDecisionState
   readonly legalActions: readonly LegalAction[]
   readonly selectedAction: CombatDecisionSelection
+  readonly decisionSource: CombatDecisionSource
 }
 
 export type MissionDecisionObserver = (decision: MissionDecisionObservation) => void
@@ -175,18 +182,15 @@ const DEFAULT_RULES = {
  * `LegalAction` sin inventar datos que no existen.
  */
 const MISSION_HERO_KEY = Object.freeze({ teamLabel: 'HERO', seat: 0 })
-const MISSION_ENEMY_KEY = Object.freeze({ teamLabel: 'ENEMY', seat: 0 })
-const MISSION_ENEMY_TARGET = Object.freeze({
-  scope: 'COMBATANT' as const,
-  combatant: MISSION_ENEMY_KEY,
-})
+const missionEnemyKey = (encounter: number, enemyRef: string, instance: number) =>
+  Object.freeze({ teamLabel: `ENEMY:${String(encounter)}:${enemyRef}`, seat: instance - 1 })
 
 /** A fixed request and operation produce the same private sequence on every replica. */
 export const simulateMission = async (
   request: MissionSimulationRequest,
   seed: MissionSeed,
   sequences: RandomSequenceFactoryPort,
-  decisionPolicy: AiDecisionPort,
+  decisionPolicies: Pick<DecisionPolicySelector, 'select'>,
   observeDecision?: MissionDecisionObserver,
 ): Promise<MissionSimulationResult> => {
   const sequence = sequences.create(RandomSeed.create(seed.value))
@@ -233,6 +237,7 @@ export const simulateMission = async (
   let reflect: { readonly basisPoints: number; remaining: number } | null = null
   let healingDone = 0
   let abilityDamage = 0
+  let decisionSequence = 0
 
   const event = (type: string, data: Readonly<Record<string, unknown>>): void => {
     log.push({ seq: log.length + 1, type, ...data })
@@ -286,7 +291,7 @@ export const simulateMission = async (
    */
   const activeEffectsOf = (
     modifiers: readonly TimedModifier[],
-    sourceCombatant: typeof MISSION_HERO_KEY | typeof MISSION_ENEMY_KEY,
+    sourceCombatant: typeof MISSION_HERO_KEY | ReturnType<typeof missionEnemyKey>,
     operation: 'INCREASE' | 'DECREASE',
   ): readonly DecisionCombatant['activeEffects'][number][] =>
     modifiers.map((modifier) => ({
@@ -317,6 +322,7 @@ export const simulateMission = async (
     enemyModifiers: readonly TimedModifier[],
     roundTurns: number,
     globalTurnsCompleted: number,
+    enemyKey: ReturnType<typeof missionEnemyKey>,
   ): BattleDecisionState => {
     const actor: DecisionCombatant = {
       identity: MISSION_HERO_KEY,
@@ -352,7 +358,7 @@ export const simulateMission = async (
       damageMemory: null,
     }
     const enemyCombatant: DecisionCombatant = {
-      identity: MISSION_ENEMY_KEY,
+      identity: enemyKey,
       kind: ParticipantKind.Ai,
       heroSubtype: null,
       health: { current: enemyHealth, max: enemy.maxHealth },
@@ -364,7 +370,7 @@ export const simulateMission = async (
       cooldowns: [],
       abilities: [],
       epic: null,
-      activeEffects: activeEffectsOf(enemyModifiers, MISSION_ENEMY_KEY, 'DECREASE'),
+      activeEffects: activeEffectsOf(enemyModifiers, enemyKey, 'DECREASE'),
       damageMemory: null,
     }
 
@@ -397,8 +403,9 @@ export const simulateMission = async (
     enemyHealth: number,
     enemyModifiers: readonly TimedModifier[],
     roundTurns: number,
-    decisionSequence: number,
+    enemyKey: ReturnType<typeof missionEnemyKey>,
   ): Promise<ChosenAction> => {
+    decisionSequence += 1
     const evaluation = rotationConstraint.evaluate({
       rotations: missionRotations,
       cursors,
@@ -408,7 +415,7 @@ export const simulateMission = async (
       health,
       maxHealth,
       canAttack,
-      enemyTarget: MISSION_ENEMY_TARGET,
+      enemyTarget: { scope: 'COMBATANT', combatant: enemyKey },
     })
     const state = buildDecisionState(
       enemy,
@@ -416,6 +423,7 @@ export const simulateMission = async (
       enemyModifiers,
       roundTurns,
       decisionSequence - 1,
+      enemyKey,
     )
     if (evaluation.legalActions.length === 0) {
       const resolved = Object.freeze({ kind: 'END_TURN' as const })
@@ -424,17 +432,23 @@ export const simulateMission = async (
         stateBefore: state,
         legalActions: evaluation.legalActions,
         selectedAction: resolved,
+        decisionSource: 'SYSTEM',
       })
-      return { kind: 'END_TURN', strategy: evaluation.resolve(resolved) }
+      return {
+        kind: 'END_TURN',
+        strategy: evaluation.resolve(resolved),
+        decisionSource: 'SYSTEM',
+      }
     }
 
-    const intent = await decisionPolicy.decide(state, evaluation.legalActions)
-    const resolved = resolveLegalAction(intent, evaluation.legalActions)
+    const selected = await decisionPolicies.select(state, evaluation.legalActions)
+    const resolved = resolveLegalAction(selected.action, evaluation.legalActions)
     observeDecision?.({
       decisionSequence,
       stateBefore: state,
       legalActions: evaluation.legalActions,
       selectedAction: resolved,
+      decisionSource: selected.source,
     })
     const strategy = evaluation.resolve(resolved)
 
@@ -444,7 +458,7 @@ export const simulateMission = async (
       throw new NoLegalDecisionActionsError()
     }
     if (resolved.kind === 'BASIC_ATTACK') {
-      return { kind: 'BASIC_ATTACK', strategy }
+      return { kind: 'BASIC_ATTACK', strategy, decisionSource: selected.source }
     }
 
     const ability = abilities.get(resolved.abilityId)
@@ -453,7 +467,50 @@ export const simulateMission = async (
       throw new NoLegalDecisionActionsError()
     }
 
-    return { kind: 'ABILITY', ability, strategy }
+    return { kind: 'ABILITY', ability, strategy, decisionSource: selected.source }
+  }
+  const chooseEnemyAction = async (
+    enemy: {
+      readonly maxHealth: number
+      readonly attack: number
+      readonly defense: number
+      readonly damage: CombatMagnitude
+    },
+    enemyHealth: number,
+    enemyModifiers: readonly TimedModifier[],
+    roundTurns: number,
+    enemyKey: ReturnType<typeof missionEnemyKey>,
+  ): Promise<CombatDecisionSource> => {
+    decisionSequence += 1
+    const heroPerspective = buildDecisionState(
+      enemy,
+      enemyHealth,
+      enemyModifiers,
+      roundTurns,
+      decisionSequence - 1,
+      enemyKey,
+    )
+    const enemyActor = heroPerspective.enemies[0]
+    if (enemyActor === undefined) throw new NoLegalDecisionActionsError()
+    const state: BattleDecisionState = {
+      ...heroPerspective,
+      actor: enemyActor,
+      enemies: [heroPerspective.actor],
+    }
+
+    const legalActions: readonly LegalAction[] = [
+      { kind: 'BASIC_ATTACK', target: { scope: 'COMBATANT', combatant: MISSION_HERO_KEY } },
+    ]
+    const selected = await decisionPolicies.select(state, legalActions)
+    const resolved = resolveLegalAction(selected.action, legalActions)
+    observeDecision?.({
+      decisionSequence,
+      stateBefore: state,
+      legalActions,
+      selectedAction: resolved,
+      decisionSource: selected.source,
+    })
+    return selected.source
   }
   const fight = async (
     enemyRef: string,
@@ -472,6 +529,7 @@ export const simulateMission = async (
       defense: Math.ceil(base.defense * multiplier),
       damage: base.damage,
     }
+    const enemyKey = missionEnemyKey(encounter, enemyRef, instance)
     let enemyHealth = enemy.maxHealth
     let guard = 0
     let turns = 0
@@ -555,7 +613,7 @@ export const simulateMission = async (
         event('heroHealed', { amount, heroHealth: health })
       }
       dropSpent(pendingHeals)
-      const action = await chooseAction(enemy, enemyHealth, enemyModifiers, turns, totalTurns)
+      const action = await chooseAction(enemy, enemyHealth, enemyModifiers, turns, enemyKey)
       let attackBonus = 0
       let damageBonus = 0
       let attacks = action.kind === 'BASIC_ATTACK'
@@ -590,9 +648,13 @@ export const simulateMission = async (
         if (heroAttack === null || heroDamage === null) {
           throw new NoLegalDecisionActionsError()
         }
-        hit =
-          heroAttack + attackBonus + modifierOf(heroModifiers, 'ATTACK') + roll(20) >=
-          enemy.defense + guard - modifierOf(enemyModifiers, 'DEFENSE') + 10
+        // El contrato v1 de Misiones conserva 1d20 y umbral `defensa + 10`.
+        // La comparación autoritativa (>), validación y semántica de empate son
+        // las mismas que Online; `+9` expresa exactamente el antiguo `>= +10`.
+        hit = compareAttackAgainstDefense(
+          Math.max(0, heroAttack + attackBonus + modifierOf(heroModifiers, 'ATTACK') + roll(20)),
+          Math.max(0, enemy.defense + guard - modifierOf(enemyModifiers, 'DEFENSE')) + 9,
+        ).effective
         if (hit) {
           critical = random.nextInt(8000) < Math.floor(rules.criticalChance * 8000)
           // CA-06 (opcion A): nivel x resultado de la magnitud; los bonos se suman despues.
@@ -600,7 +662,7 @@ export const simulateMission = async (
             applyLevelToMagnitudeResult(magnitude(heroDamage), request.hero.profile.level) +
             damageBonus +
             modifierOf(heroModifiers, 'DAMAGE')
-          dealt = Math.min(
+          const applied = applyDamage(
             enemyHealth,
             Math.max(
               1,
@@ -610,7 +672,8 @@ export const simulateMission = async (
               ),
             ),
           )
-          enemyHealth -= dealt
+          dealt = applied.appliedDamage
+          enemyHealth = applied.healthAfter
           damageDealt += dealt
           if (critical) criticalEffects += 1
         }
@@ -625,6 +688,7 @@ export const simulateMission = async (
         damage: dealt,
         critical,
         enemyHealth,
+        decisionSource: action.decisionSource,
         ...(action.kind === 'ABILITY' ? { powerSpent } : {}),
         ...(attacks ? {} : { attacked: false }),
         ...(effects.length === 0 ? {} : { effects }),
@@ -633,20 +697,34 @@ export const simulateMission = async (
         endRound()
         break
       }
-      if (base.ai === 'GUARDED' && turns % 3 === 0) {
+      const guarded = base.ai === 'GUARDED' && turns % 3 === 0
+      if (guarded) {
         guard = 4
-        event('enemyGuarded', { enemyRef, defenseBonus: guard })
+        event('enemyGuarded', {
+          enemyRef,
+          defenseBonus: guard,
+          decisionSource: 'SYSTEM',
+        })
         endRound()
         continue
       }
+      const enemyDecisionSource = await chooseEnemyAction(
+        enemy,
+        enemyHealth,
+        enemyModifiers,
+        turns,
+        enemyKey,
+      )
       const enraged =
         base.ai === 'BOSS' && enemyHealth * 100 <= enemy.maxHealth * (base.enrageBelowPercent ?? 50)
       const enemyAttack =
         enemy.attack +
         (enraged ? (base.enrageAttackBonus ?? 0) : 0) -
         modifierOf(enemyModifiers, 'ATTACK')
-      const enemyHit =
-        enemyAttack + roll(20) >= heroStats.defense + modifierOf(heroModifiers, 'DEFENSE') + 10
+      const enemyHit = compareAttackAgainstDefense(
+        Math.max(0, enemyAttack + roll(20)),
+        heroStats.defense + modifierOf(heroModifiers, 'DEFENSE') + 9,
+      ).effective
       const softened = modifierOf(enemyModifiers, 'DAMAGE')
       let taken = 0
       if (enemyHit) {
@@ -661,7 +739,9 @@ export const simulateMission = async (
       enemyHealth -= reflected
       damageDealt += reflected
       abilityDamage += reflected
-      health -= taken
+      const appliedToHero = applyDamage(health, taken)
+      taken = appliedToHero.appliedDamage
+      health = appliedToHero.healthAfter
       damageTaken += taken
       minHealth = Math.min(minHealth, health)
       event('enemyAction', {
@@ -670,6 +750,7 @@ export const simulateMission = async (
         damage: taken,
         heroHealth: health,
         enraged,
+        decisionSource: enemyDecisionSource,
         ...(prevented > 0 ? { prevented } : {}),
         ...(reflected > 0 ? { reflected } : {}),
       })

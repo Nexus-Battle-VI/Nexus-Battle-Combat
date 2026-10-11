@@ -1239,6 +1239,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         sequences: RandomSequenceFactoryPort,
         config: AppConfig,
         decisions: CombatDecisionRecorder,
+        policies: DecisionPolicySelector,
       ): RunMissionSimulation =>
         new RunMissionSimulation(
           repository,
@@ -1246,7 +1247,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
           new HmacMissionSeedFactory(config.internalServiceAuthSecret),
           // EN-035.3: política productiva actual. RandomPolicy es solo para
           // pruebas/evaluación futura, nunca el default aquí (ADR-023).
-          { policy: new RuleBasedPolicy(), source: 'RULE_BASED' },
+          policies,
           decisions,
         ),
       inject: [
@@ -1254,6 +1255,7 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
         RANDOM_SEQUENCE_FACTORY,
         APP_CONFIG,
         CombatDecisionRecorder,
+        DECISION_POLICY_SELECTOR,
       ],
     },
     {
@@ -1263,13 +1265,14 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
       useFactory: (
         sequences: RandomSequenceFactoryPort,
         config: AppConfig,
+        policies: DecisionPolicySelector,
       ): EstimateMissionOutcome =>
         new EstimateMissionOutcome(
           sequences,
           new HmacMissionSeedFactory(config.internalServiceAuthSecret),
-          new RuleBasedPolicy(),
+          policies,
         ),
-      inject: [RANDOM_SEQUENCE_FACTORY, APP_CONFIG],
+      inject: [RANDOM_SEQUENCE_FACTORY, APP_CONFIG, DECISION_POLICY_SELECTOR],
     },
     {
       // HU-22: cierra el hueco entre "sala FINISHED persistida" y
