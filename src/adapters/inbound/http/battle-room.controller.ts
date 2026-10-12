@@ -40,6 +40,7 @@ import {
   RoomNotLeavableError,
 } from '../../../domain/errors/BattleRoomErrors'
 import {
+  PveTeamLevelMatchingUndefinedError,
   RoomAccessForbiddenError,
   RoomConflictError,
   RoomNotFoundError,
@@ -424,6 +425,14 @@ export class BattleRoomController {
     // HU-17: equipos de distinto tamano. `code` estable para que Web lo distinga
     // de "un participante ya no cumple los requisitos" (mismo 422).
     if (error instanceof UnsupportedTeamCompositionError) {
+      return new UnprocessableEntityException({
+        statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+        message: error.message,
+        code: error.code,
+      })
+    }
+
+    if (error instanceof PveTeamLevelMatchingUndefinedError) {
       return new UnprocessableEntityException({
         statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
         message: error.message,

@@ -123,7 +123,13 @@ describe('Combatant — Poder y recarga (invariantes)', () => {
     const ai = Combatant.start({ teamLabel: 'B', seat: 0 }, null)
 
     expect(ai.currentPower).toBeNull()
-    expect(ai.toView()).toEqual({ teamLabel: 'B', seat: 0, health: null, power: null, skills: [] })
+    expect(ai.toView()).toEqual({
+      teamLabel: 'B',
+      seat: 0,
+      health: null,
+      power: null,
+      skills: [],
+    })
   })
 
   it.each([

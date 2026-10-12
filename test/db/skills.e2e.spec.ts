@@ -960,6 +960,7 @@ describe('HU-19 de extremo a extremo (protocolo): habilidades entre dos clientes
       expect(a2.ofType('snapshot')[0].battle.combatants[0]).toEqual({
         teamLabel: 'A',
         seat: 0,
+        level: 1,
         health: { current: 44, max: 44 },
         power: null,
         skills: [],

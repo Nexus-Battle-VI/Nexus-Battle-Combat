@@ -521,6 +521,7 @@ describe('HU-18 de extremo a extremo (protocolo): ataque basico entre dos client
       for (const combatant of started.battle.combatants) {
         expect(Object.keys(combatant).sort()).toEqual([
           'health',
+          'level',
           'power',
           'seat',
           'skills',

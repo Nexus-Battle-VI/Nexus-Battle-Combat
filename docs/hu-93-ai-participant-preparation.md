@@ -60,7 +60,8 @@ Catalog y no convierte un set en obligatorio.
 Solo se eligen productos `ALL_HEROES` o `SELECTED_SUBTYPES` que incluyan el
 subtipo elegido. El loadout es efímero y no reserva ni concede unidades.
 
-El cálculo replica la semántica autoritativa de Player-Inventory en nivel base:
+El cálculo replica la semántica autoritativa de Player-Inventory en el nivel
+emparejado:
 
 - solo `STAT_MODIFIER`, `SELF`, permanente y no condicionado se materializa en
   `POWER`, `HEALTH`, `DEFENSE` o `ATTACK`;
@@ -70,14 +71,15 @@ El cálculo replica la semántica autoritativa de Player-Inventory en nivel base
 - todos los efectos se conservan en `activeEffects`, indicando si ya fueron
   aplicados a las estadísticas.
 
-Catalog no entrega nivel para el bot. `CombatProfile.level` se omite, que en el
-motor vigente equivale al nivel base. `CombatProfile.heroId` usa el `productId`
-del héroe como identidad de definición: es una referencia opaca dentro del
-snapshot, nunca una instancia de Player-Inventory.
+Catalog no entrega nivel para el bot: `StartBattle` lo toma del héroe humano
+autoritativo. `CombatProfile.heroId` usa el `productId` del héroe como identidad
+de definición: es una referencia opaca dentro del snapshot, nunca una instancia
+de Player-Inventory.
 
-## Soporte puro
+## Soporte puro fuera de JcE
 
-`CHAMAN` y `MEDICO` conservan `attack = null` y `damage = null`. Sus habilidades
+`CHAMAN` y `MEDICO` se excluyen de JcE, pero conservan `attack = null` y
+`damage = null` en las modalidades donde siguen permitidos. Sus habilidades
 pueden curar, mejorar estadísticas, dar inmunidad u ofrecer otro soporte, pero
 no pueden contener `DAMAGE`, `REFLECT_DAMAGE` ni un modificador directo de
 `DAMAGE`. Una contradicción en el dataset se rechaza como respuesta inválida de
@@ -89,10 +91,50 @@ a una whitelist de habilidades de curación.
 
 ## Orden transaccional y fallos
 
-La definición completa del bot se resuelve antes de comprometer el equipamiento
-del humano. Si Catalog falla, la sala sigue `PREPARING`, no se persiste una
+El humano se valida antes de consultar Catalog. La definición completa del bot
+se resuelve antes de comprometer el equipamiento del humano. Si Catalog falla,
+la sala sigue `PREPARING`, no se persiste una
 batalla con perfil nulo, no se compromete inventario y no se consume RNG de
 selección. Después se mantienen el bloqueo optimista, la persistencia y la
 publicación existentes de `StartBattle`.
 
 Trazabilidad: Management #557, HU padre #553, contrato Catalog #575 y ADR-023.
+
+## Correccion JcE: nivel, ofensivos y habilidades (2026-10-11)
+
+`StartBattle` resuelve y valida por completo al unico humano antes de consultar
+Catalog o consumir RNG. Solo entonces prepara la IA con el nivel autoritativo
+de `EquippedHero.level`. Si un productor anterior a CA-06 omite ese campo se
+conserva la semantica documentada del motor: nivel 1. No se usa el nivel de
+Account, un maximo, una constante distinta ni un sorteo.
+
+El factory filtra por capacidades antes de elegir: Ataque y Dano presentes,
+Curacion ausente. `CHAMAN` y `MEDICO` nunca son candidatos ni fallback; si no
+queda ningun ofensivo, Catalog se rechaza de forma controlada y la sala sigue
+`PREPARING`. El jugador con uno de esos subtipos se rechaza en entrada e inicio
+de JcE, con indicacion de cambiarlo desde Mi Inventario. JcJ conserva la regla
+anterior (no en 1v1, permitido en equipos); Misiones y Torneos no usan este
+flujo.
+
+El escalado replica CA-06 de Player-Inventory:
+
+1. `POWER`, `HEALTH`, `DEFENSE` y `ATTACK` base se multiplican por el nivel.
+2. El equipamiento compatible se aplica una sola vez sobre esa base escalada.
+3. `damage` conserva la magnitud de Catalog; `CombatProfile.level` multiplica
+   el resultado final en la politica de Dano ya existente.
+
+El perfil congelado incluye el nivel y las habilidades llevan los desbloqueos
+1/3/5 definidos por la posicion autoritativa de
+`HeroAttributes.abilities`. `BattleRoom.planSkill` y `LegalActionGenerator`
+rechazan/excluyen `LOCKED` antes de entregar acciones a RuleBased, Neural o al
+selector de politicas.
+
+No existe una regla formal de equivalencia de equipamiento Humano/IA. Se
+conservan 2 armas, 6 armaduras, 2 items y el 5 % de epica sin inventar topes de
+balance. Las pruebas deterministas verifican niveles 1/3/5/8 y modificadores
+aplicados una vez; medir una distribucion con el Catalog productivo es evidencia
+de balance, no autorizacion para cambiar formulas.
+
+La regla de nivel ratificada cubre JcE 1v1. JcE por equipos se rechaza con
+`PVE_TEAM_LEVEL_MATCHING_UNDEFINED` hasta que Producto defina promedio, maximo
+u otra fuente; Combat no inventa esa decision.

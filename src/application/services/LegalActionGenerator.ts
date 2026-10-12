@@ -14,6 +14,7 @@ import {
   InvalidHealTargetError,
   InvalidTargetError,
   SameTeamTargetError,
+  SkillLockedError,
   SkillOnCooldownError,
   TargetUnavailableError,
   UnsupportedEpicEffectError,
@@ -59,6 +60,7 @@ const isExpectedCandidateRejection = (error: unknown): boolean =>
   error instanceof InvalidHealTargetError ||
   error instanceof TargetUnavailableError ||
   error instanceof UnsupportedSkillEffectError ||
+  error instanceof SkillLockedError ||
   error instanceof SkillOnCooldownError ||
   error instanceof InsufficientPowerForHealError ||
   error instanceof EpicOnCooldownError ||

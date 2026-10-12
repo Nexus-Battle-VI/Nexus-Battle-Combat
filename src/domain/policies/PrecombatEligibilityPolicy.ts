@@ -72,6 +72,9 @@ export const HERO_NOT_READY_WITHOUT_DETAIL = 'HERO_NOT_READY'
  */
 export const HERO_CLASS_NOT_ALLOWED_FOR_FORMAT = 'HERO_CLASS_NOT_ALLOWED_FOR_FORMAT'
 
+/** Codigo especifico cuando un heroe de soporte intenta entrar a JcE Online. */
+export const HERO_CLASS_NOT_ALLOWED_FOR_PVE = 'HERO_CLASS_NOT_ALLOWED_FOR_PVE'
+
 /**
  * Subtipos que RF-16 restringe a modalidades de equipo (DP-5). Comparacion
  * por TEXTO, no por `HeroSubtype` parseado -- ver el comentario de arriba.
@@ -96,6 +99,8 @@ export interface AssessPrecombatEligibilityInput {
   readonly heroSubtype: string
   /** Resultado de `isIndividualFormat()` sobre los equipos de la sala destino. */
   readonly individualFormat: boolean
+  /** `true` exclusivamente para una sala JcE Online. */
+  readonly pve?: boolean
   /** `EquippedHero.ready` (Player-Inventory, `HeroReadinessPolicy`). */
   readonly heroReady: boolean
   /** `EquippedHero.blockers` (Player-Inventory). Se reenvian tal cual cuando `heroReady` es `false`. */
@@ -130,12 +135,23 @@ export const assessPrecombatEligibility = (
     }
   }
 
-  if (input.individualFormat && RESTRICTED_TO_TEAM_FORMATS.includes(input.heroSubtype)) {
+  const restrictedSupport = RESTRICTED_TO_TEAM_FORMATS.includes(input.heroSubtype)
+
+  if (input.pve !== true && input.individualFormat && restrictedSupport) {
     blockers.push({
       code: HERO_CLASS_NOT_ALLOWED_FOR_FORMAT,
       slot: null,
       reference: input.heroSubtype,
       detail: `El subtipo de heroe "${input.heroSubtype}" solo puede participar en modalidades de equipo, no en un enfrentamiento 1 contra 1.`,
+    })
+  }
+
+  if (input.pve === true && restrictedSupport) {
+    blockers.push({
+      code: HERO_CLASS_NOT_ALLOWED_FOR_PVE,
+      slot: null,
+      reference: input.heroSubtype,
+      detail: `El subtipo de heroe "${input.heroSubtype}" no puede participar en JcE Online. Selecciona un heroe ofensivo desde Mi Inventario.`,
     })
   }
 
