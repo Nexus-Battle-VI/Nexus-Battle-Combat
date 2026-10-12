@@ -651,14 +651,14 @@ describe('HU-29 de extremo a extremo REAL: Combat compromete, Player-Inventory b
                 throw error
               }
             },
-            release: async (roomIdArg: string, playerIdArg: string) => {
+            release: async (roomIdArg: string, playerIdArg: string, attemptArg: Date | null) => {
               if (process.env.HU29_E2E_DEBUG === '1') {
                 process.stderr.write(
                   `[commitments] release() called roomId=${roomIdArg} playerId=${playerIdArg}\n`,
                 )
               }
               try {
-                await real.release(roomIdArg, playerIdArg)
+                await real.release(roomIdArg, playerIdArg, attemptArg)
                 if (process.env.HU29_E2E_DEBUG === '1') {
                   process.stderr.write(`[commitments] release() OK\n`)
                 }

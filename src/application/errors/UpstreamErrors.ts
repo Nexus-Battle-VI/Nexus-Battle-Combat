@@ -96,3 +96,27 @@ export class AccountProfileMissingError extends Error {
     this.subject = subject
   }
 }
+
+/**
+ * EN-031. Player-Inventory SI respondio (422 `HERO_COMMITTED`): el heroe de ese
+ * jugador sigue comprometido con OTRA batalla (HU-29), p. ej. una partida contra la
+ * IA que aun no termina. Es una situacion de negocio que el jugador puede resolver
+ * (terminar esa partida o esperar a que caduque), no una caida: antes caia en
+ * `UpstreamServiceError` y Web mostraba un 503 sin explicacion.
+ */
+export class HeroInAnotherBattleError extends Error {
+  readonly code = 'HERO_IN_ANOTHER_BATTLE'
+
+  constructor(
+    readonly playerId: string,
+    /** Nombre visible del participante, si quien lanza lo conoce (`StartBattle` lo pone). */
+    readonly displayName: string | null = null,
+  ) {
+    super(
+      displayName === null
+        ? 'El heroe de un participante sigue en otra batalla.'
+        : `El heroe de ${displayName} sigue en otra batalla.`,
+    )
+    this.name = 'HeroInAnotherBattleError'
+  }
+}

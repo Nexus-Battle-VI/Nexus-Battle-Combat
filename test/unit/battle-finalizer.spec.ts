@@ -238,10 +238,10 @@ describe('BattleFinalizer — liberacion del compromiso de batalla (HU-29)', () 
     const room = finishedRoom()
     const inner = h.commitments.release.bind(h.commitments)
 
-    h.commitments.release = (roomId, playerId) => {
+    h.commitments.release = (roomId, playerId, attemptStartedAt) => {
       h.order.push(`compromiso:${playerId}`)
 
-      return inner(roomId, playerId)
+      return inner(roomId, playerId, attemptStartedAt)
     }
 
     h.finalizer.afterFinished(room)

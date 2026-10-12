@@ -121,13 +121,15 @@ export class BattleFinalizer {
     ]
 
     for (const playerId of playerIds) {
-      void this.commitments.release(room.id, playerId).catch((error: unknown) => {
-        this.logger.error('battle_commitment_liberacion_fallo', {
-          roomId: room.id,
-          playerId,
-          reason: error instanceof Error ? error.name : 'desconocido',
+      void this.commitments
+        .release(room.id, playerId, room.battle?.startedAt ?? null)
+        .catch((error: unknown) => {
+          this.logger.error('battle_commitment_liberacion_fallo', {
+            roomId: room.id,
+            playerId,
+            reason: error instanceof Error ? error.name : 'desconocido',
+          })
         })
-      })
     }
   }
 

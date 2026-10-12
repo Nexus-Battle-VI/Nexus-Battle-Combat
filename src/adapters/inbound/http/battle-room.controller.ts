@@ -56,6 +56,7 @@ import {
 } from '../../../domain/errors/StakeErrors'
 import {
   AccountProfileMissingError,
+  HeroInAnotherBattleError,
   PlayerWithoutEquippedHeroError,
   UpstreamServiceError,
 } from '../../../application/errors/UpstreamErrors'
@@ -336,7 +337,9 @@ export class BattleRoomController {
   @ApiResponse({ status: 404, description: 'La sala no existe' })
   @ApiResponse({
     status: 409,
-    description: 'La sala no esta PREPARING ni IN_BATTLE, o conflicto de version',
+    description:
+      'La sala no esta PREPARING ni IN_BATTLE, conflicto de version, o el heroe de un ' +
+      'participante sigue en otra batalla (code: HERO_IN_ANOTHER_BATTLE, displayName)',
   })
   @ApiResponse({
     status: 422,
@@ -437,6 +440,18 @@ export class BattleRoomController {
         statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
         message: error.message,
         code: error.code,
+      })
+    }
+
+    // EN-031: el heroe de un participante sigue comprometido con otra batalla (HU-29), p. ej.
+    // una partida contra la IA que aun no termina. 409, no 503: Player-Inventory SI respondio
+    // y el jugador puede resolverlo (terminar esa partida o esperar unos minutos).
+    if (error instanceof HeroInAnotherBattleError) {
+      return new ConflictException({
+        statusCode: HttpStatus.CONFLICT,
+        message: error.message,
+        code: error.code,
+        displayName: error.displayName,
       })
     }
 

@@ -733,8 +733,20 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       await useCase.execute(ROOM_ID, 'a1')
 
       expect(commitments.commits).toEqual([
-        { roomId: ROOM_ID, playerId: 'a1', heroId: 'hero-a1', expiresAt: commitmentExpiresAt(NOW) },
-        { roomId: ROOM_ID, playerId: 'b1', heroId: 'hero-b1', expiresAt: commitmentExpiresAt(NOW) },
+        {
+          roomId: ROOM_ID,
+          playerId: 'a1',
+          heroId: 'hero-a1',
+          expiresAt: commitmentExpiresAt(NOW),
+          attemptStartedAt: NOW,
+        },
+        {
+          roomId: ROOM_ID,
+          playerId: 'b1',
+          heroId: 'hero-b1',
+          expiresAt: commitmentExpiresAt(NOW),
+          attemptStartedAt: NOW,
+        },
       ])
     })
 

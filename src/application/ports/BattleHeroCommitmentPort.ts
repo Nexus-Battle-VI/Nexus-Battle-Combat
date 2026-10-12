@@ -17,20 +17,29 @@ export interface BattleHeroCommitmentCommand {
   readonly heroId: string
   /** Hasta cuando vale el compromiso. Es lo que impide un bloqueo permanente. */
   readonly expiresAt: Date
+  /**
+   * EN-031: `startedAt` de ESTE intento de inicio (el que queda en la batalla si arranca).
+   * Forma parte de la clave de idempotencia: cada intento compromete con la suya.
+   */
+  readonly attemptStartedAt: Date
 }
 
 export interface BattleHeroCommitmentPort {
   /**
-   * Compromete el heroe. Lanza `UpstreamServiceError` si Player/Inventory no
-   * confirma: el llamador decide, y `StartBattle` decide NO arrancar la batalla,
-   * porque arrancarla sin bloqueo dejaria el loadout modificable en combate.
+   * Compromete el heroe. Lanza `HeroInAnotherBattleError` si el heroe sigue en otra
+   * batalla y `UpstreamServiceError` si Player/Inventory no confirma: el llamador
+   * decide, y `StartBattle` decide NO arrancar la batalla, porque arrancarla sin
+   * bloqueo dejaria el loadout modificable en combate.
    */
   commit(command: BattleHeroCommitmentCommand): Promise<void>
   /**
    * Lo libera. IDEMPOTENTE por contrato: Player/Inventory responde `204` tanto si
    * lo libero como si ya no estaba, asi que un reintento no es un error.
+   *
+   * `attemptStartedAt` es el `startedAt` del intento que comprometio (el de la batalla
+   * guardada); `null` cuando no se conoce. Siempre se libera ademas la clave heredada.
    */
-  release(roomId: string, playerId: string): Promise<void>
+  release(roomId: string, playerId: string, attemptStartedAt: Date | null): Promise<void>
 }
 
 export const BATTLE_HERO_COMMITMENTS = Symbol('BattleHeroCommitments')
