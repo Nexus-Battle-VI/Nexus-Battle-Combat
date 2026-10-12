@@ -10,6 +10,7 @@ import type { BattleDecisionState } from '../../src/domain/decision/BattleDecisi
 import type { ActionIntent } from '../../src/domain/decision/ActionIntent'
 import type { LegalAction } from '../../src/domain/decision/LegalAction'
 import type { CombatAbility } from '../../src/domain/entities/CombatProfile'
+import { DecisionPolicySelector } from '../../src/application/services/DecisionPolicySelector'
 
 /** Captura cada `BattleDecisionState`/`legalActions` que recibe, y decide como `RuleBasedPolicy` (primera candidata). */
 class ProbePolicy implements AiDecisionPort {
@@ -115,7 +116,12 @@ describe('BattleDecisionState construido por MissionSimulation (revisión de PR 
     const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
     const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
 
-    await simulateMission(request, seed, factory, probe)
+    await simulateMission(
+      request,
+      seed,
+      factory,
+      new DecisionPolicySelector(null, { policy: probe, source: 'RULE_BASED' }),
+    )
 
     const [firstState] = probe.states
 
@@ -133,11 +139,16 @@ describe('BattleDecisionState construido por MissionSimulation (revisión de PR 
     const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
     const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
 
-    await simulateMission(request, seed, factory, probe)
+    await simulateMission(
+      request,
+      seed,
+      factory,
+      new DecisionPolicySelector(null, { policy: probe, source: 'RULE_BASED' }),
+    )
 
     // Turno 1: cortada (sin buff activo todavía al decidir). Turno 2: ya debería
     // verse el buff que cortada acaba de dejar activo en el turno 1.
-    const secondState = probe.states[1]
+    const secondState = probe.states.filter((state) => state.actor.identity.teamLabel === 'HERO')[1]
 
     expect(secondState?.actor.activeEffects).toEqual([
       {

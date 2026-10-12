@@ -16,6 +16,7 @@ import {
   SkillOnCooldownError,
   SkillsNotAvailableError,
   TargetUnavailableError,
+  SkillLockedError,
   UnknownSkillError,
   UnsupportedCombatProfileError,
   UnsupportedEpicEffectError,
@@ -1762,6 +1763,11 @@ export class BattleRoom {
 
     if (ability === undefined) {
       throw new UnknownSkillError()
+    }
+
+    // EN-031: antes que el soporte del efecto, para que el motivo sea el nivel.
+    if (attacker.isLocked(ability)) {
+      throw new SkillLockedError(ability.unlockLevel ?? 1)
     }
 
     const support = evaluateSkill(ability)

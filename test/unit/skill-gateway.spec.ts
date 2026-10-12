@@ -224,6 +224,7 @@ describe('Gateway — comando useSkill (HU-19)', () => {
           'powerCost',
           'status',
           'targetAudience',
+          'unlockLevel',
         ])
       }
     }
