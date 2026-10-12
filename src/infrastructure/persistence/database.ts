@@ -31,6 +31,7 @@ import * as aiTrainingCoordinatorMigration from '../../adapters/outbound/persist
 import * as aiModelRegistryPromotionFieldsMigration from '../../adapters/outbound/persistence/migrations/029-ai-model-registry-promotion-fields'
 import * as aiEvaluationCoordinatorMigration from '../../adapters/outbound/persistence/migrations/030-ai-evaluation-coordinator'
 import * as aiAtomicActiveAndEvaluationEvidenceMigration from '../../adapters/outbound/persistence/migrations/031-ai-atomic-active-and-evaluation-evidence'
+import * as battleRoomsAbilityUnlockLevelMigration from '../../adapters/outbound/persistence/migrations/032-battle-rooms-ability-unlock-level'
 
 export interface DatabaseOptions {
   readonly uri: string
@@ -122,6 +123,7 @@ export const MIGRATIONS: readonly MongoMigration[] = [
     name: '031-ai-atomic-active-and-evaluation-evidence',
     up: aiAtomicActiveAndEvaluationEvidenceMigration.up,
   },
+  { name: '032-battle-rooms-ability-unlock-level', up: battleRoomsAbilityUnlockLevelMigration.up },
 ]
 
 const REGISTRY = '_migrations'
