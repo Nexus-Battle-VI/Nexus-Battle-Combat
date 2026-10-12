@@ -8,6 +8,11 @@ import {
 import type { CombatAbility } from '../../src/domain/entities/CombatProfile'
 import { RuleBasedPolicy } from '../../src/application/policies/RuleBasedPolicy'
 import type { AiDecisionPort } from '../../src/application/ports/AiDecisionPort'
+import { DecisionPolicySelector } from '../../src/application/services/DecisionPolicySelector'
+
+const selectorOf = (policy: AiDecisionPort): DecisionPolicySelector =>
+  new DecisionPolicySelector(null, { policy, source: 'RULE_BASED' })
+const ruleBasedSelector = (): DecisionPolicySelector => selectorOf(new RuleBasedPolicy())
 
 const fighter = (
   maxHealth: number,
@@ -101,7 +106,7 @@ describe('mission simulation balance', () => {
 
   it('lets a baseline equipped hero clear five chambers and defeat the boss', async () => {
     const seed = new HmacMissionSeedFactory('test-secret').forOperation(temple.operationId)
-    const result = await simulateMission(temple, seed, factory, new RuleBasedPolicy())
+    const result = await simulateMission(temple, seed, factory, ruleBasedSelector())
     expect(result.combatOutcome).toBe('HERO_VICTORIOUS')
     expect(result.summary).toMatchObject({
       encountersCompleted: 5,
@@ -111,7 +116,7 @@ describe('mission simulation balance', () => {
     expect(result.combatLog).toContainEqual(
       expect.objectContaining({ type: 'combatantDefeated', encounter: 5, combatant: 'guardian#1' }),
     )
-    expect(await simulateMission(temple, seed, factory, new RuleBasedPolicy())).toEqual(result)
+    expect(await simulateMission(temple, seed, factory, ruleBasedSelector())).toEqual(result)
   })
 })
 
@@ -120,7 +125,7 @@ describe('mission simulation combat log (HU-72, HU-09)', () => {
 
   it('records every defeat as combatantDefeated with its encounter and numbered instance', async () => {
     const seed = new HmacMissionSeedFactory('test-secret').forOperation(temple.operationId)
-    const result = await simulateMission(temple, seed, factory, new RuleBasedPolicy())
+    const result = await simulateMission(temple, seed, factory, ruleBasedSelector())
     const defeats = result.combatLog.filter((event) => event.type === 'combatantDefeated')
     const summary = result.summary as { enemiesDefeated: { enemyRef: string; count: number }[] }
     const total = summary.enemiesDefeated.reduce((sum, entry) => sum + entry.count, 0)
@@ -210,7 +215,7 @@ const duel = (
 const heroActions = async (request: MissionSimulationRequest) => {
   const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
   const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
-  return (await simulateMission(request, seed, factory, new RuleBasedPolicy())).combatLog.filter(
+  return (await simulateMission(request, seed, factory, ruleBasedSelector())).combatLog.filter(
     (event) => event.type === 'heroAction',
   )
 }
@@ -254,10 +259,13 @@ describe('rotation priority (HU-71 CA-02, CA-03)', () => {
     const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
     const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
 
-    await simulateMission(request, seed, factory, { decide })
+    await simulateMission(request, seed, factory, selectorOf({ decide }))
 
     expect(decide).toHaveBeenCalled()
-    for (const [, legalActions] of decide.mock.calls) {
+    for (const [state, legalActions] of decide.mock.calls.filter(
+      ([state]) => state.actor.identity.teamLabel === 'HERO',
+    )) {
+      expect(state.actor.identity.teamLabel).toBe('HERO')
       expect(legalActions).toHaveLength(1)
       expect(legalActions[0]).toMatchObject({ kind: 'ABILITY', abilityId: 'alta' })
     }
@@ -476,13 +484,17 @@ describe('pure support mission turns (HU-71 PO clarification)', () => {
 
   it('ends the turn without invoking a policy or inventing basic attack/damage', async () => {
     const request = supportRequest([], [])
-    const decide = jest.fn()
+    const decide: jest.MockedFunction<AiDecisionPort['decide']> = jest.fn((_state, legalActions) =>
+      Promise.resolve(legalActions[0]!),
+    )
     const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
     const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
-    const result = await simulateMission(request, seed, factory, { decide })
+    const result = await simulateMission(request, seed, factory, selectorOf({ decide }))
     const actions = result.combatLog.filter((event) => event.type === 'heroAction')
 
-    expect(decide).not.toHaveBeenCalled()
+    expect(
+      decide.mock.calls.filter(([state]) => state.actor.identity.teamLabel === 'HERO'),
+    ).toHaveLength(0)
     expect(actions).toHaveLength(2)
     expect(actions).toEqual(
       expect.arrayContaining([
@@ -560,7 +572,7 @@ const brawl = (
 const logOf = async (request: MissionSimulationRequest) => {
   const factory = new Mt19937BoxMullerRandomSequenceFactory(new CdfUniformIndexMapper())
   const seed = new HmacMissionSeedFactory('test-secret').forOperation(request.operationId)
-  return simulateMission(request, seed, factory, new RuleBasedPolicy())
+  return simulateMission(request, seed, factory, ruleBasedSelector())
 }
 
 /**
