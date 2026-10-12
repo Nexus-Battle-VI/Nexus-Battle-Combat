@@ -2106,11 +2106,20 @@ export class BattleRoom {
     sourceAbilityId: string,
     sourceCombatant: CombatantKey,
   ): readonly ResolvableTemporalEffect[] {
+    // EN-031: quien llama pasa un `TurnOrderEntry` (TypeScript lo acepta como `CombatantKey`),
+    // pero el validador de `activeSkillEffects[].sourceCombatant` solo admite `teamLabel`/`seat`:
+    // con el resto de campos, CUALQUIER habilidad con efecto temporal (Piquete, Mano de piedra...)
+    // fallaba al guardarse. Mismo criterio que `toCombatantKey` en `UseEpic`.
+    const keyOf = (key: CombatantKey): CombatantKey => ({
+      teamLabel: key.teamLabel,
+      seat: key.seat,
+    })
+
     return templates.map((template) => ({
       template,
-      targetKey: audienceKey(template.family === 'IMMUNITY' ? 'SELF' : template.audience),
+      targetKey: keyOf(audienceKey(template.family === 'IMMUNITY' ? 'SELF' : template.audience)),
       sourceAbilityId,
-      sourceCombatant,
+      sourceCombatant: keyOf(sourceCombatant),
       initialRemainingOwnTurns: template.durationTurns ?? 1,
     }))
   }
