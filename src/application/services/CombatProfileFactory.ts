@@ -61,6 +61,7 @@ const copyAbility = (ability: EquippedHeroAbility): CombatAbility => ({
   powerCost: { ...ability.powerCost },
   chargeTurns: ability.chargeTurns,
   effects: ability.effects.map(copyAbilityEffect),
+  ...(ability.unlockLevel === undefined ? {} : { unlockLevel: ability.unlockLevel }),
 })
 
 /**

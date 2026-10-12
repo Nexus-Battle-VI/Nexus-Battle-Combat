@@ -193,6 +193,8 @@ export interface EquippedHeroAbility {
   /** Turnos propios de recarga tras usarla (Catalog v1: 1). Entero >= 1. */
   readonly chargeTurns: number
   readonly effects: readonly EquippedHeroAbilityEffect[]
+  /** EN-031: nivel desde el que se desbloquea. Ausente en un productor anterior. */
+  readonly unlockLevel?: number
 }
 
 /**

@@ -1,24 +1,16 @@
 import type { MissionSimulationIntakeRepositoryPort } from '../ports/MissionSimulationIntakeRepositoryPort'
 import type { RandomSequenceFactoryPort } from '../ports/RandomSequencePort'
 import type { MissionSeedPort } from '../ports/MissionSeedPort'
-import type { AiDecisionPort } from '../ports/AiDecisionPort'
+import type { DecisionPolicySelector } from '../services/DecisionPolicySelector'
 import {
   simulateMission,
   type MissionDecisionObservation,
   type MissionSimulationRequest,
   type MissionSimulationResult,
 } from '../services/MissionSimulation'
-import type {
-  CombatDecisionSource,
-  CombatDecisionTelemetryEvent,
-} from '../../domain/decision/CombatDecisionEvent'
+import type { CombatDecisionTelemetryEvent } from '../../domain/decision/CombatDecisionEvent'
 import { BattleMode } from '../../domain/value-objects/BattleMode'
 import type { CombatDecisionRecorder } from '../services/CombatDecisionRecorder'
-
-export interface DecisionPolicyBinding {
-  readonly policy: AiDecisionPort
-  readonly source: CombatDecisionSource
-}
 
 /** All combat facts are calculated once and persisted before returning to Missions. */
 export class RunMissionSimulation {
@@ -26,7 +18,7 @@ export class RunMissionSimulation {
     private readonly repository: MissionSimulationIntakeRepositoryPort,
     private readonly sequences: RandomSequenceFactoryPort,
     private readonly seeds: MissionSeedPort,
-    private readonly decisionPolicy: DecisionPolicyBinding,
+    private readonly decisionPolicies: Pick<DecisionPolicySelector, 'select'>,
     private readonly decisionRecorder: CombatDecisionRecorder | null = null,
   ) {}
 
@@ -41,7 +33,7 @@ export class RunMissionSimulation {
       request,
       this.seeds.forOperation(request.operationId),
       this.sequences,
-      this.decisionPolicy.policy,
+      this.decisionPolicies,
       (decision) => decisions.push(decision),
     )
     const saved = await this.repository.saveResultIfAbsent(request.operationId, requestHash, result)
@@ -54,7 +46,7 @@ export class RunMissionSimulation {
           decisionSequence: decision.decisionSequence,
           mode: BattleMode.Pve,
           actor: decision.stateBefore.actor.identity,
-          decisionSource: this.decisionPolicy.source,
+          decisionSource: decision.decisionSource,
           stateBefore: decision.stateBefore,
           legalActions: decision.legalActions,
           selectedAction: decision.selectedAction,

@@ -41,7 +41,7 @@ Web A ── {"type":"useSkill","commandId","roomId","abilityId","target":{teamL
         SkillRealtimeHandler       forma exacta del mensaje · sin datos del cliente
         UseSkill                   serializa por sala
           BattleRoom.planSkill            VALIDA (0 sorteos): commandId/repetición → batalla → turno → objetivo → equipo → perfiles y Vida
-                                          → SKILLS_NOT_AVAILABLE → UNKNOWN_SKILL → UNSUPPORTED_SKILL_EFFECT → SKILL_ON_COOLDOWN → Poder
+                                          → SKILLS_NOT_AVAILABLE → UNKNOWN_SKILL → SKILL_LOCKED → UNSUPPORTED_SKILL_EFFECT → SKILL_ON_COOLDOWN → Poder
                                           └─ Poder insuficiente ⇒ se DEGRADA: ExecuteBasicAttack.executeExclusively (con degradedFrom)
           dados de bono de Ataque · prepareAttack + ResolveAttack (HU-20) · (si efectivo) efecto HU-25 · dado de Daño · dados de bono de Daño
           BattleRoom.applySkill           UNA transición: Vida + Poder + recarga + evento + commandId + turno avanzado
@@ -96,6 +96,8 @@ Del Catalog desplegado hoy, **10 de las 24 habilidades** cumplen: Golpe con escu
 ## Errores (`command.rejected {command:"useSkill", commandId?, code}`)
 
 `MALFORMED_COMMAND` · `INVALID_COMMAND_ID` · `ROOM_NOT_FOUND` · `NOT_A_PARTICIPANT` · `BATTLE_NOT_ACTIVE` · `NOT_YOUR_TURN` · `INVALID_TARGET` · `SAME_TEAM_TARGET` · `TARGET_UNAVAILABLE` · `ACTOR_UNAVAILABLE` · `UNSUPPORTED_COMBAT_PROFILE` · **`SKILLS_NOT_AVAILABLE`** · **`UNKNOWN_SKILL`** · **`UNSUPPORTED_SKILL_EFFECT`** · **`SKILL_ON_COOLDOWN`** · `COMMAND_CONFLICT` · `INTERNAL_ERROR`. Los cuatro en negrita son nuevos. Solo se le responde al remitente; el resto de la sala no se entera.
+
+**EN-031 (2026-10-11): `SKILL_LOCKED`.** Cada habilidad congelada puede llevar `unlockLevel` (Player-Inventory, `AbilityUnlockPolicy`: 1, 3 y 5 por la posición declarada en el héroe). Si `CombatProfile.level` (ausente = 1) es menor, la habilidad se publica con `status: "LOCKED"` y `unlockLevel`, y `useSkill` se rechaza con `SKILL_LOCKED` antes de evaluar el efecto: no se ejecuta ni se degrada. Sin `unlockLevel` (productor anterior, bots, simulaciones) la habilidad está desbloqueada. Migración `032` (aditiva). En la misma entrega, toda la familia `HEALING` se publica con `targetAudience: "ALLY"` (antes solo `HEAL`), porque el cliente enviaba un rival y la sala respondía `INVALID_HEAL_TARGET`.
 
 ## Idempotencia y concurrencia
 

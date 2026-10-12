@@ -16,6 +16,8 @@ import { RoomConflictError } from '../../src/application/errors/ApplicationError
 import { up as addHeroLevelToProfiles } from '../../src/adapters/outbound/persistence/migrations/017-battle-rooms-hero-level'
 import { TOURNAMENT_OPERATION_INDEX } from '../../src/adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
 import { up as addEpicToProfiles } from '../../src/adapters/outbound/persistence/migrations/020-battle-rooms-epic'
+import { up as addAbilityUnlockLevel } from '../../src/adapters/outbound/persistence/migrations/032-battle-rooms-ability-unlock-level'
+import { SHIELD_STRIKE, STORM } from '../fixtures/skills'
 import { golpeDeDefensaEpic } from '../fixtures/equipped-hero'
 import { MongoBattleRoomRepository } from '../../src/adapters/outbound/persistence/MongoBattleRoomRepository'
 import { describeError } from '../../src/infrastructure/observability/describe-error'
@@ -449,6 +451,65 @@ describe('MongoBattleRoomRepository', () => {
     const battle = fixed.battle as { combatants: { profile: { level: number } }[] }
     battle.combatants[0]!.profile.level = 9
     fixed._id = '3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a04'
+
+    await expect(rooms().insertOne(fixed as never)).rejects.toThrow()
+  })
+
+  /**
+   * EN-031 (migracion 032): cada habilidad congelada puede llevar `unlockLevel`. El esquema
+   * de habilidad de 016 tenia `additionalProperties: false`, asi que sin la migracion una
+   * batalla con habilidades bloqueadas no podria persistirse.
+   */
+  const startedRoomWithLockedSkill = (id: string): BattleRoom => {
+    const base = startedRoom(id, 2)
+    const battle = base.battle!
+    const combatants = battle.turnOrder.map((entry) =>
+      Combatant.start(
+        entry,
+        createCombatProfile({
+          heroId: entry.heroId ?? 'hero',
+          subtype: 'GUERRERO_ARMAS',
+          maxHealth: 44,
+          attack: 10,
+          defense: 11,
+          damage: { mode: 'DICE', count: 1, sides: 6 },
+          activeEffects: [],
+          level: 2,
+          maxPower: 10,
+          abilities: [
+            { ...SHIELD_STRIKE, unlockLevel: 1 },
+            { ...STORM, unlockLevel: 3 },
+          ],
+        }),
+      ),
+    )
+    let room = BattleRoom.create(id, CREATOR, validInput(), AT)
+    room = room.join(CREATOR, 'A', AT, 'Creador', 'hero-a', 0)
+    room = room.join('jugador-b', 'B', AT, 'Rival', 'hero-b', 0)
+
+    return room.startBattle([...battle.turnOrder], AT, combatants)
+  }
+
+  it('EN-031: una habilidad con `unlockLevel` se persiste y se recupera bloqueada (migracion 032)', async () => {
+    await addAbilityUnlockLevel(db)
+    await addAbilityUnlockLevel(db)
+    await repository.save(startedRoomWithLockedSkill('3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a31'), 0)
+
+    const found = await repository.findById('3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a31')
+    const view = found?.battle?.combatantFor({ teamLabel: 'A', seat: 0 })?.toView()
+
+    expect(view?.skills.map((skill) => [skill.status, skill.unlockLevel])).toEqual([
+      ['READY', 1],
+      ['LOCKED', 3],
+    ])
+
+    const stored = await rooms().findOne({ _id: '3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a31' })
+    const fixed = JSON.parse(JSON.stringify(stored)) as Record<string, unknown>
+    const battle = fixed.battle as {
+      combatants: { profile: { abilities: { unlockLevel: number }[] } }[]
+    }
+    battle.combatants[0]!.profile.abilities[1]!.unlockLevel = 9
+    fixed._id = '3f1c2a4e-7b1d-4c3e-9a10-0d7e5b6c8a32'
 
     await expect(rooms().insertOne(fixed as never)).rejects.toThrow()
   })

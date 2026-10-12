@@ -176,6 +176,7 @@ export const SkillErrorCode = Object.freeze({
   UnknownSkill: 'UNKNOWN_SKILL',
   UnsupportedSkillEffect: 'UNSUPPORTED_SKILL_EFFECT',
   SkillOnCooldown: 'SKILL_ON_COOLDOWN',
+  SkillLocked: 'SKILL_LOCKED',
 } as const)
 
 /**
@@ -189,6 +190,19 @@ export class SkillsNotAvailableError extends DomainError {
   constructor() {
     super('La batalla no tiene estado de habilidades: se inicio antes de habilitarlas.')
     this.name = 'SkillsNotAvailableError'
+  }
+}
+
+/**
+ * EN-031: la habilidad es del heroe, pero su nivel aun no la desbloquea
+ * (`CombatAbility.unlockLevel` > `CombatProfile.level`). No se ejecuta ni se degrada.
+ */
+export class SkillLockedError extends DomainError {
+  readonly code = SkillErrorCode.SkillLocked
+
+  constructor(readonly unlockLevel: number) {
+    super(`La habilidad se desbloquea en el nivel ${String(unlockLevel)}.`)
+    this.name = 'SkillLockedError'
   }
 }
 
