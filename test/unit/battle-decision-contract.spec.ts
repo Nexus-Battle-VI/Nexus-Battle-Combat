@@ -7,6 +7,7 @@ import {
   battleWithSkills,
   FOREST_SONG,
   FOREST_SONG_ID,
+  SHIELD_STRIKE,
   SHIELD_STRIKE_ID,
   skillProfile,
   STONE_HAND_ID,
@@ -312,6 +313,20 @@ describe('EN-035.2 decision contract', () => {
     expect(
       actions.some((action) => action.kind === 'ABILITY' && action.abilityId === SHIELD_STRIKE_ID),
     ).toBe(false)
+  })
+
+  it('excludes a bot skill locked above its frozen level instead of aborting AI planning', () => {
+    const locked = { ...SHIELD_STRIKE, unlockLevel: 3 }
+    const room = battleWithSkills({
+      profiles: {
+        a1: skillProfile({ level: 1, abilities: [locked] }),
+        b1: skillProfile(),
+      },
+    })
+    const actions = new LegalActionGenerator().generate(room)
+
+    expect(actions.some((action) => action.kind === 'ABILITY')).toBe(false)
+    expect(actions.some((action) => action.kind === 'BASIC_ATTACK')).toBe(true)
   })
 
   it('does not invent pass/skip when the current state has no legal target', () => {

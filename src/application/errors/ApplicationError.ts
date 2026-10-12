@@ -40,3 +40,16 @@ export class RoomConflictError extends Error {
     this.name = 'RoomConflictError'
   }
 }
+
+/**
+ * PO-JCE-01 define emparejamiento de nivel solo para Humano vs IA 1v1.
+ * Rechazar otros formatos evita inventar promedio, maximo o jugador de referencia.
+ */
+export class PveTeamLevelMatchingUndefinedError extends Error {
+  readonly code = 'PVE_TEAM_LEVEL_MATCHING_UNDEFINED'
+
+  constructor() {
+    super('El emparejamiento de nivel para JcE por equipos aun no esta definido.')
+    this.name = 'PveTeamLevelMatchingUndefinedError'
+  }
+}

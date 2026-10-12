@@ -104,7 +104,7 @@ const accounts: AccountBattleProfilePort = {
     Promise.resolve({ subject, displayName: `nombre-${subject}`, avatarUrl: null }),
 }
 
-type Scenario = 'HUMAN_WINS' | 'AI_WINS' | 'SUPPORT_END_TURN'
+type Scenario = 'HUMAN_WINS' | 'AI_WINS' | 'SUPPORT_REJECTED'
 
 let scenario: Scenario = 'HUMAN_WINS'
 
@@ -128,7 +128,7 @@ const epic = (sequence: number): BotCatalogEpic => ({
 })
 
 const candidatesFor = (current: Scenario): BotCatalogCandidates => {
-  if (current === 'SUPPORT_END_TURN') {
+  if (current === 'SUPPORT_REJECTED') {
     return botCatalogCandidates({ heroes: [supportHero('MEDICO')] })
   }
 
@@ -673,44 +673,20 @@ describe('HU-93.4 E2E: Humano vs IA 1v1 con HTTP + WebSocket + MongoDB real', ()
     client.close()
   }, 30_000)
 
-  it('CA-03/04/07: un Medico sin accion legal produce END_TURN SYSTEM y nunca requiere identidad o comando humano', async () => {
-    scenario = 'SUPPORT_END_TURN'
-    sequence.push(401, 2)
+  it('JCE-06: un Catalog con solo Medico se rechaza sin RNG ni batalla parcial', async () => {
+    scenario = 'SUPPORT_REJECTED'
 
     const roomId = await createPreparingRoom()
-    const client = await connect()
-    await subscribe(client, roomId)
 
     const started = await http()
       .post(`/api/v1/combat/rooms/${roomId}/start`)
       .set('Authorization', auth())
 
-    expect(started.body.battle.currentTurn.kind).toBe('AI')
-    await client.waitFor('battleStarted')
-    await client.waitFor('turnAdvanced')
+    expect(started.status).toBe(503)
 
     const after = await readRoom(roomId)
-    expect(after.battle).toMatchObject({
-      turnsCompleted: 1,
-      currentTurn: { kind: 'HUMAN', teamLabel: 'A' },
-    })
+    expect(after).toMatchObject({ status: 'PREPARING', battle: null, lastSeq: 0 })
 
-    const [decision] = await decisions()
-      .find({ battleId: roomId, eventType: 'COMBAT_DECISION' })
-      .toArray()
-    expect(decision).toMatchObject({
-      schemaVersion: 2,
-      decisionSource: 'SYSTEM',
-      legalActions: [],
-      selectedAction: { kind: 'END_TURN' },
-    })
-
-    const intruder = await connect('token-intruder')
-    intruder.send({ type: 'resume', roomId })
-    const [rejected] = await intruder.waitFor('command.rejected')
-    expect(rejected).toMatchObject({ code: 'NOT_A_PARTICIPANT' })
-
-    intruder.close()
-    client.close()
+    expect(await decisions().countDocuments({ battleId: roomId })).toBe(0)
   }, 30_000)
 })

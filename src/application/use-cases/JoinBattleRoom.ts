@@ -3,6 +3,7 @@ import {
   isIndividualFormat,
 } from '../../domain/policies/PrecombatEligibilityPolicy'
 import type { ParticipantStakeInput } from '../../domain/value-objects/ParticipantStake'
+import { BattleMode } from '../../domain/value-objects/BattleMode'
 import { RoomNotFoundError } from '../errors/ApplicationError'
 import { PrecombatEligibilityBlockedError } from '../errors/PrecombatEligibilityError'
 import { PlayerWithoutEquippedHeroError } from '../errors/UpstreamErrors'
@@ -97,6 +98,7 @@ export class JoinBattleRoom {
     const eligibility = assessPrecombatEligibility({
       heroSubtype: equippedHero.subtype,
       individualFormat: isIndividualFormat(room.teams),
+      pve: room.mode === BattleMode.Pve,
       heroReady: equippedHero.ready,
       heroBlockers: equippedHero.blockers,
     })

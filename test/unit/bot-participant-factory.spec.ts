@@ -24,6 +24,26 @@ const catalog = (
 }
 
 describe('BotParticipantFactory — HU-93.1', () => {
+  it.each([1, 3, 5, 8])(
+    'JCE nivel %i: escala stats numericos una vez, congela nivel y desbloqueos 1/3/5',
+    async (heroLevel) => {
+      const result = await new BotParticipantFactory(catalog(), scriptedRandom([0, 7999])).create({
+        mode: 'PVE',
+        heroLevel,
+      })
+
+      expect(result.profile).toMatchObject({
+        level: heroLevel,
+        maxPower: 10 * heroLevel,
+        maxHealth: 40 * heroLevel,
+        defense: 8 * heroLevel,
+        attack: 7 * heroLevel,
+        damage: { mode: 'DICE', count: 1, sides: 6 },
+        abilities: [{ unlockLevel: 1 }, { unlockLevel: 3 }, { unlockLevel: 5 }],
+      })
+    },
+  )
+
   it('selecciona uniformemente un heroe sobre orden canonico y conserva stats/abilities reales', async () => {
     const second = offensiveHero({
       productId: '10000000-0000-4000-8000-000000000009',
@@ -37,7 +57,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
       random,
     )
 
-    const result = await factory.create()
+    const result = await factory.create({ mode: 'PVE', heroLevel: 1 })
 
     expect(random.bounds).toEqual([2, 8000])
     expect(result.heroId).toBe(second.productId)
@@ -53,21 +73,20 @@ describe('BotParticipantFactory — HU-93.1', () => {
         { abilityId: second.abilities[2], name: 'Golpe preciso 4' },
       ],
     })
-    expect(result.profile).not.toHaveProperty('level')
+    expect(result.profile.level).toBe(1)
   })
 
   it.each(['CHAMAN', 'MEDICO'] as const)(
-    '%s conserva soporte puro: attack/damage null y habilidad no ofensiva',
+    '%s nunca se usa como fallback cuando Catalog solo ofrece soportes',
     async (subtype) => {
       const hero = supportHero(subtype)
-      const result = await new BotParticipantFactory(
-        catalog(botCatalogCandidates({ heroes: [hero] })),
-        scriptedRandom([0, 7999]),
-      ).create()
-
-      expect(result.profile.attack).toBeNull()
-      expect(result.profile.damage).toBeNull()
-      expect(result.profile.abilities?.[0]?.effects[0]?.kind).toBe('HEALING')
+      const random = scriptedRandom([])
+      await expect(
+        new BotParticipantFactory(catalog(botCatalogCandidates({ heroes: [hero] })), random).create(
+          { mode: 'PVE', heroLevel: 1 },
+        ),
+      ).rejects.toBeInstanceOf(UpstreamServiceError)
+      expect(random.bounds).toEqual([])
     },
   )
 
@@ -101,7 +120,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
     const random = scriptedRandom([])
 
     await expect(
-      new BotParticipantFactory(catalog(invalid), random).create(),
+      new BotParticipantFactory(catalog(invalid), random).create({ mode: 'PVE', heroLevel: 1 }),
     ).rejects.toBeInstanceOf(UpstreamServiceError)
     expect(random.bounds).toEqual([])
   })
@@ -123,7 +142,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
     const result = await new BotParticipantFactory(
       catalog(botCatalogCandidates({ equipment: [...compatible, incompatible] })),
       random,
-    ).create()
+    ).create({ mode: 'PVE', heroLevel: 1 })
 
     expect(result.loadout).toHaveLength(10)
     expect(new Set(result.loadout.map((entry) => entry.productId)).size).toBe(10)
@@ -167,7 +186,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
     const result = await new BotParticipantFactory(
       catalog(botCatalogCandidates({ equipment: [sword] })),
       scriptedRandom([0, 0, 7999]),
-    ).create()
+    ).create({ mode: 'PVE', heroLevel: 1 })
 
     expect(result.profile.attack).toBe(10)
     expect(result.profile.defense).toBe(8)
@@ -205,7 +224,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
         }),
       ),
       scriptedRandom([0, roll, ...(expectedEpic ? [0] : [])]),
-    ).create()
+    ).create({ mode: 'PVE', heroLevel: 1 })
 
     expect(result.profile.epic !== undefined).toBe(expectedEpic)
   })
@@ -235,7 +254,7 @@ describe('BotParticipantFactory — HU-93.1', () => {
         }),
       ),
       scriptedRandom([0, 0]),
-    ).create()
+    ).create({ mode: 'PVE', heroLevel: 1 })
 
     expect(result.profile.epic).toBeUndefined()
   })

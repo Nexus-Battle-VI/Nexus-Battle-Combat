@@ -120,6 +120,8 @@ export interface SkillView {
 
 /** Un participante tal como lo ve un cliente: su Vida, su Poder y sus habilidades, nunca su perfil. */
 export interface CombatantView extends CombatantKey {
+  /** Nivel congelado del perfil; ausente en snapshots anteriores a CA-06. */
+  readonly level?: number
   /** `null` sin perfil de combate (`AI` o batalla anterior a HU-18). */
   readonly health: HealthView | null
   /** `null` sin perfil o en una batalla anterior a HU-19. */
@@ -587,6 +589,7 @@ export class Combatant {
     return {
       teamLabel: this.teamLabel,
       seat: this.seat,
+      ...(this.profile?.level === undefined ? {} : { level: this.profile.level }),
       health:
         this.profile === null || this.currentHealth === null
           ? null

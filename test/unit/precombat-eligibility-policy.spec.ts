@@ -1,6 +1,7 @@
 import {
   assessPrecombatEligibility,
   HERO_CLASS_NOT_ALLOWED_FOR_FORMAT,
+  HERO_CLASS_NOT_ALLOWED_FOR_PVE,
   HERO_NOT_READY_WITHOUT_DETAIL,
   isIndividualFormat,
   type PrecombatEligibilityBlocker,
@@ -100,6 +101,25 @@ describe('assessPrecombatEligibility — negativos', () => {
       expect.objectContaining({ code: HERO_CLASS_NOT_ALLOWED_FOR_FORMAT, reference: heroSubtype }),
     ])
   })
+
+  it.each(['CHAMAN', 'MEDICO'])(
+    '%s en JcE se bloquea tambien en formato de equipo con mensaje para Mi Inventario',
+    (heroSubtype) => {
+      const result = assessPrecombatEligibility({
+        ...READY_INPUT,
+        heroSubtype,
+        individualFormat: false,
+        pve: true,
+      })
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          code: HERO_CLASS_NOT_ALLOWED_FOR_PVE,
+          detail: expect.stringContaining('Mi Inventario'),
+        }),
+      ])
+    },
+  )
 
   it('un subtipo NUEVO, no registrado, NO se rechaza por esta comprobacion (falla abierto, igual que el parser)', () => {
     const result = assessPrecombatEligibility({
