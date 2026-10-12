@@ -211,6 +211,32 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
     expect(random.bounds).toEqual([1, 8000, 2])
   })
 
+  it.each([1, 3, 5, 8])('JCE-%i: la IA congela exactamente el nivel del humano', async (level) => {
+    const repo = new InMemoryBattleRoomRepository()
+    const heroes = heroesPort({
+      a1: equippedHeroFixture({
+        playerId: 'a1',
+        heroId: 'hero-a1',
+        loadoutVersion: 3,
+        level,
+      }),
+    })
+
+    await seed(repo, { teamSizes: [1, 1], aiInTeamB: 1 })
+    const dto = await build(repo, {
+      heroes,
+      random: scriptedRandom([0, 7999, 0]),
+    }).useCase.execute(ROOM_ID, 'a1')
+    const room = await repo.findById(ROOM_ID)
+    const bot = room?.battle?.combatantFor({ teamLabel: 'B', seat: 0 })
+
+    expect(bot?.profile?.level).toBe(level)
+    expect(dto.battle?.combatants[1]).toMatchObject({
+      level,
+      health: { current: 40 * level, max: 40 * level },
+    })
+  })
+
   it('PVE idempotente: el retry no vuelve a consultar Catalog ni cambia el bot persistido', async () => {
     const repo = new InMemoryBattleRoomRepository()
     const random = scriptedRandom([0, 7999, 0])
@@ -418,6 +444,42 @@ describe('StartBattle — sala preparada -> batalla con cola generada (HU-17)', 
       ).rejects.toBeInstanceOf(PrecombatEligibilityBlockedError)
       await expectNoBattle(repo, publisher)
     })
+
+    it.each(['CHAMAN', 'MEDICO'] as const)(
+      '%s en JcE se rechaza antes de consultar Catalog o consumir RNG',
+      async (subtype) => {
+        const repo = new InMemoryBattleRoomRepository()
+        const publisher = recordingPublisher()
+        const random = scriptedRandom([])
+        let catalogCalls = 0
+        const bots = new BotParticipantFactory(
+          {
+            listBotCandidates: () => {
+              catalogCalls += 1
+              return Promise.resolve(botCatalogCandidates())
+            },
+          },
+          random,
+        )
+
+        await seed(repo, { teamSizes: [1, 1], aiInTeamB: 1 })
+        const heroes = heroesPort({
+          a1: equippedHeroFixture({
+            playerId: 'a1',
+            heroId: 'hero-a1',
+            loadoutVersion: 3,
+            subtype,
+          }),
+        })
+
+        await expect(
+          build(repo, { heroes, publisher, random, bots }).useCase.execute(ROOM_ID, 'a1'),
+        ).rejects.toBeInstanceOf(PrecombatEligibilityBlockedError)
+        expect(catalogCalls).toBe(0)
+        expect(random.bounds).toEqual([])
+        await expectNoBattle(repo, publisher)
+      },
+    )
 
     it('Player-Inventory caido: el error de la dependencia se propaga, sin cola', async () => {
       const repo = new InMemoryBattleRoomRepository()

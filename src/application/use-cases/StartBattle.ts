@@ -20,6 +20,7 @@ import { BattleRoomStatus } from '../../domain/value-objects/BattleRoomStatus'
 import { commitmentExpiresAt } from '../../domain/policies/BattleTimingPolicy'
 import { toBattleRoomDto, type BattleRoomDto } from '../dto/BattleRoomDto'
 import {
+  PveTeamLevelMatchingUndefinedError,
   RoomAccessForbiddenError,
   RoomConflictError,
   RoomNotFoundError,
@@ -295,24 +296,6 @@ export class StartBattle {
       }),
     )
 
-    const preparedBots = new Map<string, PreparedBotParticipant>()
-
-    if (room.tournament === null) {
-      const aiMembers = rosters.flatMap((roster) =>
-        roster.members.filter((member) => member.kind === ParticipantKind.Ai),
-      )
-
-      if (aiMembers.length > 0 && this.bots === null) {
-        throw new UpstreamServiceError('catalog', 'no_configurado')
-      }
-
-      // Secuencial: todos consumen el mismo stream BATTLE_RANDOM en orden de roster.
-      for (const member of aiMembers) {
-        const bots = this.bots
-        if (bots !== null) preparedBots.set(memberKey(member), await bots.create())
-      }
-    }
-
     const enriched = new Map<string, RosterMember>()
     const profiles = new Map<string, Combatant>()
 
@@ -354,6 +337,7 @@ export class StartBattle {
       const eligibility = assessPrecombatEligibility({
         heroSubtype: hero.subtype,
         individualFormat,
+        pve: room.mode === BattleMode.Pve,
         heroReady: hero.ready,
         heroBlockers: hero.blockers,
       })
@@ -370,6 +354,44 @@ export class StartBattle {
         heroSubtype: hero.subtype,
       })
       profiles.set(memberKey(member), this.freeze(member, hero))
+    }
+
+    // Solo despues de validar por completo al humano se consulta Catalog y se
+    // consume BATTLE_RANDOM. Asi un rechazo de elegibilidad no deja efectos
+    // parciales ni escoge un bot que nunca se persistira.
+    const preparedBots = new Map<string, PreparedBotParticipant>()
+
+    if (room.tournament === null) {
+      const aiMembers = rosters.flatMap((roster) =>
+        roster.members.filter((member) => member.kind === ParticipantKind.Ai),
+      )
+
+      if (aiMembers.length > 0 && this.bots === null) {
+        throw new UpstreamServiceError('catalog', 'no_configurado')
+      }
+
+      // PO-JCE-01 ratifica el nivel solo para Humano vs IA 1v1. No se inventa
+      // promedio/maximo para equipos. ExecuteAiTurn ya limita su ejecucion a
+      // esta misma cardinalidad.
+      const [onlyHuman] = humans
+      const human =
+        onlyHuman !== undefined && humans.length === 1 && aiMembers.length === 1
+          ? heroes.get(onlyHuman.playerId)
+          : null
+      if (aiMembers.length > 0 && (room.mode !== BattleMode.Pve || human == null)) {
+        throw new PveTeamLevelMatchingUndefinedError()
+      }
+
+      // Compatibilidad CA-06 documentada: un productor antiguo sin `level`
+      // tiene semantica de nivel 1; no se consulta ni inventa otra fuente.
+      const heroLevel = human?.level ?? 1
+
+      for (const member of aiMembers) {
+        const bots = this.bots
+        if (bots !== null) {
+          preparedBots.set(memberKey(member), await bots.create({ mode: 'PVE', heroLevel }))
+        }
+      }
     }
 
     for (const roster of rosters) {

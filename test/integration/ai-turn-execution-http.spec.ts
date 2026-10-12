@@ -31,7 +31,7 @@ import { BasicAttackRealtimeHandler } from '../../src/adapters/inbound/ws/BasicA
 import { equippedHeroFixture } from '../fixtures/equipped-hero'
 import { recordingBattleCommitments } from '../fixtures/battle-commitments'
 import { recordingBattleDropInventory } from '../fixtures/battle-drop-inventory'
-import { botCatalogCandidates, supportHero } from '../fixtures/combat-bot-candidates'
+import { botCatalogCandidates } from '../fixtures/combat-bot-candidates'
 import { FakeSocket } from '../fixtures/fake-socket'
 
 /**
@@ -42,13 +42,9 @@ import { FakeSocket } from '../fixtures/fake-socket'
  * inyectar `AI_TURN_TRIGGER` en un handler) rompa un test, no solo el
  * comportamiento en produccion.
  *
- * El catalogo del bot tiene exactamente UN heroe soporte (MEDICO), sin
- * equipamiento ni epica: la seleccion de `BotParticipantFactory` queda
- * determinista sin importar el valor real sorteado (`nextInt(1)` siempre
- * devuelve 0, y sin candidatos no hay sorteo de equipamiento/epica). Sus
- * habilidades sanan a un `ALLY` que no existe en 1v1, asi que el turno del
- * bot SIEMPRE resuelve a `END_TURN`: no hace falta modelar el motor de
- * resolucion de ataque para que esta prueba sea determinista.
+ * El catalogo del bot tiene exactamente UN heroe ofensivo, sin equipamiento
+ * ni epica: la seleccion queda determinista (`nextInt(1)` siempre devuelve
+ * 0) y respeta la regla JcE que excluye CHAMAN/MEDICO.
  */
 const IDENTITIES: Readonly<Record<string, VerifiedIdentity>> = {
   'token-a': { subject: 'sujeto-a', email: null, roles: new Set([Role.Player]) },
@@ -75,8 +71,7 @@ const heroes: PlayerInventoryEquippedHeroPort = {
 }
 
 const catalog: BotCombatCatalogPort = {
-  listBotCandidates: () =>
-    Promise.resolve(botCatalogCandidates({ heroes: [supportHero('MEDICO')] })),
+  listBotCandidates: () => Promise.resolve(botCatalogCandidates()),
 }
 
 /**

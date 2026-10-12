@@ -59,6 +59,12 @@ export interface PreparedBotParticipant {
   readonly loadout: readonly BotLoadoutEntry[]
 }
 
+export interface BotPreparationContext {
+  /** Nivel autoritativo del heroe humano emparejado en JcE 1v1. */
+  readonly heroLevel: number
+  readonly mode: 'PVE'
+}
+
 interface SelectedEquipment {
   readonly slot: BotLoadoutSlot
   readonly product: BotCatalogEquipment
@@ -80,6 +86,23 @@ const byProductId = <T extends { readonly productId: string }>(left: T, right: T
 const compatibleWith = (product: BotCatalogEquipment, subtype: string): boolean =>
   product.compatibilityScope === 'ALL_HEROES' ||
   product.compatibleHeroSubtypes?.includes(subtype) === true
+
+/** Catalog define la rama por capacidades: un ofensivo tiene Ataque y Dano, no Curacion. */
+const isOffensiveHero = (hero: BotCatalogHero): boolean =>
+  hero.baseAttack !== undefined && hero.baseDamage !== undefined && hero.baseHealing === undefined
+
+const requireHeroLevel = (level: number): number => {
+  if (!Number.isInteger(level) || level < 1 || level > 8) throw invalidCatalog()
+  return level
+}
+
+/**
+ * EN-031: Player-Inventory publica el desbloqueo por la posicion autoritativa
+ * de `HeroAttributes.abilities`: primera a nivel 1, segunda a 3 y tercera (o
+ * posterior) a 5. El contrato del bot conserva expresamente ese orden.
+ */
+const abilityUnlockLevel = (position: number): number =>
+  position === 0 ? 1 : position === 1 ? 3 : 5
 
 const isDirectDamage = (effect: BotCatalogEffect): boolean =>
   effect.kind === 'DAMAGE' ||
@@ -226,6 +249,7 @@ const applicableStat = (effect: BotCatalogEffect): effect is ApplicableStatEffec
 const effectiveStats = (
   hero: BotCatalogHero,
   loadout: readonly SelectedEquipment[],
+  heroLevel: number,
 ): {
   readonly power: number
   readonly health: number
@@ -233,11 +257,15 @@ const effectiveStats = (
   readonly attack: number | null
   readonly activeEffects: CombatProfile['activeEffects']
 } => {
+  // Misma semantica CA-06 de Player-Inventory: primero base x nivel; despues
+  // los modificadores permanentes del equipamiento. Dano no se escala aqui:
+  // Combat multiplica su resultado final mediante CombatProfile.level.
+  const level = requireHeroLevel(heroLevel)
   const base: Readonly<Record<string, number>> = {
-    POWER: hero.basePower,
-    HEALTH: hero.baseHealth,
-    DEFENSE: hero.baseDefense,
-    ATTACK: hero.baseAttack?.mode === 'FIXED' ? hero.baseAttack.amount : 0,
+    POWER: hero.basePower * level,
+    HEALTH: hero.baseHealth * level,
+    DEFENSE: hero.baseDefense * level,
+    ATTACK: hero.baseAttack?.mode === 'FIXED' ? hero.baseAttack.amount * level : 0,
   }
   const accumulators = new Map<string, StatAccumulator>()
   const activeEffects: CombatProfile['activeEffects'][number][] = []
@@ -304,7 +332,7 @@ const effectiveStats = (
   }
 }
 
-const combatAbility = (ability: BotCatalogAbility) => {
+const combatAbility = (ability: BotCatalogAbility, unlockLevel: number) => {
   let powerCost:
     { readonly mode: 'ALL_AVAILABLE' } | { readonly mode: 'FIXED'; readonly amount: number }
 
@@ -322,6 +350,7 @@ const combatAbility = (ability: BotCatalogAbility) => {
     powerCost,
     chargeTurns: ability.chargeTurns,
     effects: ability.effects.map(abilityEffect),
+    unlockLevel,
   }
 }
 
@@ -354,22 +383,24 @@ export class BotParticipantFactory {
     private readonly random: BoundedRandom,
   ) {}
 
-  async create(): Promise<PreparedBotParticipant> {
+  async create(context: BotPreparationContext): Promise<PreparedBotParticipant> {
+    const heroLevel = requireHeroLevel(context.heroLevel)
     const candidates = await this.catalog.listBotCandidates()
 
     assertDatasetConsistency(candidates)
 
-    const heroes = [...candidates.heroes].sort(byProductId)
+    const heroes = candidates.heroes.filter(isOffensiveHero).sort(byProductId)
+    if (heroes.length === 0) throw invalidCatalog()
     const hero = choose(heroes, this.random)
     const loadout = selectLoadout(candidates, hero, this.random)
-    const stats = effectiveStats(hero, loadout)
+    const stats = effectiveStats(hero, loadout, heroLevel)
     const abilitiesById = new Map(
       candidates.abilities.map((ability) => [ability.productId, ability]),
     )
-    const abilities = hero.abilities.map((abilityId) => {
+    const abilities = hero.abilities.map((abilityId, position) => {
       const ability = abilitiesById.get(abilityId)
       if (ability === undefined) throw invalidCatalog()
-      return combatAbility(ability)
+      return combatAbility(ability, abilityUnlockLevel(position))
     })
     const compatibleEpics = candidates.epics
       .filter((epic) => epic.compatibleHeroSubtype === hero.heroSubtype)
@@ -388,6 +419,7 @@ export class BotParticipantFactory {
       damage: hero.baseDamage === undefined ? null : { ...hero.baseDamage },
       activeEffects: stats.activeEffects,
       maxPower: stats.power,
+      level: heroLevel,
       abilities,
       ...(epic === undefined ? {} : { epic }),
     })
