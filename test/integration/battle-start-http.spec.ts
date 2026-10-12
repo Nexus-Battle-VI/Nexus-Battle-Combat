@@ -184,6 +184,8 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
     commitments.releases.length = 0
     commitments.failCommits = false
     commitments.failReleases = false
+    commitments.releaseAttempts.length = 0
+    commitments.heroesInAnotherBattle.clear()
     dropInventory.captures.length = 0
     dropInventory.transfers.length = 0
     dropInventory.closedBattles.length = 0
@@ -318,6 +320,57 @@ describe('HU-17 sobre HTTP: iniciar batalla, leer sala y ticket del WebSocket', 
         new Set([roomId]),
       )
       expect(commitments.commits[0]?.expiresAt.getTime()).toBeGreaterThan(Date.now())
+    })
+
+    it('EN-031: si el heroe de un participante sigue en otra batalla: 409 HERO_IN_ANOTHER_BATTLE con su nombre, se libera lo ya comprometido y un reintento arranca', async () => {
+      const roomId = await preparingRoom()
+      commitments.heroesInAnotherBattle.add('sujeto-b')
+
+      const blocked = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+
+      expect(blocked.status).toBe(409)
+      expect(blocked.body.code).toBe('HERO_IN_ANOTHER_BATTLE')
+      expect(typeof blocked.body.displayName).toBe('string')
+      // Lo que ESTE intento comprometio (el primer humano) se libera con la clave del intento:
+      // antes quedaba bloqueado ~6 min y ese heroe no podia entrar a ninguna otra sala.
+      expect(commitments.commits.map(({ playerId }) => playerId)).toEqual(['sujeto-a'])
+      expect(commitments.releases).toEqual([{ roomId, playerId: 'sujeto-a' }])
+      expect(commitments.releaseAttempts).toEqual([commitments.commits[0]?.attemptStartedAt])
+
+      const read = await http()
+        .get(`/api/v1/combat/rooms/${roomId}`)
+        .set('Authorization', auth('token-a'))
+      expect(read.body.status).toBe('PREPARING')
+
+      commitments.heroesInAnotherBattle.clear()
+      const retried = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+
+      expect(retried.status).toBe(200)
+      expect(retried.body.status).toBe('IN_BATTLE')
+      // Cada intento compromete con el `startedAt` que queda en la batalla: es la clave con la
+      // que se liberara al terminar.
+      expect(
+        commitments.commits.slice(1).map(({ attemptStartedAt }) => attemptStartedAt.toISOString()),
+      ).toEqual([retried.body.battle.startedAt, retried.body.battle.startedAt])
+    })
+
+    it('EN-031: si falla la captura de drops (PVP) tras comprometer a todos, se liberan los dos compromisos de ese intento', async () => {
+      const roomId = await preparingRoom()
+      dropInventory.failCapture = true
+
+      const failed = await http()
+        .post(`/api/v1/combat/rooms/${roomId}/start`)
+        .set('Authorization', auth('token-a'))
+
+      expect(failed.status).toBe(503)
+      expect(commitments.releases.map(({ playerId }) => playerId).sort()).toEqual([
+        'sujeto-a',
+        'sujeto-b',
+      ])
     })
 
     it('HU-30: iniciar por HTTP captura el snapshot de drop de CADA humano en PVP', async () => {

@@ -26,7 +26,11 @@ import {
   RoomNotFoundError,
 } from '../errors/ApplicationError'
 import { PrecombatEligibilityBlockedError } from '../errors/PrecombatEligibilityError'
-import { PlayerWithoutEquippedHeroError, UpstreamServiceError } from '../errors/UpstreamErrors'
+import {
+  HeroInAnotherBattleError,
+  PlayerWithoutEquippedHeroError,
+  UpstreamServiceError,
+} from '../errors/UpstreamErrors'
 import type { BattleEventPublisherPort } from '../ports/BattleEventPublisherPort'
 import type { BattleConnectionsPort } from '../ports/BattleConnectionsPort'
 import type { BattleDeadlineBookPort } from '../ports/BattleDeadlineBookPort'
@@ -193,27 +197,34 @@ export class StartBattle {
     // luego comprometer -- una caida entre las dos dejaria una batalla corriendo
     // con el loadout modificable, que es justo lo que la HU prohibe. En este
     // orden, el peor caso es un compromiso sin batalla, que caduca solo.
-    await this.commitBattleHeroes(room, heroes, startedAt)
-    // HU-30/HU-93.3: el snapshot de drop solo le sirve a PVP (Versus) -- el
-    // unico lector es `PersistVersusDropDecision`, que ya se limita a PVP. En
-    // PVE nadie lo lee nunca: capturarlo igual solo agrega una llamada a
-    // Player-Inventory que puede bloquear el inicio de una justa Humano vs IA
-    // sin ningun beneficio.
-    if (this.dropInventory !== null && room.mode === BattleMode.Pvp) {
-      for (const [playerId, hero] of heroes) {
-        await this.dropInventory.capture({
-          battleId: room.id,
-          playerId,
-          heroId: hero.heroId,
-          loadoutVersion: hero.loadoutVersion,
-        })
-      }
-    }
-
+    // EN-031: lo que ESTE intento comprometio. Si el intento no termina con la batalla
+    // guardada, se libera: antes quedaba bloqueado hasta caducar (~6 min) y el heroe no
+    // podia entrar a ninguna otra sala mientras tanto.
+    const committed: string[] = []
     let saved
+
     try {
+      await this.commitBattleHeroes(room, heroes, startedAt, committed)
+      // HU-30/HU-93.3: el snapshot de drop solo le sirve a PVP (Versus) -- el
+      // unico lector es `PersistVersusDropDecision`, que ya se limita a PVP. En
+      // PVE nadie lo lee nunca: capturarlo igual solo agrega una llamada a
+      // Player-Inventory que puede bloquear el inicio de una justa Humano vs IA
+      // sin ningun beneficio.
+      if (this.dropInventory !== null && room.mode === BattleMode.Pvp) {
+        for (const [playerId, hero] of heroes) {
+          await this.dropInventory.capture({
+            battleId: room.id,
+            playerId,
+            heroId: hero.heroId,
+            loadoutVersion: hero.loadoutVersion,
+          })
+        }
+      }
+
       saved = await this.rooms.save(started, room.version)
     } catch (error: unknown) {
+      await this.releaseAttempt(roomId, committed, startedAt)
+
       if (error instanceof RoomConflictError) {
         const current = await this.rooms.findById(roomId)
 
@@ -455,16 +466,52 @@ export class StartBattle {
     room: BattleRoom,
     heroes: ReadonlyMap<string, EquippedHero>,
     startedAt: Date,
+    committed: string[],
   ): Promise<void> {
     const expiresAt = commitmentExpiresAt(startedAt)
 
     for (const [playerId, hero] of heroes) {
-      await this.commitments.commit({
-        roomId: room.id,
-        playerId,
-        heroId: hero.heroId,
-        expiresAt,
-      })
+      try {
+        await this.commitments.commit({
+          roomId: room.id,
+          playerId,
+          heroId: hero.heroId,
+          expiresAt,
+          attemptStartedAt: startedAt,
+        })
+      } catch (error: unknown) {
+        if (error instanceof HeroInAnotherBattleError) {
+          // EN-031: Web dice QUIEN tiene el heroe ocupado, con el nombre de la sala.
+          const participant = room.teams
+            .flatMap((team) => team.participants)
+            .find((candidate) => candidate.playerId === playerId)
+
+          throw new HeroInAnotherBattleError(playerId, participant?.displayName ?? null)
+        }
+
+        throw error
+      }
+      committed.push(playerId)
+    }
+  }
+
+  /**
+   * EN-031: compensacion de un intento de inicio que no llego a guardar la batalla. Libera
+   * SOLO lo que comprometio este intento (su clave lleva su `startedAt`), asi que nunca toca
+   * los compromisos de otro intento que si arranco. Si liberar falla, el compromiso caduca
+   * solo, como antes: nunca se oculta el error original del inicio.
+   */
+  private async releaseAttempt(
+    roomId: string,
+    playerIds: readonly string[],
+    startedAt: Date,
+  ): Promise<void> {
+    for (const playerId of playerIds) {
+      try {
+        await this.commitments.release(roomId, playerId, startedAt)
+      } catch {
+        // El compromiso caduca solo (`commitmentExpiresAt`); el error que importa es el del inicio.
+      }
     }
   }
 
