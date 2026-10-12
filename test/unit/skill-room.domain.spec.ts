@@ -32,7 +32,9 @@ import {
   STORM,
   STORM_ID,
   battleWithSkills,
+  fixed,
   skillProfile,
+  statEffect,
 } from '../fixtures/skills'
 
 /**
@@ -310,6 +312,32 @@ describe('BattleRoom.planSkill — validacion previa (0 sorteos)', () => {
       // sin soportarse por su condicion de activacion (nunca definida formalmente), el PRIMER
       // incumplimiento que evalua `classifyStatModifier` para un efecto de estadistica.
       expect((error as UnsupportedSkillEffectError).reason).toMatch(/condicionado/)
+    }
+  })
+
+  it('EN-031: los efectos temporales nombran a su origen y destino SOLO por teamLabel y seat', () => {
+    // El validador de `activeSkillEffects[].sourceCombatant` rechaza cualquier otro campo: con
+    // la entrada completa de la cola, Piquete fallaba al guardarse en produccion.
+    const piquete = {
+      abilityId: '9a1b2c3d-1111-4222-8333-444455556666',
+      name: 'Piquete',
+      powerCost: { mode: 'FIXED' as const, amount: 4 },
+      chargeTurns: 1,
+      effects: [
+        statEffect('ATTACK', fixed(1), { durationTurns: 2 }),
+        statEffect('DAMAGE', fixed(2), { durationTurns: 1 }),
+      ],
+    }
+    const room = battleWithSkills({
+      profiles: { a1: skillProfile({ abilities: [piquete] }), b1: skillProfile() },
+    })
+
+    const plan = skillPlan(room, 'a1', 'cmd-1', piquete.abilityId)
+
+    expect(plan.temporalEffects).toHaveLength(2)
+    for (const temporal of plan.temporalEffects) {
+      expect(temporal.sourceCombatant).toStrictEqual(TARGET_A)
+      expect(temporal.targetKey).toStrictEqual(TARGET_A)
     }
   })
 
