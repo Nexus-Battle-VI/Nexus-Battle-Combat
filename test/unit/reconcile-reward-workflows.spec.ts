@@ -174,10 +174,10 @@ describe('ReconcileRewardWorkflows (HU-22): cierra el hueco entre sala FINISHED 
     const commitments = recordingBattleCommitments()
     const inner = commitments.release.bind(commitments)
 
-    commitments.release = (roomId, playerId) =>
+    commitments.release = (roomId, playerId, attemptStartedAt) =>
       playerId === 'a1'
         ? Promise.reject(new UpstreamServiceError('player-inventory', 'no_alcanzable'))
-        : inner(roomId, playerId)
+        : inner(roomId, playerId, attemptStartedAt)
 
     const workflows = new InMemoryRewardWorkflowRepository()
     const errors: Record<string, unknown>[] = []

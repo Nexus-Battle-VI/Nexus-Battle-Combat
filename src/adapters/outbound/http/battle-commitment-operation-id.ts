@@ -26,8 +26,24 @@ export const BATTLE_COMMITMENT_NAMESPACE = '6f2a1c74-58d3-4e0b-9a17-2c8b5e4d7f31
  * compromiso y la liberacion --cosa que el propio bloqueo impide--, la clave
  * tiene que seguir siendo la misma o la liberacion no encontraria nada.
  */
-export const toBattleCommitmentOperationId = (roomId: string, playerId: string): string =>
-  uuidV5(`battle:${roomId}:player:${playerId}:commitment`, BATTLE_COMMITMENT_NAMESPACE)
+export const toBattleCommitmentOperationId = (
+  roomId: string,
+  playerId: string,
+  attemptStartedAt?: Date,
+): string =>
+  uuidV5(
+    attemptStartedAt === undefined
+      ? `battle:${roomId}:player:${playerId}:commitment`
+      : `battle:${roomId}:player:${playerId}:attempt:${attemptStartedAt.toISOString()}:commitment`,
+    BATTLE_COMMITMENT_NAMESPACE,
+  )
+// EN-031: la clave sin `attemptStartedAt` es la HEREDADA. Player-Inventory compara el
+// vencimiento al reintentar, y el vencimiento sale de la hora de CADA intento: con la clave
+// solo por (sala, jugador), un segundo intento de iniciar la misma sala chocaba con el
+// primero (`OPERATION_ID_REUSED`, 503) y esa sala ya no podia arrancar nunca. Ahora cada
+// intento tiene su propia clave (el `startedAt` que queda guardado en la batalla, asi que
+// liberar al terminar usa la misma) y un intento fallido libera la suya. La heredada solo se
+// sigue LIBERANDO, para las batallas que ya corrian con ella al desplegar.
 
 // Se reexporta para que las pruebas puedan comprobar el determinismo sin duplicar
 // el algoritmo con una segunda implementacion.

@@ -2,7 +2,10 @@ import type {
   BattleHeroCommitmentCommand,
   BattleHeroCommitmentPort,
 } from '../../../application/ports/BattleHeroCommitmentPort'
-import { UpstreamServiceError } from '../../../application/errors/UpstreamErrors'
+import {
+  HeroInAnotherBattleError,
+  UpstreamServiceError,
+} from '../../../application/errors/UpstreamErrors'
 import { postInternalJson, type InternalHttpClientOptions } from './InternalHttpClient'
 import { toBattleCommitmentOperationId } from './battle-commitment-operation-id'
 
@@ -22,13 +25,12 @@ const releasePath = (operationId: string): string =>
  *
  * EL `operationId` QUE VIAJA ES UN UUID v5, no el id logico: el contrato exige
  * UUID (`@IsUUID()` en el DTO), igual que en las entregas de HU-22. La clave es
- * estable por (sala, jugador), de modo que el reintento del compromiso y la
- * liberacion usan la MISMA clave.
+ * estable por (sala, jugador, intento de inicio): ver `toBattleCommitmentOperationId`.
  *
- * QUE PASA CON UN `422`: Player/Inventory rechaza cuando el heroe no es de ese
- * jugador o ya esta en otra batalla. Aqui se traduce a `UpstreamServiceError`
- * porque desde Combat es un fallo de la operacion, no un resultado de negocio del
- * jugador que esta iniciando: la sala no arranca y se dice por que.
+ * QUE PASA CON UN `422`: si el heroe sigue en otra batalla (`HERO_COMMITTED`) se lanza
+ * `HeroInAnotherBattleError` (EN-031), que Web explica al jugador. Cualquier otro
+ * rechazo (p. ej. heroe ajeno) se traduce a `UpstreamServiceError`: desde Combat es
+ * un fallo de la operacion y la sala no arranca.
  */
 export class PlayerInventoryBattleCommitmentHttpClient implements BattleHeroCommitmentPort {
   constructor(private readonly options: InternalHttpClientOptions) {}
@@ -38,7 +40,11 @@ export class PlayerInventoryBattleCommitmentHttpClient implements BattleHeroComm
       SERVICE,
       commitPath(command.heroId),
       {
-        operationId: toBattleCommitmentOperationId(command.roomId, command.playerId),
+        operationId: toBattleCommitmentOperationId(
+          command.roomId,
+          command.playerId,
+          command.attemptStartedAt,
+        ),
         playerId: command.playerId,
         reference: command.roomId,
         expiresAt: command.expiresAt.toISOString(),
@@ -50,24 +56,40 @@ export class PlayerInventoryBattleCommitmentHttpClient implements BattleHeroComm
       return
     }
 
-    throw new UpstreamServiceError(SERVICE, describe(result))
-  }
-
-  async release(roomId: string, playerId: string): Promise<void> {
-    const result = await postInternalJson(
-      SERVICE,
-      releasePath(toBattleCommitmentOperationId(roomId, playerId)),
-      {},
-      this.options,
-    )
-
-    if (result.outcome === 'ok') {
-      return
+    // EN-031: el heroe sigue en otra batalla. Es un motivo de negocio con nombre, no una
+    // caida de Player-Inventory: se distingue para que el jugador sepa que hacer.
+    if (result.outcome === 'rejected' && codeOf(result.body) === 'HERO_COMMITTED') {
+      throw new HeroInAnotherBattleError(command.playerId)
     }
 
     throw new UpstreamServiceError(SERVICE, describe(result))
   }
+
+  async release(roomId: string, playerId: string, attemptStartedAt: Date | null): Promise<void> {
+    const operationIds = [
+      ...(attemptStartedAt === null
+        ? []
+        : [toBattleCommitmentOperationId(roomId, playerId, attemptStartedAt)]),
+      // Clave heredada: solo la llevan las batallas que ya corrian al desplegar EN-031.
+      toBattleCommitmentOperationId(roomId, playerId),
+    ]
+
+    for (const operationId of operationIds) {
+      const result = await postInternalJson(SERVICE, releasePath(operationId), {}, this.options)
+
+      if (result.outcome !== 'ok') {
+        throw new UpstreamServiceError(SERVICE, describe(result))
+      }
+    }
+  }
 }
+
+const codeOf = (body: unknown): string | null =>
+  typeof body === 'object' &&
+  body !== null &&
+  typeof (body as { readonly code?: unknown }).code === 'string'
+    ? (body as { readonly code: string }).code
+    : null
 
 const describe = (
   result: Exclude<Awaited<ReturnType<typeof postInternalJson>>, { outcome: 'ok' }>,
