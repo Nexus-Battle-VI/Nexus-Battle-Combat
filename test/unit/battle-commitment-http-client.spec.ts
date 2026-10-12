@@ -12,7 +12,10 @@ import {
   INTERNAL_TIMESTAMP_HEADER,
   signInternalRequest,
 } from '../../src/adapters/outbound/identity/internal-signature'
-import { UpstreamServiceError } from '../../src/application/errors/UpstreamErrors'
+import {
+  HeroInAnotherBattleError,
+  UpstreamServiceError,
+} from '../../src/application/errors/UpstreamErrors'
 import type { ClockPort } from '../../src/application/ports/ClockPort'
 import type { Logger } from '../../src/infrastructure/observability/logger'
 
@@ -53,11 +56,13 @@ const baseOptions = {
   logger: silentLogger,
 }
 
+const ATTEMPT = new Date('2026-09-22T10:00:00.000Z')
 const command = {
   roomId: ROOM_ID,
   playerId: PLAYER_ID,
   heroId: HERO_ID,
   expiresAt: new Date('2026-09-22T10:07:00.000Z'),
+  attemptStartedAt: ATTEMPT,
 }
 
 const clientWith = (fetchImpl: typeof fetch): PlayerInventoryBattleCommitmentHttpClient =>
@@ -74,6 +79,16 @@ describe('compromiso de batalla — operationId (HU-29)', () => {
     expect(toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID)).toBe(first)
     expect(toBattleCommitmentOperationId(ROOM_ID, 'b1')).not.toBe(first)
     expect(toBattleCommitmentOperationId('otra-sala', PLAYER_ID)).not.toBe(first)
+  })
+
+  it('EN-031: cada INTENTO de inicio tiene su clave; la heredada (sin intento) no cambia', () => {
+    const attempt = toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID, ATTEMPT)
+
+    expect(attempt).not.toBe(toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID))
+    expect(toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID, ATTEMPT)).toBe(attempt)
+    expect(
+      toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID, new Date(ATTEMPT.getTime() + 1)),
+    ).not.toBe(attempt)
   })
 
   it('no comparte espacio de nombres con las ENTREGAS de HU-22', () => {
@@ -103,7 +118,7 @@ describe('PlayerInventoryBattleCommitmentHttpClient (HU-29, contrato §3)', () =
       `https://inventory.internal/api/internal/v1/inventory/heroes/${HERO_ID}/battle-commitments`,
     )
     expect(JSON.parse(capturedBody ?? '{}')).toEqual({
-      operationId: toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID),
+      operationId: toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID, ATTEMPT),
       playerId: PLAYER_ID,
       reference: ROOM_ID,
       expiresAt: '2026-09-22T10:07:00.000Z',
@@ -122,7 +137,7 @@ describe('PlayerInventoryBattleCommitmentHttpClient (HU-29, contrato §3)', () =
     expect(capturedHeaders?.[INTERNAL_SIGNATURE_HEADER]).toBe(expectedSignature)
   })
 
-  it('release usa la MISMA clave que el compromiso y acepta el 204 sin cuerpo', async () => {
+  it('release usa la MISMA clave que el compromiso (y despues la heredada) y acepta el 204 sin cuerpo', async () => {
     const urls: string[] = []
     const bodies: string[] = []
 
@@ -138,13 +153,15 @@ describe('PlayerInventoryBattleCommitmentHttpClient (HU-29, contrato §3)', () =
     )
 
     await client.commit(command)
-    await client.release(ROOM_ID, PLAYER_ID)
+    await client.release(ROOM_ID, PLAYER_ID, ATTEMPT)
 
-    const operationId = toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID)
+    const operationId = toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID, ATTEMPT)
+    const legacy = toBattleCommitmentOperationId(ROOM_ID, PLAYER_ID)
 
-    expect(urls[1]).toBe(
+    expect(urls.slice(1)).toEqual([
       `https://inventory.internal/api/internal/v1/inventory/battle-commitments/${operationId}/release`,
-    )
+      `https://inventory.internal/api/internal/v1/inventory/battle-commitments/${legacy}/release`,
+    ])
     expect(JSON.parse(bodies[0] ?? '{}')).toMatchObject({ operationId })
     expect(JSON.parse(bodies[1] ?? '{}')).toEqual({})
   })
@@ -161,7 +178,17 @@ describe('PlayerInventoryBattleCommitmentHttpClient (HU-29, contrato §3)', () =
     })
   })
 
-  it('422 -> `heroe_no_disponible` (el heroe no es de ese jugador o ya esta en otra batalla)', async () => {
+  it('EN-031: 422 HERO_COMMITTED -> HeroInAnotherBattleError (el heroe sigue en otra batalla)', async () => {
+    const client = clientWith(
+      asFetch(() =>
+        Promise.resolve(jsonResponse(422, { code: 'HERO_COMMITTED', message: 'ocupado' })),
+      ),
+    )
+
+    await expect(client.commit(command)).rejects.toEqual(new HeroInAnotherBattleError(PLAYER_ID))
+  })
+
+  it('422 sin HERO_COMMITTED -> `heroe_no_disponible` (p. ej. el heroe no es de ese jugador)', async () => {
     const client = clientWith(
       asFetch(() =>
         Promise.resolve(jsonResponse(422, { reason: 'battle_lock', message: 'ocupado' })),
@@ -173,7 +200,9 @@ describe('PlayerInventoryBattleCommitmentHttpClient (HU-29, contrato §3)', () =
       service: 'player-inventory',
       reason: 'heroe_no_disponible',
     })
-    await expect(client.release(ROOM_ID, PLAYER_ID)).rejects.toBeInstanceOf(UpstreamServiceError)
+    await expect(client.release(ROOM_ID, PLAYER_ID, ATTEMPT)).rejects.toBeInstanceOf(
+      UpstreamServiceError,
+    )
   })
 
   it('un 404 (Player/Inventory sin la ruta: orden de despliegue) se propaga', async () => {

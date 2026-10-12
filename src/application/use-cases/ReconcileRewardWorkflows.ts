@@ -49,7 +49,11 @@ export class ReconcileRewardWorkflows {
       // el proceso puede morir antes de que llegue -- y la liberacion es
       // idempotente por contrato, asi que reintentarla no puede hacer dano.
       if (!hasPendingVersusDrop(room)) {
-        await this.releaseCommitments(room.id, notification.participants)
+        await this.releaseCommitments(
+          room.id,
+          notification.participants,
+          room.battle?.startedAt ?? null,
+        )
       }
 
       try {
@@ -68,6 +72,7 @@ export class ReconcileRewardWorkflows {
   private async releaseCommitments(
     roomId: string,
     participants: readonly { readonly playerId: string | null }[],
+    startedAt: Date | null,
   ): Promise<void> {
     const playerIds = [
       ...new Set(
@@ -79,7 +84,7 @@ export class ReconcileRewardWorkflows {
 
     for (const playerId of playerIds) {
       try {
-        await this.commitments.release(roomId, playerId)
+        await this.commitments.release(roomId, playerId, startedAt)
       } catch (error: unknown) {
         this.logger.error('battle_commitment_reconciliacion_fallo', {
           roomId,

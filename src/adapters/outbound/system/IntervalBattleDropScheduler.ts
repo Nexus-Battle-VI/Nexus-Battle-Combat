@@ -162,7 +162,8 @@ export class IntervalBattleDropScheduler implements OnApplicationBootstrap, OnAp
         ) ?? [],
       ),
     ]
-    for (const playerId of playerIds) await this.commitments.release(room.id, playerId)
+    for (const playerId of playerIds)
+      await this.commitments.release(room.id, playerId, room.battle?.startedAt ?? null)
     await this.workflows.markBattleClosed(room.id)
   }
 }
