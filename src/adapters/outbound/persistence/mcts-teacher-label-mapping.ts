@@ -1,19 +1,55 @@
-import type { MctsTeacherLabel } from '../../../domain/decision/MctsTeacherLabel'
+import { Long } from 'mongodb'
 
-export type MctsTeacherLabelDocument = Omit<MctsTeacherLabel, 'eventId'> & {
+import type { MctsTeacherLabel } from '../../../domain/decision/MctsTeacherLabel'
+import type { MctsTeacherResult } from '../../../domain/decision/MctsTeacherResult'
+import { RandomSeed } from '../../../domain/value-objects/RandomSeed'
+
+/**
+ * MongoDB serializes a JavaScript integer above INT32_MAX as BSON `double`.
+ * `simulationSeed` is a uint32, while migration 025 deliberately accepts
+ * only integral BSON types. Use `Long` explicitly at this persistence
+ * boundary so every valid seed is encoded as BSON `long`, including values
+ * in the upper half of uint32.
+ *
+ * Reads also accept `number`: the MongoDB driver's default BSON promotion
+ * returns a number for safe `long` values, and labels written before this
+ * fix may contain BSON `int` for small seeds.
+ */
+type PersistedSimulationSeed = Long | number
+
+type MctsTeacherLabelResultDocument = Omit<MctsTeacherResult, 'simulationSeed'> & {
+  readonly simulationSeed: PersistedSimulationSeed
+}
+
+export type MctsTeacherLabelDocument = Omit<MctsTeacherLabel, 'eventId' | 'result'> & {
   readonly _id: string
+  readonly result: MctsTeacherLabelResultDocument
 }
 
 export const toMctsTeacherLabelDocument = (label: MctsTeacherLabel): MctsTeacherLabelDocument => {
-  const { eventId, ...payload } = label
+  const { eventId, result, ...payload } = label
 
-  return { _id: eventId, ...payload }
+  return {
+    _id: eventId,
+    ...payload,
+    result: {
+      ...result,
+      simulationSeed: Long.fromNumber(RandomSeed.create(result.simulationSeed).value),
+    },
+  }
 }
 
 export const toMctsTeacherLabel = (document: MctsTeacherLabelDocument): MctsTeacherLabel => {
-  const { _id, ...payload } = document
+  const { _id, result, ...payload } = document
+  const simulationSeed = Long.isLong(result.simulationSeed)
+    ? result.simulationSeed.toNumber()
+    : result.simulationSeed
 
-  return { eventId: _id, ...payload }
+  return {
+    eventId: _id,
+    ...payload,
+    result: { ...result, simulationSeed: RandomSeed.create(simulationSeed).value },
+  }
 }
 
 const canonicalJson = (value: unknown): string => {

@@ -7,14 +7,21 @@ import {
 } from '../../domain/decision/MctsTeacherLabel'
 import type { MctsTeacherResult } from '../../domain/decision/MctsTeacherResult'
 import { deriveLiveTeacherSeed } from '../../domain/policies/MctsSeedDerivation'
-import { MctsTeacherLabelValidationError } from '../../domain/errors/MctsErrors'
+import {
+  MctsTeacherLabelConflictError,
+  MctsTeacherLabelValidationError,
+} from '../../domain/errors/MctsErrors'
+import { MongoServerError } from 'mongodb'
 import type { ClockPort } from '../ports/ClockPort'
 import type { MctsTeacherLabelRepositoryPort } from '../ports/MctsTeacherLabelRepositoryPort'
 import type { MctsTeacher } from './MctsTeacher'
 
 export interface LiveMctsTeacherLabelerLogger {
-  error(message: string, context?: Readonly<Record<string, string | number>>): void
+  error(message: string, context?: Readonly<Record<string, string | number | boolean>>): void
 }
+
+type TeacherLabelFailureStage =
+  'MCTS_SEARCH_FAILED' | 'LABEL_VALIDATION_FAILED' | 'MONGO_APPEND_FAILED' | 'LABEL_CONFLICT'
 
 /**
  * `teach()` ya fue lanzado (con `.catch()` adjunto) sobre la sala PRE-ACCION;
@@ -104,7 +111,7 @@ export class LiveMctsTeacherLabeler {
 
     const simulationSeed = deriveLiveTeacherSeed(decision.eventId)
     const result = this.teacher.teach(room, simulationSeed).catch((error: unknown) => {
-      this.logFailure(decision, error)
+      this.logFailure(decision, error, 'MCTS_SEARCH_FAILED')
       return null
     })
 
@@ -122,10 +129,10 @@ export class LiveMctsTeacherLabeler {
     const result = await pending.result
     if (result === null) return // el fallo de teach() ya se logueo en prepare()
 
+    let label: MctsTeacherLabel
     try {
       this.validate(pending.decision, result)
-
-      const label: MctsTeacherLabel = {
+      label = {
         schemaVersion: MCTS_TEACHER_LABEL_SCHEMA_VERSION,
         eventId: pending.decision.eventId,
         battleId: pending.decision.battleId,
@@ -135,10 +142,19 @@ export class LiveMctsTeacherLabeler {
         result,
         generatedAt: this.clock.now(),
       }
+    } catch (error: unknown) {
+      this.logFailure(pending.decision, error, 'LABEL_VALIDATION_FAILED')
+      return
+    }
 
+    try {
       await this.repository.append(label)
     } catch (error: unknown) {
-      this.logFailure(pending.decision, error)
+      this.logFailure(
+        pending.decision,
+        error,
+        error instanceof MctsTeacherLabelConflictError ? 'LABEL_CONFLICT' : 'MONGO_APPEND_FAILED',
+      )
     }
   }
 
@@ -163,11 +179,30 @@ export class LiveMctsTeacherLabeler {
     }
   }
 
-  private logFailure(decision: CombatDecisionEvent, error: unknown): void {
+  private logFailure(
+    decision: CombatDecisionEvent,
+    error: unknown,
+    failureStage: TeacherLabelFailureStage,
+  ): void {
+    const mongoError = error instanceof MongoServerError ? error : null
     this.logger.error('mcts_teacher_label_generation_failed', {
       eventId: decision.eventId,
       battleId: decision.battleId,
       decisionSequence: decision.decisionSequence,
+      failureStage,
+      errorName: error instanceof Error ? error.name : 'unknown',
+      mongoErrorCode: mongoError?.code ?? 'none',
+      errorCategory:
+        failureStage === 'LABEL_CONFLICT'
+          ? 'LABEL_CONFLICT'
+          : mongoError?.code === 121
+            ? 'MONGO_DOCUMENT_VALIDATION'
+            : mongoError === null
+              ? failureStage
+              : 'MONGO_ERROR',
+      retryable: mongoError?.hasErrorLabel('RetryableWriteError') ?? false,
+      // Conservado temporalmente para los consumidores existentes de este
+      // evento; `errorName` es el campo estructurado canónico nuevo.
       reason: error instanceof Error ? error.name : 'unknown',
     })
   }
