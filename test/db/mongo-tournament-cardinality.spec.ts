@@ -9,6 +9,7 @@ import { MongoBattleRoomRepository } from '../../src/adapters/outbound/persisten
 import { TOURNAMENT_OPERATION_INDEX } from '../../src/adapters/outbound/persistence/migrations/018-battle-rooms-tournament'
 import { up as extendTournamentSchema } from '../../src/adapters/outbound/persistence/migrations/026-battle-rooms-tournament-cardinality'
 import { GetTournamentRoomRecord } from '../../src/application/use-cases/GetTournamentRoomRecord'
+import { buildBattleFinishedNotification } from '../../src/application/services/BattleFinalizer'
 import type { CreateTournamentRoomRequest } from '../../src/application/use-cases/CreateTournamentRoom'
 import { TournamentRoomOperationReusedError } from '../../src/application/errors/TournamentRoomErrors'
 import { MIGRATIONS, migrateToLatest } from '../../src/infrastructure/persistence/database'
@@ -95,7 +96,9 @@ describe('MongoDB: salas de torneo v3 y upgrade DUO historico', () => {
     db = client.db(databaseName)
     const baseline = await migrateToLatest(
       db,
-      MIGRATIONS.filter((migration) => !migration.name.startsWith('026-')),
+      MIGRATIONS.filter(
+        (migration) => !migration.name.startsWith('026-') && !migration.name.startsWith('033-'),
+      ),
     )
     if (baseline.error !== undefined)
       throw new Error('fallo la migracion base', { cause: baseline.error })
@@ -114,7 +117,10 @@ describe('MongoDB: salas de torneo v3 y upgrade DUO historico', () => {
     const before = await db.collection('battle-rooms').findOne({ _id: created.id as never })
     const upgraded = await migrateToLatest(db)
     expect(upgraded.error).toBeUndefined()
-    expect(upgraded.applied).toEqual(['026-battle-rooms-tournament-cardinality'])
+    expect(upgraded.applied).toEqual([
+      '026-battle-rooms-tournament-cardinality',
+      '033-battle-rooms-test-tournament',
+    ])
     await extendTournamentSchema(db)
     const after = await db.collection('battle-rooms').findOne({ _id: created.id as never })
     expect(after).toEqual(before)
@@ -129,6 +135,31 @@ describe('MongoDB: salas de torneo v3 y upgrade DUO historico', () => {
     expect(indexes.filter((index) => index.name === TOURNAMENT_OPERATION_INDEX)).toHaveLength(1)
     expect(indexes.find((index) => index.name === TOURNAMENT_OPERATION_INDEX)?.unique).toBe(true)
   })
+
+  it.each(['SOLO', 'DUO', 'TRIO'] as const)(
+    '%s: el piloto conserva su tipo tras iniciar, cerrar y reconectar, sin publicar recompensas',
+    async (mode) => {
+      const h = tournamentHarness(new MongoBattleRoomRepository(db))
+      const request = { ...tournamentRequest(mode, 'pilot-' + mode), isTest: true }
+      const created = await h.create(request)
+      expect(created.tournament?.isTest).toBe(true)
+      await h.start(created.id, request)
+      const current = await h.rooms.findById(created.id)
+      if (current?.battle == null) throw new Error('Falta batalla de prueba')
+      const absent = request.teams[1].memberIds[0]!
+      const finished = current.settleDeadlines(
+        new Date(TOURNAMENT_AT.getTime() + 31000),
+        new Map([[absent, TOURNAMENT_AT]]),
+      )
+      await h.rooms.save(finished, current.version)
+      const fresh = await reconnect()
+      const restored = await fresh.rooms.findById(created.id)
+      expect(restored?.tournament?.isTest).toBe(true)
+      expect(restored?.result).toMatchObject({ reason: 'DISCONNECTION', outcome: 'WIN' })
+      expect(buildBattleFinishedNotification(restored!)).toBeNull()
+      expect((await fresh.create(request)).tournament?.isTest).toBe(true)
+    },
+  )
 
   it.each(['SOLO', 'DUO', 'TRIO'] as const)(
     '%s persiste y reconstruye todos sus participantes',

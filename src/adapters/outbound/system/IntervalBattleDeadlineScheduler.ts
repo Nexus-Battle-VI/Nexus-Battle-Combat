@@ -1,4 +1,4 @@
-import type { OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common'
+import type { OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy } from '@nestjs/common'
 
 import type { BattleDeadlineBookPort } from '../../../application/ports/BattleDeadlineBookPort'
 import type { ClockPort } from '../../../application/ports/ClockPort'
@@ -31,11 +31,13 @@ export const DEFAULT_BATTLE_DEADLINE_SCHEDULER_OPTIONS: BattleDeadlineSchedulerO
  *    no el de las reglas de combate (esas usan `ClockPort`).
  */
 export class IntervalBattleDeadlineScheduler
-  implements OnApplicationBootstrap, OnApplicationShutdown
+  implements OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy
 {
   private readonly options: BattleDeadlineSchedulerOptions
   private readonly inFlight = new Set<string>()
   private timer: ReturnType<typeof setInterval> | null = null
+  private readonly pendingTicks = new Set<Promise<number>>()
+  private stopping = false
 
   constructor(
     private readonly book: BattleDeadlineBookPort,
@@ -63,11 +65,28 @@ export class IntervalBattleDeadlineScheduler
     this.timer.unref()
   }
 
-  onApplicationShutdown(): void {
+  async onModuleDestroy(): Promise<void> {
+    this.stopping = true
     if (this.timer !== null) {
       clearInterval(this.timer)
       this.timer = null
     }
+    await Promise.allSettled(this.pendingTicks)
+  }
+
+  onApplicationShutdown(): Promise<void> {
+    return this.onModuleDestroy()
+  }
+
+  tick(): Promise<number> {
+    if (this.stopping) return Promise.resolve(0)
+    const work = this.runTick()
+    this.pendingTicks.add(work)
+    void work.then(
+      () => this.pendingTicks.delete(work),
+      () => this.pendingTicks.delete(work),
+    )
+    return work
   }
 
   /**
@@ -76,7 +95,7 @@ export class IntervalBattleDeadlineScheduler
    * el siguiente barrido no la vuelve a tomar por el mismo vencimiento ya
    * atendido (el `Settler` reprograma el real al terminar).
    */
-  async tick(): Promise<number> {
+  private async runTick(): Promise<number> {
     const now = this.clock.now()
     const due = this.book.dueRooms(now)
     let processed = 0

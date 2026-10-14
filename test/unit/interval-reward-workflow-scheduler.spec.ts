@@ -52,6 +52,64 @@ const fakeProcess = (
 }
 
 describe('IntervalRewardWorkflowScheduler — tick()', () => {
+  it('detiene nuevos barridos y espera una lectura pendiente antes de liberar la base de datos', async () => {
+    const repository = new InMemoryRewardWorkflowRepository()
+    let release:
+      | ((rows: Awaited<ReturnType<RewardWorkflowRepositoryPort['findNonTerminal']>>) => void)
+      | undefined
+    const read = new Promise<Awaited<ReturnType<RewardWorkflowRepositoryPort['findNonTerminal']>>>(
+      (resolve) => {
+        release = resolve
+      },
+    )
+    const find = jest.spyOn(repository, 'findNonTerminal').mockReturnValueOnce(read)
+    const scheduler = new IntervalRewardWorkflowScheduler(
+      repository,
+      fakeProcess(() => Promise.resolve()),
+      fakeReconcile(),
+      silentLogger,
+      { autoStart: false, tickMs: 1000, batchSize: 50, reconcileWindowMs: 86_400_000 },
+    )
+    const pending = scheduler.tick()
+    let closed = false
+    const shutdown = scheduler.onModuleDestroy().then(() => {
+      closed = true
+    })
+    await Promise.resolve()
+    expect(closed).toBe(false)
+    await expect(scheduler.tick()).resolves.toBe(0)
+    expect(find).toHaveBeenCalledTimes(1)
+    release?.([])
+    await pending
+    await shutdown
+    expect(closed).toBe(true)
+  })
+
+  it('un error de lectura del barrido automático se registra y permite el siguiente intento', async () => {
+    jest.useFakeTimers()
+    const repository = new InMemoryRewardWorkflowRepository()
+    const errors: string[] = []
+    const scheduler = new IntervalRewardWorkflowScheduler(
+      repository,
+      fakeProcess(() => Promise.resolve()),
+      fakeReconcile(),
+      { ...silentLogger, error: (message) => errors.push(message) },
+      { autoStart: true, tickMs: 1000, batchSize: 50, reconcileWindowMs: 86_400_000 },
+    )
+    try {
+      await scheduler.onApplicationBootstrap()
+      jest
+        .spyOn(repository, 'findNonTerminal')
+        .mockRejectedValueOnce(new Error('Mongo temporalmente inaccesible'))
+      await jest.advanceTimersByTimeAsync(1000)
+      expect(errors).toEqual(['reward_workflows_barrido_fallo'])
+      await expect(scheduler.tick()).resolves.toBe(0)
+    } finally {
+      await scheduler.onModuleDestroy()
+      jest.useRealTimers()
+    }
+  })
+
   it('procesa solo los workflows no terminales', async () => {
     const repository: RewardWorkflowRepositoryPort = new InMemoryRewardWorkflowRepository()
     const workflow = await repository.createIfAbsent(intent('sub-1'), 'op-1')

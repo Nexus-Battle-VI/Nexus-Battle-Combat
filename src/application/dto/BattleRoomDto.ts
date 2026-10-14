@@ -61,6 +61,7 @@ export interface BattleRoomDto {
   readonly stakePool: { readonly total: number }
   /** Modalidad de Tournament, distinta del modo PVP del motor. Aditivo para v3. */
   readonly tournament?: {
+    readonly isTest?: boolean
     readonly contractVersion: 3
     readonly mode: 'SOLO' | 'DUO' | 'TRIO'
     readonly teamSize: number
@@ -94,6 +95,7 @@ export const toBattleRoomDto = (
       ? {}
       : {
           tournament: {
+            ...(room.tournament.isTest === true ? { isTest: true } : {}),
             contractVersion: 3 as const,
             mode: room.tournament.mode,
             teamSize: room.teams[0].capacity,

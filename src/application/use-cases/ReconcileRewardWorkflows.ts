@@ -40,7 +40,7 @@ export class ReconcileRewardWorkflows {
     for (const room of finished) {
       const notification = buildBattleFinishedNotification(room)
 
-      if (notification === null) {
+      if (room.result === null) {
         continue
       }
 
@@ -51,11 +51,12 @@ export class ReconcileRewardWorkflows {
       if (!hasPendingVersusDrop(room)) {
         await this.releaseCommitments(
           room.id,
-          notification.participants,
+          room.result.participants,
           room.battle?.startedAt ?? null,
         )
       }
 
+      if (notification === null) continue
       try {
         await this.createWorkflows.execute(notification)
       } catch (error: unknown) {

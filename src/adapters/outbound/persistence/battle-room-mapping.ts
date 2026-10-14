@@ -131,6 +131,7 @@ export interface BattleRoomDocument {
    * de lobby (HU-14) nunca lo tiene y se restaura como `null`.
    */
   readonly tournament?: {
+    readonly isTest?: boolean
     readonly operationId: string
     readonly tournamentId: string
     readonly encounterId: string

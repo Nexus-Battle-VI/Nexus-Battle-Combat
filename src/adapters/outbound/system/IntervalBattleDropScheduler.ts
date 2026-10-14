@@ -1,4 +1,4 @@
-import type { OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common'
+import type { OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy } from '@nestjs/common'
 
 import type { BattleRoom } from '../../../domain/entities/BattleRoom'
 import { BattleMode } from '../../../domain/value-objects/BattleMode'
@@ -17,9 +17,13 @@ import type { Logger } from '../../../infrastructure/observability/logger'
  * FINISHED solo crea el derecho; después transfiere cada instancia con un
  * operationId derivado de battleId/seq y cierra la reserva al completar todo.
  */
-export class IntervalBattleDropScheduler implements OnApplicationBootstrap, OnApplicationShutdown {
+export class IntervalBattleDropScheduler
+  implements OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy
+{
   private timer: ReturnType<typeof setInterval> | null = null
   private running = false
+  private readonly pendingTicks = new Set<Promise<void>>()
+  private stopping = false
 
   constructor(
     private readonly rooms: BattleRoomRepositoryPort,
@@ -36,12 +40,29 @@ export class IntervalBattleDropScheduler implements OnApplicationBootstrap, OnAp
     this.timer.unref()
   }
 
-  onApplicationShutdown(): void {
+  async onModuleDestroy(): Promise<void> {
+    this.stopping = true
     if (this.timer !== null) clearInterval(this.timer)
     this.timer = null
+    await Promise.allSettled(this.pendingTicks)
   }
 
-  async tick(): Promise<void> {
+  onApplicationShutdown(): Promise<void> {
+    return this.onModuleDestroy()
+  }
+
+  tick(): Promise<void> {
+    if (this.stopping) return Promise.resolve()
+    const work = this.runTick()
+    this.pendingTicks.add(work)
+    void work.then(
+      () => this.pendingTicks.delete(work),
+      () => this.pendingTicks.delete(work),
+    )
+    return work
+  }
+
+  private async runTick(): Promise<void> {
     if (this.running) return
     this.running = true
     try {
