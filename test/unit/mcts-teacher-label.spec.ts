@@ -8,6 +8,12 @@ import { MCTS_TEACHER_V1_CONFIG } from '../../src/domain/decision/MctsTeacherRes
 import { deriveLiveTeacherSeed } from '../../src/domain/policies/MctsSeedDerivation'
 import { RandomSeed } from '../../src/domain/value-objects/RandomSeed'
 import { MctsTeacherLabelConflictError } from '../../src/domain/errors/MctsErrors'
+import {
+  toMctsTeacherLabel,
+  toMctsTeacherLabelDocument,
+  type MctsTeacherLabelDocument,
+} from '../../src/adapters/outbound/persistence/mcts-teacher-label-mapping'
+import { BSON, Long, MongoServerError } from 'mongodb'
 import { InMemoryMctsTeacherLabelRepository } from '../../src/adapters/outbound/persistence/InMemoryMctsTeacherLabelRepository'
 import { InMemoryMctsSimulationAdapter } from '../../src/adapters/outbound/system/InMemoryMctsSimulationAdapter'
 import { Mt19937BoxMullerRandomSequenceFactory } from '../../src/adapters/outbound/system/Mt19937BoxMullerRandomSequenceFactory'
@@ -152,6 +158,18 @@ describe('deriveLiveTeacherSeed (§13, correccion de alcance sobre PR#81)', () =
   })
 })
 
+describe('MctsTeacher with uint32 simulation seeds', () => {
+  it.each([0, 42, 2_147_483_647, 2_147_483_648, 3_000_000_000, 4_294_967_295])(
+    'generates a reproducible result for %i',
+    async (simulationSeed) => {
+      const result = await realTeacher().teach(battleWithCombat(), simulationSeed)
+
+      expect(result.simulationSeed).toBe(simulationSeed)
+      expect(result.candidates).not.toHaveLength(0)
+    },
+  )
+})
+
 describe('LiveMctsTeacherLabeler (EN-036.2 #566, correccion de alcance sobre PR#81)', () => {
   const repository = (): MctsTeacherLabelRepositoryPort => new InMemoryMctsTeacherLabelRepository()
 
@@ -262,7 +280,14 @@ describe('LiveMctsTeacherLabeler (EN-036.2 #566, correccion de alcance sobre PR#
     expect(await repo.findByEventId(decision.eventId)).toBeNull()
     expect(errorLog).toHaveBeenCalledWith(
       'mcts_teacher_label_generation_failed',
-      expect.objectContaining({ eventId: decision.eventId }),
+      expect.objectContaining({
+        eventId: decision.eventId,
+        failureStage: 'MCTS_SEARCH_FAILED',
+        errorName: 'Error',
+        errorCategory: 'MCTS_SEARCH_FAILED',
+        mongoErrorCode: 'none',
+        retryable: false,
+      }),
     )
   })
 
@@ -362,8 +387,47 @@ describe('LiveMctsTeacherLabeler (EN-036.2 #566, correccion de alcance sobre PR#
     expect(await repo.findByEventId(decision.eventId)).toBeNull()
     expect(errorLog).toHaveBeenCalledWith(
       'mcts_teacher_label_generation_failed',
-      expect.objectContaining({ reason: 'MctsTeacherLabelValidationError' }),
+      expect.objectContaining({
+        reason: 'MctsTeacherLabelValidationError',
+        failureStage: 'LABEL_VALIDATION_FAILED',
+        errorCategory: 'LABEL_VALIDATION_FAILED',
+      }),
     )
+  })
+
+  it('fail-open: un rechazo Mongo queda clasificado sin registrar datos sensibles', async () => {
+    const mongoFailure = new MongoServerError({
+      ok: 0,
+      code: 121,
+      errmsg: 'Document failed validation',
+    })
+    const repo: MctsTeacherLabelRepositoryPort = {
+      append: jest.fn().mockRejectedValue(mongoFailure),
+      findByEventId: jest.fn(),
+    }
+    const errorLog = jest.fn()
+    const labeler = new LiveMctsTeacherLabeler(realTeacher(), repo, clock, { error: errorLog })
+    const decision = basicAttackDecision()
+
+    await expect(
+      labeler.persist(labeler.prepare(battleWithCombat(), decision)),
+    ).resolves.toBeUndefined()
+
+    expect(errorLog).toHaveBeenCalledWith(
+      'mcts_teacher_label_generation_failed',
+      expect.objectContaining({
+        failureStage: 'MONGO_APPEND_FAILED',
+        errorName: 'MongoServerError',
+        mongoErrorCode: 121,
+        errorCategory: 'MONGO_DOCUMENT_VALIDATION',
+        retryable: false,
+        eventId: decision.eventId,
+        battleId: decision.battleId,
+        decisionSequence: decision.decisionSequence,
+      }),
+    )
+    expect(errorLog.mock.calls[0]?.[1]).not.toHaveProperty('stack')
+    expect(errorLog.mock.calls[0]?.[1]).not.toHaveProperty('message')
   })
 
   it('persist(null) es un no-op seguro (decision sin label que preparar)', async () => {
@@ -426,6 +490,29 @@ describe('InMemoryMctsTeacherLabelRepository (append-only, EN-036.2 #566)', () =
     },
     generatedAt: new Date('2026-10-06T00:00:00.000Z'),
     ...overrides,
+  })
+
+  it.each([0, 42, 2_147_483_647, 2_147_483_648, 3_000_000_000, 4_294_967_295])(
+    'serializa la seed uint32 %i como BSON long y la reconstruye sin pérdida',
+    (simulationSeed) => {
+      const document = toMctsTeacherLabelDocument(
+        label({ result: { ...label().result, simulationSeed } }),
+      )
+      const bytes = BSON.serialize(document)
+      const restoredDocument = BSON.deserialize(bytes, {
+        promoteLongs: false,
+      }) as unknown as MctsTeacherLabelDocument
+
+      expect(Long.isLong(restoredDocument.result.simulationSeed)).toBe(true)
+      expect((restoredDocument.result.simulationSeed as Long).toNumber()).toBe(simulationSeed)
+      expect(toMctsTeacherLabel(restoredDocument).result.simulationSeed).toBe(simulationSeed)
+    },
+  )
+
+  it.each([-1, 4_294_967_296, 1.5])('rechaza la seed fuera de uint32: %p', (simulationSeed) => {
+    expect(() =>
+      toMctsTeacherLabelDocument(label({ result: { ...label().result, simulationSeed } })),
+    ).toThrow()
   })
 
   it('T-01: append valido -> findByEventId devuelve el mismo label', async () => {

@@ -161,7 +161,8 @@ export const buildBattleFinishedNotification = (
 ): BattleFinishedNotification | null => {
   const result = room.result
 
-  if (result === null) {
+  // El registro de combate sigue existiendo; ningún consumidor recibe derechos económicos.
+  if (result === null || room.tournament?.isTest === true) {
     return null
   }
 

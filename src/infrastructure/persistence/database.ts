@@ -1,4 +1,5 @@
 import { MongoClient, type Db } from 'mongodb'
+import * as testTournamentMigration from '../../adapters/outbound/persistence/migrations/033-battle-rooms-test-tournament'
 
 import * as battleRoomsMigration from '../../adapters/outbound/persistence/migrations/001-battle-rooms'
 import * as battleRoomsPreparingStatusMigration from '../../adapters/outbound/persistence/migrations/002-battle-rooms-preparing-status'
@@ -124,6 +125,7 @@ export const MIGRATIONS: readonly MongoMigration[] = [
     up: aiAtomicActiveAndEvaluationEvidenceMigration.up,
   },
   { name: '032-battle-rooms-ability-unlock-level', up: battleRoomsAbilityUnlockLevelMigration.up },
+  { name: '033-battle-rooms-test-tournament', up: testTournamentMigration.up },
 ]
 
 const REGISTRY = '_migrations'

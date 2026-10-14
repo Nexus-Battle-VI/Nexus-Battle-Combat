@@ -33,7 +33,7 @@ export class PersistVersusDropDecision {
   ) {}
 
   async execute(previous: BattleRoom, next: BattleRoom, actionSeq: number): Promise<BattleRoom> {
-    if (previous.mode !== BattleMode.Pvp) return next
+    if (previous.mode !== BattleMode.Pvp || previous.tournament?.isTest === true) return next
     const action = next.events.find((event) => event.seq === actionSeq)
     if (
       action === undefined ||

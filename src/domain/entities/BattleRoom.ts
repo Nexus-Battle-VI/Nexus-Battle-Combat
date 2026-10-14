@@ -361,6 +361,7 @@ export interface CreateBattleRoomInput {
  * `tournament.operationId` basta para la exclusion mutua en la insercion.
  */
 export interface TournamentRoomMetadata {
+  readonly isTest?: boolean
   readonly operationId: string
   readonly tournamentId: string
   readonly encounterId: string
@@ -388,6 +389,7 @@ export interface TournamentTeamInput {
 }
 
 export interface CreateTournamentRoomInput {
+  readonly isTest?: boolean
   readonly operationId: string
   readonly tournamentId: string
   readonly encounterId: string
@@ -745,6 +747,7 @@ export class BattleRoom {
         handledCommands: [],
         result: null,
         tournament: {
+          ...(input.isTest === true ? { isTest: true } : {}),
           operationId: input.operationId,
           tournamentId: input.tournamentId,
           encounterId: input.encounterId,

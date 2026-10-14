@@ -1,17 +1,21 @@
 import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb'
-import type { Db, MongoClient } from 'mongodb'
+import { Long, type Db, type MongoClient } from 'mongodb'
 
 import {
   MCTS_TEACHER_LABELS_COLLECTION,
   MongoMctsTeacherLabelRepository,
 } from '../../src/adapters/outbound/persistence/MongoMctsTeacherLabelRepository'
-import { toMctsTeacherLabelDocument } from '../../src/adapters/outbound/persistence/mcts-teacher-label-mapping'
+import {
+  toMctsTeacherLabelDocument,
+  type MctsTeacherLabelDocument,
+} from '../../src/adapters/outbound/persistence/mcts-teacher-label-mapping'
 import { MctsTeacherLabelConflictError } from '../../src/domain/errors/MctsErrors'
 import {
   MCTS_TEACHER_LABEL_SCHEMA_VERSION,
   type MctsTeacherLabel,
 } from '../../src/domain/decision/MctsTeacherLabel'
 import { MCTS_TEACHER_V1_CONFIG } from '../../src/domain/decision/MctsTeacherResult'
+import { RandomSeed } from '../../src/domain/value-objects/RandomSeed'
 import {
   createMongoClient,
   databaseOf,
@@ -107,6 +111,50 @@ describe('MongoMctsTeacherLabelRepository (EN-036.2 #566, correccion de alcance 
     expect(found).toMatchObject({ battleId: 'find-room', decisionSequence: 0 })
     expect(found?.generatedAt).toBeInstanceOf(Date)
   })
+
+  it.each([0, 42, 2_147_483_647, 2_147_483_648, 3_000_000_000, 4_294_967_295])(
+    'persists the uint32 seed %i as BSON long and restores it without loss',
+    async (simulationSeed) => {
+      expect(() => RandomSeed.create(simulationSeed)).not.toThrow()
+
+      const eventId = `decision:ONLINE:seed-${String(simulationSeed)}:cmd`
+      const repository = new MongoMctsTeacherLabelRepository(db!)
+      await repository.append(
+        label({
+          eventId,
+          battleId: `seed-${String(simulationSeed)}`,
+          result: {
+            ...label().result,
+            simulationSeed,
+          },
+        }),
+      )
+
+      // `promoteLongs: false` lets the assertion observe the actual BSON
+      // representation rather than the driver's safe-number promotion.
+      const raw = await db!
+        .collection<MctsTeacherLabelDocument>(MCTS_TEACHER_LABELS_COLLECTION, {
+          promoteLongs: false,
+        })
+        .findOne({ _id: eventId })
+      expect(raw).not.toBeNull()
+      expect(Long.isLong(raw?.result.simulationSeed)).toBe(true)
+      expect((raw?.result.simulationSeed as Long).toNumber()).toBe(simulationSeed)
+
+      await expect(repository.findByEventId(eventId)).resolves.toMatchObject({
+        result: { simulationSeed },
+      })
+    },
+  )
+
+  it.each([-1, 4_294_967_296, 1.5])(
+    'rejects an invalid simulationSeed at the persistence boundary: %p',
+    (simulationSeed) => {
+      expect(() =>
+        toMctsTeacherLabelDocument(label({ result: { ...label().result, simulationSeed } })),
+      ).toThrow()
+    },
+  )
 
   it('repeating the SAME label content under the same eventId is idempotent', async () => {
     const repository = new MongoMctsTeacherLabelRepository(db!)

@@ -26,6 +26,7 @@ export interface TournamentRoomTeamRequest {
 export type { TournamentRoomMode } from '../../domain/policies/TournamentRosterPolicy'
 
 export interface CreateTournamentRoomRequest {
+  readonly isTest?: boolean
   readonly operationId: string
   readonly tournamentId: string
   readonly encounterId: string
@@ -105,6 +106,7 @@ export class CreateTournamentRoom {
     ])
 
     const input: CreateTournamentRoomInput = {
+      ...(request.isTest === true ? { isTest: true } : {}),
       operationId: request.operationId,
       tournamentId: request.tournamentId,
       encounterId: request.encounterId,
