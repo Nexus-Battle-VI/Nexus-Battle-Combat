@@ -1,4 +1,4 @@
-import type { OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common'
+import type { OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy } from '@nestjs/common'
 
 import type { ProcessRewardWorkflow } from '../../../application/use-cases/ProcessRewardWorkflow'
 import type { ReconcileRewardWorkflows } from '../../../application/use-cases/ReconcileRewardWorkflows'
@@ -49,11 +49,13 @@ export const DEFAULT_REWARD_WORKFLOW_SCHEDULER_OPTIONS: RewardWorkflowSchedulerO
  * Un fallo en un workflow se registra y NO detiene a los demas.
  */
 export class IntervalRewardWorkflowScheduler
-  implements OnApplicationBootstrap, OnApplicationShutdown
+  implements OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy
 {
   private readonly options: RewardWorkflowSchedulerOptions
   private readonly inFlight = new Set<string>()
   private timer: ReturnType<typeof setInterval> | null = null
+  private readonly pendingTicks = new Set<Promise<number>>()
+  private stopping = false
 
   constructor(
     private readonly repository: RewardWorkflowRepositoryPort,
@@ -80,19 +82,40 @@ export class IntervalRewardWorkflowScheduler
     }
 
     this.timer = setInterval(() => {
-      void this.tick()
+      void this.tick().catch((error: unknown) => {
+        this.logger.error('reward_workflows_barrido_fallo', {
+          reason: error instanceof Error ? error.name : 'desconocido',
+        })
+      })
     }, this.options.tickMs)
     this.timer.unref()
   }
 
-  onApplicationShutdown(): void {
+  async onModuleDestroy(): Promise<void> {
+    this.stopping = true
     if (this.timer !== null) {
       clearInterval(this.timer)
       this.timer = null
     }
+    await Promise.allSettled(this.pendingTicks)
   }
 
-  async tick(): Promise<number> {
+  onApplicationShutdown(): Promise<void> {
+    return this.onModuleDestroy()
+  }
+
+  tick(): Promise<number> {
+    if (this.stopping) return Promise.resolve(0)
+    const work = this.runTick()
+    this.pendingTicks.add(work)
+    void work.then(
+      () => this.pendingTicks.delete(work),
+      () => this.pendingTicks.delete(work),
+    )
+    return work
+  }
+
+  private async runTick(): Promise<number> {
     const due = await this.repository.findNonTerminal(this.options.batchSize)
     let processed = 0
 
