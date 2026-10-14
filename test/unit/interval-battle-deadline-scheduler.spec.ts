@@ -160,7 +160,7 @@ describe('IntervalBattleDeadlineScheduler — arranque y parada', () => {
 
     expect(process.calls).toEqual(['sala'])
 
-    scheduler.onApplicationShutdown()
+    await scheduler.onApplicationShutdown()
 
     expect(jest.getTimerCount()).toBe(0)
   })

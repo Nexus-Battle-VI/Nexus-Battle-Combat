@@ -46,6 +46,8 @@ export const tournamentRoomCreateRequestOf = (body: unknown): CreateTournamentRo
   const encounterId = textAt(request.encounterId, 'encounterId', 300)
   const extended = ['contractVersion', 'mode', 'teamSize'].some((key) => request[key] !== undefined)
   const mode = request.mode
+  if (request.isTest !== undefined && typeof request.isTest !== 'boolean') invalid('isTest')
+  if (request.isTest === true && !extended) invalid('mode')
 
   if (extended) {
     if (request.contractVersion !== undefined && request.contractVersion !== 3)
@@ -63,6 +65,7 @@ export const tournamentRoomCreateRequestOf = (body: unknown): CreateTournamentRo
         'mode',
         'teamSize',
         'teams',
+        'isTest',
       ],
       'body',
     )
@@ -99,6 +102,7 @@ export const tournamentRoomCreateRequestOf = (body: unknown): CreateTournamentRo
 
   return {
     operationId: extended ? operationId.trim() : operationId,
+    ...(request.isTest === true ? { isTest: true } : {}),
     tournamentId: extended ? tournamentId.trim() : tournamentId,
     encounterId: extended ? encounterId.trim() : encounterId,
     ...(extended

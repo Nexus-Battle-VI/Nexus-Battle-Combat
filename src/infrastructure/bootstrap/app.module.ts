@@ -392,8 +392,9 @@ export const OUTBOUND_SERVICE_NAME = 'combat'
     },
     {
       provide: DATABASE_LIFECYCLE,
-      useFactory: (db: Db | null): { onModuleDestroy: () => Promise<void> } => ({
-        onModuleDestroy: async (): Promise<void> => {
+      // Los barridos se detienen y drenan en onModuleDestroy antes de cerrar el pool.
+      useFactory: (db: Db | null): { onApplicationShutdown: () => Promise<void> } => ({
+        onApplicationShutdown: async (): Promise<void> => {
           await db?.client.close()
         },
       }),

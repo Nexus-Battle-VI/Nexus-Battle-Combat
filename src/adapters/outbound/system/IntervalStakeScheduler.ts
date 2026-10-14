@@ -1,4 +1,4 @@
-import type { OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common'
+import type { OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy } from '@nestjs/common'
 
 import type { ClockPort } from '../../../application/ports/ClockPort'
 import type { ReconcileStakes } from '../../../application/use-cases/ReconcileStakes'
@@ -25,9 +25,13 @@ export const DEFAULT_STAKE_SCHEDULER_OPTIONS: StakeSchedulerOptions = {
  * deterministas y Wallet reconoce el replay. Un fallo del barrido se registra
  * y no detiene el proceso.
  */
-export class IntervalStakeScheduler implements OnApplicationBootstrap, OnApplicationShutdown {
+export class IntervalStakeScheduler
+  implements OnApplicationBootstrap, OnApplicationShutdown, OnModuleDestroy
+{
   private readonly options: StakeSchedulerOptions
   private timer: ReturnType<typeof setInterval> | null = null
+  private readonly pendingTicks = new Set<Promise<number>>()
+  private stopping = false
 
   constructor(
     private readonly reconcile: ReconcileStakes,
@@ -53,14 +57,31 @@ export class IntervalStakeScheduler implements OnApplicationBootstrap, OnApplica
     this.timer.unref()
   }
 
-  onApplicationShutdown(): void {
+  async onModuleDestroy(): Promise<void> {
+    this.stopping = true
     if (this.timer !== null) {
       clearInterval(this.timer)
       this.timer = null
     }
+    await Promise.allSettled(this.pendingTicks)
   }
 
-  async tick(): Promise<number> {
+  onApplicationShutdown(): Promise<void> {
+    return this.onModuleDestroy()
+  }
+
+  tick(): Promise<number> {
+    if (this.stopping) return Promise.resolve(0)
+    const work = this.runTick()
+    this.pendingTicks.add(work)
+    void work.then(
+      () => this.pendingTicks.delete(work),
+      () => this.pendingTicks.delete(work),
+    )
+    return work
+  }
+
+  private async runTick(): Promise<number> {
     try {
       return await this.reconcile.execute()
     } catch (error: unknown) {

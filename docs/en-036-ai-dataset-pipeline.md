@@ -28,14 +28,15 @@ dentro del mismo PR#81, en vez de abrir una Task separada.
 
 **Estado actual (post-corrección):**
 
-| Pregunta                                   | Respuesta real                                                                                                                                                             |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ¿Dónde se genera el teacher label en vivo? | `LiveMctsTeacherLabeler` (`src/application/services/LiveMctsTeacherLabeler.ts`), wired en `ExecuteBasicAttack`/`UseSkill`/`UseEpic`/`ExecuteAiTurn`.                       |
-| ¿Dónde se persiste?                        | Colección Mongo `mcts-teacher-labels` (migración `025-mcts-teacher-labels.ts`), vía `MctsTeacherLabelRepositoryPort` → `MongoMctsTeacherLabelRepository`, append-only.     |
-| ¿Es append-only?                           | Sí: `_id = eventId`; mismo contenido repetido es idempotente, contenido distinto lanza `MctsTeacherLabelConflictError`.                                                    |
-| Identificador estable del label            | `MctsTeacherLabel.eventId` (contrato oficial, `src/domain/decision/MctsTeacherLabel.ts`), con `battleId`/`decisionSequence` redundantes para validar la relación.          |
-| Relación con `CombatDecisionEvent`         | 1:1 por `eventId`; `result.candidates` es SIEMPRE subconjunto de `legalActions` (nunca igualdad exigida: el filtrado estratégico/de rotación puede descartar opciones).    |
-| Activación en producción                   | Desactivado por defecto (`MCTS_LIVE_TEACHER_LABELING_ENABLED=false`): un despliegue lo activa explícitamente (ver `env.ts`; costo real de CPU por decisión, 128 rollouts). |
+| Pregunta                                   | Respuesta real                                                                                                                                                                                                                                 |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ¿Dónde se genera el teacher label en vivo? | `LiveMctsTeacherLabeler` (`src/application/services/LiveMctsTeacherLabeler.ts`), wired en `ExecuteBasicAttack`/`UseSkill`/`UseEpic`/`ExecuteAiTurn`.                                                                                           |
+| ¿Dónde se persiste?                        | Colección Mongo `mcts-teacher-labels` (migración `025-mcts-teacher-labels.ts`), vía `MctsTeacherLabelRepositoryPort` → `MongoMctsTeacherLabelRepository`, append-only.                                                                         |
+| ¿Es append-only?                           | Sí: `_id = eventId`; mismo contenido repetido es idempotente, contenido distinto lanza `MctsTeacherLabelConflictError`.                                                                                                                        |
+| Identificador estable del label            | `MctsTeacherLabel.eventId` (contrato oficial, `src/domain/decision/MctsTeacherLabel.ts`), con `battleId`/`decisionSequence` redundantes para validar la relación.                                                                              |
+| Relación con `CombatDecisionEvent`         | 1:1 por `eventId`; `result.candidates` es SIEMPRE subconjunto de `legalActions` (nunca igualdad exigida: el filtrado estratégico/de rotación puede descartar opciones).                                                                        |
+| Persistencia de `simulationSeed`           | El dominio conserva `uint32`; el mapeador Mongo la escribe explícitamente como BSON `long` y la recupera como número seguro. Así los valores `> 2^31-1` no se degradan a BSON `double` ni infringen el validador estricto de la migración 025. |
+| Activación en producción                   | Desactivado por defecto (`MCTS_LIVE_TEACHER_LABELING_ENABLED=false`): un despliegue lo activa explícitamente (ver `env.ts`; costo real de CPU por decisión, 128 rollouts).                                                                     |
 
 `CombatDecisionEvent` sigue igual que antes: entidad en
 `src/domain/decision/CombatDecisionEvent.ts`, persistida vía
