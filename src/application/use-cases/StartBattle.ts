@@ -468,7 +468,7 @@ export class StartBattle {
     startedAt: Date,
     committed: string[],
   ): Promise<void> {
-    const expiresAt = commitmentExpiresAt(startedAt)
+    const expiresAt = commitmentExpiresAt(startedAt, room.tournament !== null)
 
     for (const [playerId, hero] of heroes) {
       try {
