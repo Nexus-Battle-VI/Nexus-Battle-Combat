@@ -21,6 +21,8 @@ export const TURN_TIME_LIMIT_MS = 30_000 as const
 
 /** Gracia de reconexion tras perder la ultima conexion de batalla (D1): 30 segundos. */
 export const DISCONNECT_GRACE_MS = 30_000 as const
+/** Entrada y reconexión en encuentros de torneo: dos minutos. */
+export const TOURNAMENT_DISCONNECT_GRACE_MS = 120_000 as const
 
 /** Instante en que vence el temporizador global, a partir del inicio de la batalla. */
 export const battleDeadline = (startedAt: Date): Date =>
@@ -31,8 +33,10 @@ export const turnDeadline = (turnStartedAt: Date): Date =>
   new Date(turnStartedAt.getTime() + TURN_TIME_LIMIT_MS)
 
 /** Instante en que vence la gracia de un participante ausente desde `absentSince`. */
-export const graceDeadline = (absentSince: Date): Date =>
-  new Date(absentSince.getTime() + DISCONNECT_GRACE_MS)
+export const graceDeadline = (absentSince: Date, tournament = false): Date =>
+  new Date(
+    absentSince.getTime() + (tournament ? TOURNAMENT_DISCONNECT_GRACE_MS : DISCONNECT_GRACE_MS),
+  )
 
 /**
  * Instante en que vence el compromiso de equipamiento de una batalla (HU-29).
@@ -42,8 +46,8 @@ export const graceDeadline = (absentSince: Date): Date =>
  * miembro, y su unico proposito es acotar el peor caso (bloqueo sin liberacion
  * explicita). No se define una duracion nueva: se reutilizan las dos constantes.
  */
-export const commitmentExpiresAt = (startedAt: Date): Date =>
-  new Date(battleDeadline(startedAt).getTime() + DISCONNECT_GRACE_MS)
+export const commitmentExpiresAt = (startedAt: Date, tournament = false): Date =>
+  graceDeadline(battleDeadline(startedAt), tournament)
 
 /**
  * El limite es INCLUSIVO (contrato §3): en el instante exacto del vencimiento ya

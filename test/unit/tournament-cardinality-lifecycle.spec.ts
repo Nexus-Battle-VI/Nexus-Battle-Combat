@@ -11,6 +11,7 @@ import { InvalidTournamentRosterError } from '../../src/domain/errors/BattleRoom
 import {
   BATTLE_TIME_LIMIT_MS,
   DISCONNECT_GRACE_MS,
+  TOURNAMENT_DISCONNECT_GRACE_MS,
   TURN_TIME_LIMIT_MS,
 } from '../../src/domain/policies/BattleTimingPolicy'
 import {
@@ -97,7 +98,7 @@ describe('salas SOLO/DUO/TRIO por el mismo motor de Combat', () => {
     },
   )
 
-  it('el sexto humano conserva la gracia de desconexion de 30 segundos', async () => {
+  it('el sexto humano dispone de dos minutos para reconectar', async () => {
     const h = tournamentHarness(new InMemoryBattleRoomRepository())
     const request = tournamentRequest('TRIO')
     const created = await h.create(request)
@@ -105,14 +106,52 @@ describe('salas SOLO/DUO/TRIO por el mismo motor de Combat', () => {
     const room = await h.rooms.findById(created.id)
     if (room === null) throw new Error('falta sala')
     const absent = new Map([['E1-b3', TOURNAMENT_AT]])
-    expect(room.settleDeadlines(new Date(TOURNAMENT_AT.getTime() + 29_999), absent)).toBe(room)
-    const finished = room.settleDeadlines(new Date(TOURNAMENT_AT.getTime() + 30_000), absent)
+    expect(room.settleDeadlines(new Date(TOURNAMENT_AT.getTime() + 119_999), absent).status).toBe(
+      'IN_BATTLE',
+    )
+    const timed = room.settleDeadlines(new Date(TOURNAMENT_AT.getTime() + 90_000), absent)
+    const finished = timed.settleDeadlines(new Date(TOURNAMENT_AT.getTime() + 120_000), absent)
     expect(finished.result).toMatchObject({
       reason: 'DISCONNECTION',
       winnerTeamLabel: 'E1-A',
       disconnected: { teamLabel: 'E1-B', seat: 2 },
     })
     expect(finished.result?.participants).toHaveLength(6)
+  })
+
+  it('dos minutos de entrada se aplican por sala y entrar después de treinta segundos permite seguir jugando', async () => {
+    const h = tournamentHarness(new InMemoryBattleRoomRepository())
+    const request1 = tournamentRequest('SOLO', 'E1'),
+      request2 = tournamentRequest('SOLO', 'E2')
+    const first = await h.create(request1),
+      second = await h.create(request2)
+    await h.start(first.id, request1)
+    await h.start(second.id, request2)
+    const room1 = (await h.rooms.findById(first.id))!,
+      room2 = (await h.rooms.findById(second.id))!
+    const absences1 = new Map([
+      ['E1-a1', TOURNAMENT_AT],
+      ['E1-b1', TOURNAMENT_AT],
+    ])
+    const absent2 = new Map([['E2-a1', TOURNAMENT_AT]])
+    const at = (offset: number) => new Date(TOURNAMENT_AT.getTime() + offset)
+    expect(room1.settleDeadlines(at(1000), absences1).status).toBe('IN_BATTLE')
+    expect(room1.settleDeadlines(at(119_999), absences1).status).toBe('IN_BATTLE')
+    const arrived = room1.settleDeadlines(at(60_000), new Map())
+    expect(arrived.status).toBe('IN_BATTLE')
+    expect(arrived.result).toBeNull()
+    expect(room2.settleDeadlines(at(119_999), absent2).status).toBe('IN_BATTLE')
+    const timed = room2.settleDeadlines(at(90_000), absent2)
+    expect(timed.settleDeadlines(at(120_000), absent2).result).toMatchObject({
+      reason: 'DISCONNECTION',
+      winnerTeamLabel: 'E2-B',
+    })
+    expect(arrived.result).toBeNull()
+    expect(
+      h.commitments.commits.every((commit) => commit.expiresAt.getTime() === at(480_000).getTime()),
+    ).toBe(true)
+    expect(TOURNAMENT_DISCONNECT_GRACE_MS).toBe(120_000)
+    expect(DISCONNECT_GRACE_MS).toBe(30_000)
   })
 
   it.each(['SOLO', 'DUO', 'TRIO'] as const)(
