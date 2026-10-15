@@ -2920,7 +2920,7 @@ export class BattleRoom {
       const since = absences.get(entry.playerId)
 
       if (since !== undefined) {
-        deadlines.push(graceDeadline(since))
+        deadlines.push(graceDeadline(since, this.tournament !== null))
       }
     }
 
@@ -2961,7 +2961,7 @@ export class BattleRoom {
         continue
       }
 
-      const at = graceDeadline(since)
+      const at = graceDeadline(since, this.tournament !== null)
 
       if (hasReached(now, at)) {
         candidates.push({

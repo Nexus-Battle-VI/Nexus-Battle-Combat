@@ -147,8 +147,12 @@ describe('MongoDB: salas de torneo v3 y upgrade DUO historico', () => {
       const current = await h.rooms.findById(created.id)
       if (current?.battle == null) throw new Error('Falta batalla de prueba')
       const absent = request.teams[1].memberIds[0]!
-      const finished = current.settleDeadlines(
-        new Date(TOURNAMENT_AT.getTime() + 31000),
+      const timed = current.settleDeadlines(
+        new Date(TOURNAMENT_AT.getTime() + 90_000),
+        new Map([[absent, TOURNAMENT_AT]]),
+      )
+      const finished = timed.settleDeadlines(
+        new Date(TOURNAMENT_AT.getTime() + 120_000),
         new Map([[absent, TOURNAMENT_AT]]),
       )
       await h.rooms.save(finished, current.version)
